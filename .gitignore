@@ -1,3 +1,5 @@
+.claude/
+
 # Orchestrator runtime
 tools/orchestrator/.state/
 tools/orchestrator/.logs/
