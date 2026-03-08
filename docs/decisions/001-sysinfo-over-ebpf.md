@@ -1,6 +1,6 @@
 # ADR-001: sysinfo over eBPF for initial release
 
-**Status:** Accepted
+**Status:** Superseded by ADR-004
 **Date:** 2026-03-08
 
 ## Context
@@ -19,3 +19,7 @@ Use `sysinfo` as primary SystemProbe implementation. eBPF is future feature-gate
 - Lower granularity than eBPF (no kernel-level events)
 - Process tree updates limited to polling interval (1Hz)
 - Network data limited to interface-level (no per-connection tracking without libpcap)
+
+## Update (2026-03-08)
+
+Superseded by ADR-004. eBPF is now a first-class subsystem via `aether-ebpf` crate (pure-Rust `aya` loader). sysinfo remains as crossplatform fallback for development and non-Linux platforms.

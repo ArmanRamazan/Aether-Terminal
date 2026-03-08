@@ -2,22 +2,25 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Build a cinematic 3D TUI system monitor in Rust with MCP integration and RPG gamification.
+**Goal:** Build a cinematic 3D TUI system monitor in Rust with eBPF telemetry, predictive AI, JIT-compiled rule DSL, MCP integration, and RPG gamification.
 
-**Architecture:** 6-crate cargo workspace (hexagonal). 5 milestones, 25 sprints, ~80 tasks.
+**Architecture:** 9-crate cargo workspace (hexagonal). 8 milestones, ~25 sprints, ~95 tasks.
 
-**Tech Stack:** Rust, tokio, ratatui, glam, petgraph, sysinfo, rmcp, rusqlite
+**Tech Stack:** Rust, tokio, ratatui, glam, petgraph, aya, tract-onnx, cranelift, logos, sysinfo, rmcp, rusqlite
 
 ---
 
 ## Milestone Map
 
 ```
-MS1: Foundation (core + ingestion)     ██████░░░░░░░░░░░░░░ 20%
-MS2: TUI Shell (render basics)         ████████████░░░░░░░░ 40%
-MS3: 3D Engine (rasterizer)            ██████████████████░░ 60%
-MS4: AI Bridge (MCP)                   ██████████████████░░ 80%
-MS5: Gamification & Polish             ████████████████████ 100%
+MS1: Foundation (core + ingestion)     ████░░░░░░░░░░░░░░░░ 12%
+MS2: TUI Shell (render basics)         ██████░░░░░░░░░░░░░░ 25%
+MS3: 3D Engine (rasterizer)            ██████████░░░░░░░░░░ 38%
+MS4: AI Bridge (MCP)                   ████████████░░░░░░░░ 50%
+MS5: Gamification & Polish             ██████████████░░░░░░ 62%
+MS6: eBPF Telemetry Engine             ████████████████░░░░ 75%
+MS7: JIT-Compiled Rule DSL             ██████████████████░░ 88%
+MS8: Predictive AI Engine              ████████████████████ 100%
 ```
 
 Each milestone has checkpoints that produce a working binary. You can demo at any checkpoint.
@@ -1003,7 +1006,496 @@ Depends: 5.3.3
   - License
 - **Commit:** `docs: add comprehensive README and finalize CLI`
 
-**CHECKPOINT MS5 / FINAL:** Complete product. 3D visualization, MCP integration, gamification, themes, animations. **Portfolio-ready.**
+**CHECKPOINT MS5:** Core product complete. 3D visualization, MCP integration, gamification, themes, animations. **Demoable at 62%.**
+
+---
+
+---
+
+# MILESTONE 6: eBPF Telemetry Engine
+
+**Goal:** Kernel-level event capture via eBPF. Ring buffer with zero-copy reads. sysinfo becomes fallback.
+
+**Duration:** 3 sprints, ~12 tasks
+
+## Sprint 6.1: eBPF Foundation
+
+### Task 6.1.1: eBPF crate setup and BPF program compilation
+```
+Files: crates/aether-ebpf/Cargo.toml, crates/aether-ebpf/src/lib.rs, bpf/process_monitor.bpf.c
+Agent: rust-engineer
+Test: cargo check -p aether-ebpf (Linux only)
+Depends: MS1 complete
+```
+- Create `aether-ebpf` crate with `aya` dependency
+- Write `process_monitor.bpf.c`: tracepoint/sched_process_fork, sched_process_exit
+- BPF program outputs `ProcessFork` and `ProcessExit` structs to ring buffer
+- Compile BPF with `aya-bpf` toolchain (include compiled bytes in binary)
+- Feature-gated: entire crate behind `#[cfg(feature = "ebpf")]`
+- **Commit:** `feat(ebpf): initialize eBPF crate with process monitor BPF program`
+
+### Task 6.1.2: BPF loader and ring buffer reader
+```
+Files: crates/aether-ebpf/src/loader.rs, crates/aether-ebpf/src/ring_buffer.rs
+Agent: rust-engineer
+Test: sudo cargo test -p aether-ebpf (requires root)
+Depends: 6.1.1
+```
+- `BpfLoader`:
+  - `load_and_attach(program_bytes: &[u8]) -> Result<AttachedProgram>`
+  - Handles BTF, map creation, program verification
+  - Error handling: permission denied, kernel version too old, BTF missing
+- `RingBufferReader`:
+  - `new(map: &Map) -> Self`
+  - `async fn poll(&mut self) -> Result<RawKernelEvent>` — zero-copy read
+  - Converts raw bytes → typed Rust structs
+- Tests: load BPF program, read at least one fork event
+- **Commit:** `feat(ebpf): implement BPF loader and ring buffer reader`
+
+### Task 6.1.3: Network and syscall BPF programs
+```
+Files: bpf/net_monitor.bpf.c, bpf/syscall_monitor.bpf.c, crates/aether-ebpf/src/probes.rs
+Agent: rust-engineer
+Test: sudo cargo test -p aether-ebpf
+Depends: 6.1.2
+```
+- `net_monitor.bpf.c`: kprobe/tcp_connect, kprobe/tcp_close → TcpConnect, TcpClose events
+- `syscall_monitor.bpf.c`: raw_tracepoint/sys_enter with configurable syscall filter
+- `probes.rs`: ProbeManager that attaches/detaches multiple BPF programs
+- Per-CPU ring buffers (256KB each) for throughput
+- **Commit:** `feat(ebpf): add network and syscall BPF programs`
+
+### Task 6.1.4: Event types and C struct mapping
+```
+Files: crates/aether-ebpf/src/events.rs
+Agent: rust-engineer
+Test: cargo test -p aether-ebpf
+Depends: 6.1.3
+```
+- `RawKernelEvent` enum:
+  - ProcessFork { parent_pid, child_pid, comm: [u8; 16], timestamp_ns }
+  - ProcessExit { pid, exit_code, runtime_ns, timestamp_ns }
+  - TcpConnect { pid, src: SockAddrIn, dst: SockAddrIn, timestamp_ns }
+  - TcpClose { pid, src, dst, bytes_sent, bytes_recv, duration_ns }
+  - SyscallEvent { pid, syscall_nr, latency_ns, timestamp_ns }
+- `#[repr(C)]` structs matching BPF program output, `unsafe` byte casting with safety docs
+- Tests: struct sizes match C layout, parse sample bytes
+- **Commit:** `feat(ebpf): define kernel event types with C ABI compatibility`
+
+**Checkpoint 6.1:** eBPF programs load and capture fork/exit, TCP, syscall events.
+
+---
+
+## Sprint 6.2: eBPF Integration
+
+### Task 6.2.1: eBPF bridge in ingestion
+```
+Files: crates/aether-ingestion/src/ebpf_bridge.rs
+Agent: rust-engineer
+Test: cargo test -p aether-ingestion
+Depends: 6.1.4
+```
+- `EbpfBridge`:
+  - Receives `mpsc<RawKernelEvent>` from eBPF ring buffer reader
+  - Converts to `SystemEvent`:
+    - ProcessFork → SystemEvent::ProcessCreated
+    - ProcessExit → SystemEvent::ProcessExited
+    - TcpConnect → SystemEvent::ConnectionOpened
+    - TcpClose → SystemEvent::ConnectionClosed
+  - Gap-fills with sysinfo for data not available via eBPF (disk I/O, total RAM)
+- Tests: convert sample eBPF events to SystemEvents
+- **Commit:** `feat(ingestion): add eBPF bridge for kernel event translation`
+
+### Task 6.2.2: Hybrid pipeline (eBPF + sysinfo)
+```
+Files: crates/aether-ingestion/src/pipeline.rs (modify)
+Agent: rust-engineer
+Test: cargo test -p aether-ingestion
+Depends: 6.2.1
+```
+- IngestionPipeline now supports two modes:
+  - `Mode::Sysinfo`: original polling (fallback)
+  - `Mode::Ebpf`: eBPF as primary + sysinfo gap-filling
+- Auto-detect: try eBPF → if fails, fall back to sysinfo with warning log
+- Merge streams: eBPF events (real-time) + sysinfo (1Hz gap-fill) → unified mpsc
+- **Commit:** `feat(ingestion): add hybrid eBPF/sysinfo pipeline with auto-fallback`
+
+### Task 6.2.3: Wire eBPF into main.rs
+```
+Files: crates/aether-terminal/src/main.rs (modify)
+Agent: rust-engineer
+Test: sudo cargo run -p aether-terminal -- --ebpf
+Depends: 6.2.2
+```
+- CLI flag: `--ebpf` enables eBPF mode
+- Spawn eBPF ring buffer reader as tokio task
+- Connect to ingestion pipeline via mpsc channel
+- Graceful fallback if eBPF initialization fails
+- **Commit:** `feat(terminal): integrate eBPF telemetry with --ebpf flag`
+
+**CHECKPOINT MS6:** eBPF captures kernel events at 100K+ evt/sec. Seamless fallback to sysinfo. **Deep systems programming showcase.**
+
+---
+
+# MILESTONE 7: JIT-Compiled Rule DSL
+
+**Goal:** Custom Aether DSL with lexer, parser, type checker, and Cranelift JIT compilation. Hot-reload.
+
+**Duration:** 4 sprints, ~15 tasks
+
+## Sprint 7.1: Lexer and Parser
+
+### Task 7.1.1: Lexer (logos)
+```
+Files: crates/aether-script/Cargo.toml, crates/aether-script/src/lexer.rs, crates/aether-script/src/lib.rs
+Agent: rust-engineer
+Test: cargo test -p aether-script
+Depends: MS1 complete
+```
+- Token types:
+  - Keywords: `rule`, `when`, `then`, `and`, `or`, `not`, `for`, `after`, `unless`, `severity`
+  - Literals: integer, float, percentage (e.g. `90%`), duration (e.g. `30s`, `5m`), string
+  - Identifiers: `process.cpu`, `process.state`, `system.load`
+  - Operators: `>`, `<`, `>=`, `<=`, `==`, `!=`
+  - Actions: `alert`, `action`, `log`, `kill`, `restart`
+  - Punctuation: `{`, `}`, newline
+- Use `logos` derive macro for zero-copy tokenization
+- Span tracking for error messages (line:column)
+- Tests: tokenize sample rule files, error on invalid tokens
+- **Commit:** `feat(script): implement lexer with logos`
+
+### Task 7.1.2: AST types
+```
+Files: crates/aether-script/src/ast.rs
+Agent: rust-engineer
+Test: cargo test -p aether-script
+Depends: 7.1.1
+```
+- AST nodes:
+  ```rust
+  struct RuleFile { rules: Vec<Rule> }
+  struct Rule { name: String, condition: Condition, actions: Vec<Action>, span: Span }
+  enum Condition {
+      Comparison { left: Expr, op: CmpOp, right: Expr },
+      Duration { condition: Box<Condition>, duration: Duration },
+      And(Box<Condition>, Box<Condition>),
+      Or(Box<Condition>, Box<Condition>),
+      Not(Box<Condition>),
+  }
+  enum Expr {
+      FieldAccess { object: String, field: String },
+      Literal(Literal),
+  }
+  enum Literal { Int(i64), Float(f64), Percent(f64), Duration(Duration), String(String), Ident(String) }
+  enum Action {
+      Alert { message: Expr, severity: Severity },
+      Kill { pid_expr: Option<Expr> },
+      Log { message: Expr },
+      ActionWithDelay { action: Box<Action>, delay: Duration, unless_condition: Option<Condition> },
+  }
+  ```
+- Tests: construct and display AST nodes
+- **Commit:** `feat(script): define AST types for Aether DSL`
+
+### Task 7.1.3: Recursive descent parser
+```
+Files: crates/aether-script/src/parser.rs
+Agent: rust-engineer
+Test: cargo test -p aether-script
+Depends: 7.1.2
+```
+- Hand-written recursive descent (no parser generators):
+  - `parse_file()` → Vec<Rule>
+  - `parse_rule()` → Rule
+  - `parse_condition()` → Condition (with precedence: `not` > `and` > `or`)
+  - `parse_comparison()` → Condition::Comparison
+  - `parse_action()` → Action
+  - `parse_expr()` → Expr
+- Error recovery: skip to next `rule` keyword on parse error
+- Descriptive error messages with source location: `error[E001]: expected 'when', found 'then' at line 3, col 5`
+- Tests: parse all example rule files from rules/ directory
+- **Commit:** `feat(script): implement recursive descent parser`
+
+**Checkpoint 7.1:** Lexer and parser produce correct AST from .aether files.
+
+---
+
+## Sprint 7.2: Type Checker
+
+### Task 7.2.1: Type system
+```
+Files: crates/aether-script/src/types.rs
+Agent: rust-engineer
+Test: cargo test -p aether-script
+Depends: 7.1.3
+```
+- Types:
+  - `Process` — has fields: cpu (Percent), mem_bytes (Int), mem_growth (Percent), state (ProcessState), name (String), parent (String), pid (Int)
+  - `System` — has fields: load (Percent), total_mem (Int), process_count (Int)
+  - `Percent`, `Duration`, `Int`, `Float`, `String`, `Bool`, `ProcessState`
+- `TypeChecker`:
+  - Resolve field accesses: `process.cpu` → Percent
+  - Check comparison types: Percent can compare with Percent or Float
+  - Check action parameters: `alert` requires String message, valid severity
+  - Duration contexts: `for 30s` requires inner condition to be Bool
+- Errors: type mismatch, unknown field, invalid comparison
+- Tests: valid rules type-check, invalid rules produce descriptive errors
+- **Commit:** `feat(script): implement type checker for Aether DSL`
+
+**Checkpoint 7.2:** Rules are type-checked. Invalid rules produce clear error messages.
+
+---
+
+## Sprint 7.3: Cranelift JIT Codegen
+
+### Task 7.3.1: Cranelift IR generation
+```
+Files: crates/aether-script/src/codegen.rs
+Agent: rust-engineer
+Test: cargo test -p aether-script
+Depends: 7.2.1
+```
+- `CodeGenerator`:
+  - Input: Typed AST
+  - Output: Cranelift `Function` per rule
+  - WorldState is passed as a pointer to the JIT function
+  - Field access compiled to struct offset loads
+  - Comparisons compiled to icmp/fcmp instructions
+  - `and`/`or` compiled to conditional branches
+  - `for <duration>` compiled to counter check (external state)
+- Function signature: `fn(state: *const WorldStateFFI) -> RuleResult`
+- Tests: generate IR for simple rules, verify with Cranelift verifier
+- **Commit:** `feat(script): implement Cranelift IR generation from typed AST`
+
+### Task 7.3.2: JIT compilation and execution
+```
+Files: crates/aether-script/src/codegen.rs (extend), crates/aether-script/src/runtime.rs
+Agent: rust-engineer
+Test: cargo test -p aether-script
+Depends: 7.3.1
+```
+- `JitCompiler`:
+  - Uses `cranelift_jit::JITModule` to compile IR → native code
+  - Returns function pointer: `unsafe fn(*const WorldStateFFI) -> RuleResult`
+- `CompiledRuleSet`:
+  - `rules: Vec<CompiledRule>` (name + function pointer + metadata)
+  - `fn evaluate(&self, state: &WorldState) -> Vec<RuleAction>`
+  - Converts WorldState → FFI-safe WorldStateFFI, calls each rule, collects actions
+- Safety: all `unsafe` blocks documented with invariants
+- Tests: compile and execute rule, verify correct RuleAction output
+- **Commit:** `feat(script): implement JIT compilation and rule execution`
+
+### Task 7.3.3: Duration tracking (stateful rules)
+```
+Files: crates/aether-script/src/runtime.rs (extend)
+Agent: rust-engineer
+Test: cargo test -p aether-script
+Depends: 7.3.2
+```
+- `for <duration>` rules need state between evaluations:
+  - `DurationTracker`: HashMap<(rule_id, pid), Instant>
+  - On each evaluation: if condition true, start/update timer; if false, reset
+  - Fire action only when timer exceeds duration
+- `unless recovered` condition: reset timer if recovery condition met
+- Tests: rule fires after duration, resets on recovery
+- **Commit:** `feat(script): add duration tracking for stateful rules`
+
+**Checkpoint 7.3:** Rules compile to native code and execute correctly with duration tracking.
+
+---
+
+## Sprint 7.4: Hot-Reload and Integration
+
+### Task 7.4.1: File watcher and hot-reload
+```
+Files: crates/aether-script/src/hot_reload.rs
+Agent: rust-engineer
+Test: cargo test -p aether-script
+Depends: 7.3.3
+```
+- `HotReloader`:
+  - Watches `.aether` files via `notify` crate
+  - On file change: lex → parse → type-check → compile → swap
+  - Atomic swap: `Arc<ArcSwap<CompiledRuleSet>>`
+  - Also triggered by SIGHUP signal
+  - Error handling: on compilation failure, keep old rules, log error
+- Tests: modify file → verify new rules loaded, compilation error → old rules preserved
+- **Commit:** `feat(script): implement hot-reload with file watcher`
+
+### Task 7.4.2: ScriptEngine tokio task
+```
+Files: crates/aether-script/src/lib.rs (extend)
+Agent: rust-engineer
+Test: cargo test -p aether-script
+Depends: 7.4.1
+```
+- `ScriptEngine`:
+  - Receives `broadcast<WorldState>`
+  - On each tick: evaluate all compiled rules against current state
+  - Send resulting `RuleAction`s via `mpsc` to Arbiter/Core
+  - DurationTracker persists between ticks
+- **Commit:** `feat(script): implement ScriptEngine as tokio task`
+
+### Task 7.4.3: Wire script engine into main.rs + Rules tab (F5)
+```
+Files: crates/aether-terminal/src/main.rs (modify), crates/aether-render/src/tui/rules.rs
+Agent: rust-engineer
+Test: cargo run -p aether-terminal -- --rules rules/default.aether
+Depends: 7.4.2
+```
+- CLI flag: `--rules <PATH>` loads rule files
+- Spawn ScriptEngine and HotReloader as tokio tasks
+- New tab F5 (Rules): shows active rules, match counts, last fired time, errors
+- Rule actions feed into ArbiterQueue (same as MCP actions)
+- **Commit:** `feat(terminal): integrate JIT rule engine with Rules tab`
+
+**CHECKPOINT MS7:** Custom DSL compiles to native code via Cranelift. Hot-reload works. Rules visible in UI. **Compiler engineering showcase.**
+
+---
+
+# MILESTONE 8: Predictive AI Engine
+
+**Goal:** On-device ONNX inference for anomaly prediction. Feature extraction from WorldState stream.
+
+**Duration:** 3 sprints, ~10 tasks
+
+## Sprint 8.1: Feature Extraction
+
+### Task 8.1.1: Feature vector definition and extraction
+```
+Files: crates/aether-predict/Cargo.toml, crates/aether-predict/src/features.rs, crates/aether-predict/src/lib.rs
+Agent: rust-engineer
+Test: cargo test -p aether-predict
+Depends: MS1 complete
+```
+- `FeatureExtractor`:
+  - Input: `&WorldState`
+  - Output: `HashMap<u32, FeatureVector>` (per pid)
+  - `FeatureVector`: `[f32; 9]` = [cpu_pct, mem_bytes_normalized, mem_delta, fd_count, thread_count, net_bytes_in, net_bytes_out, syscall_rate, io_wait_pct]
+  - Normalization: min-max scaling based on running statistics
+- Tests: extract features from sample WorldState, verify dimensions
+- **Commit:** `feat(predict): implement per-process feature extraction`
+
+### Task 8.1.2: Sliding window buffer
+```
+Files: crates/aether-predict/src/window.rs
+Agent: rust-engineer
+Test: cargo test -p aether-predict
+Depends: 8.1.1
+```
+- `SlidingWindow`:
+  - Per-process circular buffer of FeatureVectors
+  - Capacity: 60 samples (= 5 minutes at 5s intervals)
+  - `push(pid: u32, features: FeatureVector)`
+  - `get_window(pid: u32) -> Option<&[FeatureVector]>` — returns contiguous slice
+  - `to_tensor(pid: u32) -> Option<Tensor>` — converts to tract-compatible tensor [1, 60, 9]
+  - Handles process creation (partial windows) and exit (cleanup)
+- Tests: push 60 samples → full window, push 61 → oldest dropped
+- **Commit:** `feat(predict): implement sliding window buffer for time-series`
+
+**Checkpoint 8.1:** Features extracted from WorldState, buffered in sliding windows.
+
+---
+
+## Sprint 8.2: ONNX Inference
+
+### Task 8.2.1: Model loading and inference
+```
+Files: crates/aether-predict/src/inference.rs
+Agent: rust-engineer
+Test: cargo test -p aether-predict
+Depends: 8.1.2
+```
+- `OnnxModel`:
+  - `load(path: &Path) -> Result<Self>` — loads ONNX model via tract
+  - `predict(input: &Tensor) -> Result<Tensor>` — runs inference
+  - Input shape: [1, 60, 9] (batch, timesteps, features)
+  - Output: depends on model type
+- `AnomalyDetector` (wraps autoencoder model):
+  - Computes reconstruction error
+  - Anomaly if error > threshold (configurable)
+- `CpuForecaster` (wraps LSTM model):
+  - Predicts CPU 60 seconds ahead
+  - Returns predicted value + confidence interval
+- Feature-gated: `#[cfg(feature = "predict")]`
+- Tests: load dummy ONNX model, verify output shape
+- **Commit:** `feat(predict): implement ONNX model loading and inference via tract`
+
+### Task 8.2.2: Prediction types and confidence scoring
+```
+Files: crates/aether-predict/src/models.rs
+Agent: rust-engineer
+Test: cargo test -p aether-predict
+Depends: 8.2.1
+```
+- `PredictedAnomaly`:
+  ```rust
+  struct PredictedAnomaly {
+      pid: u32,
+      process_name: String,
+      anomaly_type: AnomalyType,
+      confidence: f32,      // 0.0-1.0
+      eta_seconds: u32,     // predicted time until event
+      recommended_action: String,
+      timestamp: Instant,
+  }
+  enum AnomalyType { OomRisk, CpuSpike, MemoryLeak, Deadlock, DiskExhaustion }
+  ```
+- Confidence calibration: map reconstruction error → probability
+- Threshold configuration: per anomaly type, configurable via CLI or config file
+- Tests: construct predictions, verify serialization
+- **Commit:** `feat(predict): define prediction types and confidence scoring`
+
+**Checkpoint 8.2:** Models load and run inference. Predictions typed and scored.
+
+---
+
+## Sprint 8.3: PredictEngine Integration
+
+### Task 8.3.1: PredictEngine tokio task
+```
+Files: crates/aether-predict/src/engine.rs
+Agent: rust-engineer
+Test: cargo test -p aether-predict
+Depends: 8.2.2
+```
+- `PredictEngine`:
+  - Receives `broadcast<WorldState>` every tick
+  - Every 5 seconds: extract features → update windows → run inference on top-N processes
+  - Top-N selection: processes with highest recent variance (avoid wasting inference on idle)
+  - Sends `PredictedAnomaly` via `mpsc` to core and render
+  - Configurable: inference interval, top-N count, confidence threshold
+- Tests: engine processes sample world states, produces predictions
+- **Commit:** `feat(predict): implement PredictEngine as async task`
+
+### Task 8.3.2: Prediction visualization in render
+```
+Files: crates/aether-render/src/tui/overview.rs (modify), crates/aether-render/src/engine/scene.rs (modify)
+Agent: rust-engineer
+Test: cargo check -p aether-render
+Depends: 8.3.1
+```
+- Overview tab: new "Predictions" section showing upcoming anomalies
+  - Sorted by eta_seconds ascending (most imminent first)
+  - Color: Neon Orange (#FF6600) for predicted, distinct from actual anomalies
+- 3D view: predicted-anomaly nodes get pulsing orange outline (preview of danger)
+- Process detail panel: shows prediction if available (type, confidence, ETA)
+- **Commit:** `feat(render): add prediction visualization in Overview and 3D tabs`
+
+### Task 8.3.3: Wire predictions into main.rs + MCP tool
+```
+Files: crates/aether-terminal/src/main.rs (modify), crates/aether-mcp/src/tools.rs (extend)
+Agent: rust-engineer
+Test: cargo run -p aether-terminal -- --predict
+Depends: 8.3.2
+```
+- CLI flag: `--predict` enables predictive AI
+- Spawn PredictEngine as tokio task
+- New MCP tool: `predict_anomalies` — returns current predictions as JSON
+- Predictions feed into gamification: +20 XP per accurate prediction (confirmed within ETA)
+- **Commit:** `feat(terminal): integrate predictive AI with --predict flag and MCP tool`
+
+**CHECKPOINT MS8 / FINAL:** On-device ML predicts anomalies before they happen. Visualized in TUI and available via MCP. **Full 10/10 system complete.**
 
 ---
 
@@ -1028,7 +1520,16 @@ Depends: 5.3.3
 | 5.1 | 3 | HP/XP/Achievements | RPG mechanics |
 | 5.2 | 2 | SQLite persistence | Session tracking |
 | 5.3 | 4 | Polish | Animations + themes + README |
-| **Total** | **51** | | |
+| 6.1 | 4 | eBPF foundation | BPF programs + loader + events |
+| 6.2 | 3 | eBPF integration | Bridge + hybrid pipeline + main |
+| 7.1 | 3 | Lexer + parser | Tokenization + AST |
+| 7.2 | 1 | Type checker | Type safety for DSL |
+| 7.3 | 3 | Cranelift JIT | IR gen + compilation + duration |
+| 7.4 | 3 | Hot-reload + integration | File watcher + engine + Rules tab |
+| 8.1 | 2 | Feature extraction | Features + sliding window |
+| 8.2 | 2 | ONNX inference | Model loading + predictions |
+| 8.3 | 3 | Predict integration | Engine + visualization + MCP |
+| **Total** | **75** | | |
 
 ## Orchestrator Sprint Files Needed
 
@@ -1050,4 +1551,13 @@ tasks/ms4-arbiter.yaml             (Sprint 4.3: 2 tasks)
 tasks/ms5-hp-xp.yaml               (Sprint 5.1: 3 tasks)
 tasks/ms5-persistence.yaml         (Sprint 5.2: 2 tasks)
 tasks/ms5-polish.yaml              (Sprint 5.3: 4 tasks)
+tasks/ms6-ebpf-foundation.yaml    (Sprint 6.1: 4 tasks)
+tasks/ms6-ebpf-integration.yaml   (Sprint 6.2: 3 tasks)
+tasks/ms7-lexer-parser.yaml        (Sprint 7.1: 3 tasks)
+tasks/ms7-type-checker.yaml        (Sprint 7.2: 1 task)
+tasks/ms7-cranelift-jit.yaml       (Sprint 7.3: 3 tasks)
+tasks/ms7-hot-reload.yaml          (Sprint 7.4: 3 tasks)
+tasks/ms8-features.yaml            (Sprint 8.1: 2 tasks)
+tasks/ms8-inference.yaml           (Sprint 8.2: 2 tasks)
+tasks/ms8-predict-integration.yaml (Sprint 8.3: 3 tasks)
 ```

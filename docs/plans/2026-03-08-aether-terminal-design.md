@@ -10,7 +10,7 @@
 
 Aether-Terminal — кинематографический 3D-визуализированный терминальный интерфейс управления системами, интегрированный с Model Context Protocol (MCP) для автономного взаимодействия с ИИ-агентами.
 
-**Одно предложение**: Командный центр Staff-инженера, где система — живой 3D-мир, процессы имеют HP, а ИИ-агент может исследовать и управлять инфраструктурой через MCP.
+**Одно предложение**: Командный центр Staff-инженера, где система — живой 3D-мир с eBPF-телеметрией, предиктивным AI, JIT-компилируемыми правилами, а ИИ-агент может исследовать и управлять инфраструктурой через MCP.
 
 ### Роль в портфолио
 
@@ -18,18 +18,21 @@ Aether-Terminal — кинематографический 3D-визуализи
 |--------|------|----------------|
 | KnowledgeOS | Продуктовый MVP | Fullstack, Product Vision, UX |
 | ONNX CLI | Системная библиотека | Rust, Performance, ML Integration |
-| **Aether-Terminal** | **Инновационный Showcase** | **Agentic UI, 3D TUI, Advanced Rust, MCP** |
+| **Aether-Terminal** | **Инновационный Showcase (10/10)** | **eBPF, JIT Compiler, ML Inference, 3D TUI, MCP** |
 
 ### Ключевые решения
 
 | Вопрос | Решение | Обоснование |
 |--------|---------|-------------|
-| Платформа старта | Кроссплатформ (`sysinfo`) | Разработка на WSL2, eBPF как premium позже |
+| Телеметрия | eBPF (aya) + sysinfo fallback | eBPF для Linux prod, sysinfo для dev/macOS/Windows |
 | 3D-визуализация | Полный software rasterizer | Главный differentiator, showcase Rust-навыков |
 | MCP транспорт | Dual mode (stdio + SSE) | Совместимость + realtime Arbiter Mode |
 | Мульти-провайдер | Да (Claude, Gemini, OpenAI) | Универсальный агентский хаб через MCP-стандарт |
+| Предиктивный AI | tract-onnx (on-device) | Без внешних API, zero latency, train in PyTorch |
+| Rule Engine | Cranelift JIT | ms-fast compilation, hot-reload, native performance |
+| DSL Parser | Hand-written recursive descent | Portfolio differentiator, demonstrates compiler skills |
 | Геймификация | Full (C), поэтапно | B (Light RPG) в первом релизе, C — пост-релиз |
-| Структура проекта | Cargo workspace | Hexagonal architecture, параллельная компиляция |
+| Структура проекта | Cargo workspace (9 crates) | Hexagonal architecture, параллельная компиляция |
 
 ---
 
@@ -41,16 +44,16 @@ Aether-Terminal — кинематографический 3D-визуализи
 │            Event Loop / App Orchestrator             │
 └──────┬──────────┬──────────┬──────────┬─────────────┘
        │          │          │          │
-┌──────▼──┐ ┌────▼─────┐ ┌─▼────────┐ ┌▼────────────┐
-│ aether- │ │ aether-  │ │ aether-  │ │ aether-     │
-│ingestion│ │ render   │ │ mcp      │ │gamification │
-│         │ │          │ │          │ │             │
-│ sysinfo │ │ 3D engine│ │ stdio    │ │ HP/XP/      │
-│ (eBPF)  │ │ TUI/     │ │ SSE/HTTP │ │ achievments │
-│ DPI     │ │ Braille  │ │ multi-AI │ │ SQLite      │
-└──────┬──┘ └────┬─────┘ └─┬────────┘ └┬────────────┘
-       │         │         │           │
-       └─────────┴────┬────┴───────────┘
+┌──────▼──┐ ┌────▼─────┐ ┌─▼────────┐ ┌▼───────────┐ ┌▼─────────┐ ┌▼────────┐
+│ aether- │ │ aether-  │ │ aether-  │ │ aether-    │ │ aether-  │ │ aether- │
+│ingestion│ │ render   │ │ mcp      │ │gamification│ │ predict  │ │ script  │
+│ + ebpf  │ │          │ │          │ │            │ │          │ │         │
+│ sysinfo │ │ 3D engine│ │ stdio    │ │ HP/XP/     │ │ ONNX     │ │ Lexer/  │
+│ eBPF    │ │ TUI/     │ │ SSE/HTTP │ │ achievmnts │ │ tract    │ │ Parser/ │
+│ DPI     │ │ Braille  │ │ multi-AI │ │ SQLite     │ │ forecast │ │ Cranelft│
+└──────┬──┘ └────┬─────┘ └─┬────────┘ └┬───────────┘ └┬─────────┘ └┬────────┘
+       │         │         │           │              │            │
+       └─────────┴────┬────┴───────────┴──────────────┴────────────┘
                  ┌────▼─────┐
                  │ aether-  │
                  │ core     │
@@ -121,9 +124,38 @@ trait Storage: Send + Sync {
 
 ---
 
-## Component 2: aether-ingestion
+## Component 2a: aether-ebpf
 
-Сбор системных данных. Первая реализация — `sysinfo`. Будущая — eBPF.
+Ядро телеметрии. Загрузка BPF-программ в ядро Linux, чтение событий через ring buffer.
+
+```
+eBPF Architecture:
+
+  BPF Programs (bpf/*.bpf.c):
+    ├── process_monitor.bpf.c    tracepoint/sched_process_fork, exit
+    ├── net_monitor.bpf.c        kprobe/tcp_connect, tcp_close
+    └── syscall_monitor.bpf.c    raw_tracepoint/sys_enter (configurable)
+
+  Loader (aya, pure Rust):
+    ├── BpfLoader::load(program_bytes) → attached probes
+    ├── RingBuf::poll() → zero-copy event reading
+    └── Maps: per-CPU hash maps for aggregation
+
+  Event Types:
+    ProcessFork { parent_pid, child_pid, comm, timestamp_ns }
+    ProcessExit { pid, exit_code, runtime_ns, timestamp_ns }
+    TcpConnect  { pid, src, dst, timestamp_ns }
+    TcpClose    { pid, src, dst, bytes_sent, bytes_recv, duration_ns }
+    SyscallEvent { pid, syscall_nr, latency_ns, timestamp_ns }
+```
+
+**Throughput target**: 100K+ events/sec with zero-copy ring buffer reads.
+**Requirement**: Linux kernel 5.8+, `CAP_BPF` or root.
+**Feature-gated**: `#[cfg(feature = "ebpf")]`
+
+## Component 2b: aether-ingestion
+
+Сбор системных данных. Мост между eBPF и sysinfo.
 
 ```
 SystemProbe trait
@@ -131,9 +163,9 @@ SystemProbe trait
     │     └── sysinfo crate: CPU, RAM, disks, processes, networks
     │     └── etherparse: DPI packet analysis (optional, libpcap)
     │
-    └── EbpfProbe (Linux only, root, future)
-          └── libbpf-rs: fork/exec/exit, tcp_connect/close
-          └── Ring buffer → tokio channel
+    └── EbpfBridge (Linux, wraps aether-ebpf events into SystemEvent)
+          └── Converts RawKernelEvent → SystemEvent
+          └── Merges eBPF streams with sysinfo gap-filling
 ```
 
 ### Update Frequencies
@@ -301,33 +333,166 @@ MCP is a standard supported by Claude, Gemini, OpenAI. One server, any client. A
 
 ---
 
+## Component 6: aether-predict
+
+On-device ML inference для предсказания аномалий до их возникновения.
+
+```
+Prediction Pipeline:
+
+  WorldState (every 5s)
+       │
+       ▼
+  FeatureExtractor
+       │  Extracts per-process feature vector:
+       │  [cpu_pct, mem_bytes, mem_delta, fd_count, thread_count,
+       │   net_bytes_in, net_bytes_out, syscall_rate, io_wait_pct]
+       │
+       ▼
+  SlidingWindow (60 samples = 5 min history)
+       │
+       ▼
+  ONNX Inference (tract-onnx, pure Rust)
+       │
+       ├── anomaly_detector.onnx   Autoencoder: reconstruction_error > threshold = anomaly
+       │
+       └── cpu_forecast.onnx       LSTM: predicts CPU load 60 seconds ahead
+       │
+       ▼
+  PredictedAnomaly {
+      pid, process_name,
+      anomaly_type: OomRisk | CpuSpike | MemoryLeak | Deadlock,
+      confidence: f32,        // 0.0-1.0
+      eta_seconds: u32,       // predicted time until event
+      recommended_action: String
+  }
+```
+
+**Inference interval**: Every 5 seconds in dedicated tokio task.
+**Models**: Pre-trained in PyTorch, exported to ONNX, shipped as assets.
+**Feature-gated**: `#[cfg(feature = "predict")]`
+
+---
+
+## Component 7: aether-script
+
+Custom DSL с JIT-компиляцией через Cranelift для реактивных правил мониторинга.
+
+### Language Syntax
+
+```
+rule memory_leak {
+    when process.mem_growth > 5% for 60s
+    then alert "memory leak: {process.name}" severity warning
+}
+
+rule cpu_thrashing {
+    when process.cpu > 90% for 30s
+      and process.parent == "docker"
+    then alert "container thrashing" severity critical
+    then action kill after 120s unless recovered
+}
+
+rule zombie_reaper {
+    when process.state == zombie for 10s
+    then action kill
+    then log "reaped zombie: {process.name}"
+}
+```
+
+### Compilation Pipeline
+
+```
+.aether file
+     │
+     ▼
+  Lexer (logos crate) → Token stream
+     │
+     ▼
+  Parser (hand-written recursive descent) → AST
+     │
+     ▼
+  Type Checker → Typed AST
+     │  Types: Process, System, Duration, Percentage,
+     │         String, Bool, Numeric
+     │
+     ▼
+  Cranelift IR Generator → CLIF (Cranelift IR)
+     │
+     ▼
+  Cranelift Codegen → Native x86_64 / aarch64
+     │
+     ▼
+  CompiledRuleSet {
+      rules: Vec<CompiledRule>,
+      evaluate: fn(&WorldState) -> Vec<RuleAction>
+  }
+```
+
+### Rule Actions
+
+```rust
+enum RuleAction {
+    Alert { message: String, severity: Severity },
+    Kill { pid: u32 },
+    Log { message: String },
+    Metric { name: String, value: f64 },
+    Action { action: AgentAction, delay: Option<Duration>, condition: Option<String> },
+}
+```
+
+### Hot-Reload
+
+- File watcher via `notify` crate monitors `.aether` files
+- On change: recompile → create new CompiledRuleSet → atomic swap via `Arc<ArcSwap>`
+- SIGHUP also triggers reload
+- Zero downtime: old rules continue executing during compilation
+
+---
+
 ## Data Flow
 
 ```
-[Kernel / OS]
-     │
-     ▼ (16ms / 1s ticks)
-[aether-ingestion] ──broadcast──→ [aether-render]     → Terminal
-     │                                                      ↑
-     ▼                                                      │
-[aether-core: Graph] ◄──read────── [aether-mcp]    → AI Agent
-     │                                                      │
-     ▼                                                      │
-[aether-gamification] ──────── HP/XP updates ───────────────┘
-     │
-     ▼
-  [SQLite]
+[Linux Kernel]                    [OS / sysinfo]
+     │                                  │
+     ▼ (100K evt/sec)                   ▼ (10Hz polling)
+[aether-ebpf] ──────+      [aether-ingestion]
+  ring buffer        │              │
+                     +------+-------+
+                            │
+                     mpsc<SystemEvent>
+                            │
+                            ▼
+                   [aether-core: Graph]
+                            │
+                   broadcast<WorldState>
+                            │
+     +----------+-----------+----------+-----------+
+     ▼          ▼           ▼          ▼           ▼
+  [render]   [mcp]    [gamification] [predict]  [script]
+     │         │           │          │           │
+  Terminal  AI Agent    SQLite    Anomaly     JIT Rule
+  (TUI+3D) (JSON-RPC)  (HP/XP)  Alerts      Actions
+     ▲         │                    │           │
+     │         ▼                    ▼           ▼
+     +---- ArbiterQueue ◄──────────+───────────+
+           (approve/deny)
 ```
 
 ### Channels
 
 | From → To | Channel Type | Payload |
 |-----------|-------------|---------|
+| ebpf → ingestion | `mpsc<RawKernelEvent>` | Raw eBPF events from ring buffer |
 | ingestion → core | `mpsc<SystemEvent>` | Process events, metrics, network |
 | core → render | `broadcast<WorldState>` | Graph snapshot each frame |
 | core → mcp | `Arc<RwLock<WorldGraph>>` | Read-only access |
 | mcp → core | `mpsc<AgentAction>` | Action requests from AI |
 | core → gamification | `mpsc<GameEvent>` | HP changes, XP earnings |
+| core → predict | `broadcast<WorldState>` | State for ML inference |
+| predict → core/render | `mpsc<PredictedAnomaly>` | Predicted future anomalies |
+| core → script | `broadcast<WorldState>` | State for rule evaluation |
+| script → arbiter/core | `mpsc<RuleAction>` | JIT-compiled rule results |
 
 ---
 
@@ -349,12 +514,21 @@ aether-terminal/
 │   │       ├── models.rs            (ProcessNode, NetworkEdge, Protocol, etc.)
 │   │       ├── traits.rs            (SystemProbe, Renderer, McpTransport, Storage)
 │   │       └── events.rs            (SystemEvent, GameEvent, AgentAction)
+│   ├── aether-ebpf/                 (lib, feature-gated)
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       ├── loader.rs            (BPF program loading via aya)
+│   │       ├── ring_buffer.rs       (zero-copy ring buffer reader)
+│   │       ├── probes.rs            (probe attachment: tracepoints, kprobes)
+│   │       └── events.rs            (RawKernelEvent types, C struct mapping)
 │   ├── aether-ingestion/            (lib)
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │       ├── lib.rs
-│   │       ├── sysinfo_probe.rs     (SysinfoProbe implementation)
-│   │       ├── ebpf_probe.rs        (future, feature-gated behind "ebpf")
+│   │       ├── sysinfo_probe.rs     (SysinfoProbe: crossplatform fallback)
+│   │       ├── ebpf_bridge.rs       (converts eBPF events → SystemEvent)
+│   │       ├── pipeline.rs          (dual-tick async pipeline)
 │   │       └── dpi.rs               (etherparse packet analysis)
 │   ├── aether-render/               (lib)
 │   │   ├── Cargo.toml
@@ -377,6 +551,26 @@ aether-terminal/
 │   │       ├── braille.rs           (Braille symbol encoding/mapping)
 │   │       ├── effects.rs           (tachyonfx: bloom, dissolve, trails)
 │   │       └── palette.rs           (color constants, theme system)
+│   ├── aether-predict/              (lib, feature-gated)
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       ├── features.rs          (feature extraction from WorldState)
+│   │       ├── window.rs            (sliding window buffer, 60 samples)
+│   │       ├── inference.rs         (tract-onnx model loading + inference)
+│   │       ├── models.rs            (PredictedAnomaly, AnomalyType types)
+│   │       └── engine.rs            (PredictEngine: tokio task, 5s interval)
+│   ├── aether-script/               (lib)
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       ├── lexer.rs             (logos-based tokenizer)
+│   │       ├── parser.rs            (recursive descent → AST)
+│   │       ├── ast.rs               (Rule, Condition, Action nodes)
+│   │       ├── types.rs             (type checker, type inference)
+│   │       ├── codegen.rs           (AST → Cranelift IR → native code)
+│   │       ├── runtime.rs           (CompiledRuleSet, evaluate())
+│   │       └── hot_reload.rs        (file watcher, atomic swap)
 │   ├── aether-mcp/                  (lib)
 │   │   ├── Cargo.toml
 │   │   └── src/
@@ -397,9 +591,16 @@ aether-terminal/
 │           ├── xp.rs                (experience, levels, rank thresholds)
 │           ├── achievements.rs      (achievement definitions and tracking)
 │           └── storage.rs           (SQLite persistence via rusqlite)
-├── bpf/                             (future eBPF C programs)
+├── bpf/                             (eBPF C programs, compiled to BPF bytecode)
 │   ├── process_monitor.bpf.c
-│   └── net_monitor.bpf.c
+│   ├── net_monitor.bpf.c
+│   └── syscall_monitor.bpf.c
+├── models/                          (pre-trained ONNX models)
+│   ├── anomaly_detector.onnx
+│   └── cpu_forecast.onnx
+├── rules/                           (Aether DSL rule files)
+│   ├── default.aether
+│   └── docker.aether
 ├── assets/
 │   └── themes/
 │       ├── cyberpunk.toml           (default theme)
@@ -428,10 +629,22 @@ aether-terminal/
 
 | Crate | Purpose |
 |-------|---------|
-| `sysinfo` | Cross-platform system metrics |
+| `sysinfo` | Cross-platform system metrics (fallback) |
+| `aya` | Pure-Rust eBPF loader and ring buffer |
 | `petgraph` | Process dependency graph |
 | `etherparse` | Deep packet inspection |
-| `libbpf-rs` | eBPF (future, feature-gated) |
+
+### ML & Compiler
+
+| Crate | Purpose |
+|-------|---------|
+| `tract-onnx` | Pure-Rust ONNX runtime for inference |
+| `cranelift-codegen` | Native code generation backend |
+| `cranelift-frontend` | IR builder for Cranelift |
+| `cranelift-module` | JIT module linking |
+| `cranelift-jit` | JIT compilation driver |
+| `logos` | Zero-copy lexer generator |
+| `notify` | File system watcher for hot-reload |
 
 ### Visualization
 
@@ -462,12 +675,16 @@ aether-terminal/
 
 | Risk | Impact | Mitigation |
 |------|--------|------------|
-| `sysinfo` insufficient granularity | Medium | Supplement with direct `/proc` reads on Linux |
+| eBPF requires kernel 5.8+ and root | Medium | sysinfo fallback, feature-gated, graceful degradation |
 | Software 3D rasterizer performance | High | Incremental render, dirty flags, skip unchanged frames |
+| Cranelift API instability | Medium | Pin version, wrap in thin abstraction layer |
+| DSL security (rule injection) | High | Sandboxed actions only, no arbitrary syscalls, validate all inputs |
+| tract-onnx model compatibility | Medium | Test with target ONNX opset, fallback to threshold-based detection |
 | `rmcp` crate immature | Medium | Implement raw JSON-RPC if needed, minimal dependency |
 | Braille rendering inconsistent across terminals | Low | HalfBlock and ASCII fallback modes |
-| eBPF requires root + Linux | Low | Not in MVP, feature-gated, `sysinfo` is primary |
 | Terminal size too small for 3D | Low | Minimum size check, graceful degradation to 2D |
+| eBPF ring buffer overflow under high load | Medium | Per-CPU buffers (256KB), backpressure signaling, sample rate limiting |
+| JIT memory leaks on hot-reload | Medium | Track compiled modules, deallocate on swap, test with ASAN |
 
 ---
 
