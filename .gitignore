@@ -1,0 +1,14 @@
+# Orchestrator runtime
+tools/orchestrator/.state/
+tools/orchestrator/.logs/
+tools/orchestrator/.pid*
+tools/orchestrator/.stop*
+tools/orchestrator/.merge.lock
+.worktrees/
+
+# Python
+__pycache__/
+*.pyc
+
+# Rust
+target/
