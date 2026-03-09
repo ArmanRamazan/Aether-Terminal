@@ -2,3 +2,9 @@
 //!
 //! Exposes system topology, process inspection, and action execution as MCP tools.
 //! Supports stdio transport (Claude Desktop) and SSE/HTTP (realtime agents).
+
+pub mod error;
+pub mod server;
+
+pub use error::McpError;
+pub use server::McpServer;
