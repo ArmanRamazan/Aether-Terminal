@@ -100,6 +100,17 @@ impl WorldGraph {
         self.graph.edge_count()
     }
 
+    /// Returns endpoint pids for all edges as (source_pid, target_pid) pairs.
+    pub fn edge_pairs(&self) -> Vec<(u32, u32)> {
+        self.graph
+            .edge_indices()
+            .filter_map(|idx| {
+                let (a, b) = self.graph.edge_endpoints(idx)?;
+                Some((self.graph[a].pid, self.graph[b].pid))
+            })
+            .collect()
+    }
+
     /// Synchronises the graph with a new system snapshot.
     ///
     /// - Adds new processes (by pid) and updates existing ones.
