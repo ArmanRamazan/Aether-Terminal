@@ -47,6 +47,42 @@ impl Default for PulseEffect {
     }
 }
 
+/// Animated flow dots traveling along edges to visualize data transfer.
+///
+/// Speed is proportional to `bytes_per_sec` — idle edges stay still,
+/// busy edges show fast-moving dots.
+pub struct FlowEffect {
+    /// Accumulated time in seconds.
+    time: f32,
+}
+
+impl FlowEffect {
+    /// Create a new flow effect at time zero.
+    pub fn new() -> Self {
+        Self { time: 0.0 }
+    }
+
+    /// Advance the effect clock by `dt` seconds.
+    pub fn update(&mut self, dt: f32) {
+        self.time += dt;
+    }
+
+    /// Position of a flow dot along an edge as 0.0..1.0.
+    ///
+    /// Speed scales linearly with throughput, capped at 10 MB/s.
+    pub fn flow_dot_position(&self, bytes_per_sec: u64) -> f32 {
+        let cap = 10_000_000_u64;
+        let speed = 0.3 + bytes_per_sec.min(cap) as f32 / cap as f32;
+        (self.time * speed).fract()
+    }
+}
+
+impl Default for FlowEffect {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -123,6 +159,41 @@ mod tests {
         assert!(
             peak_100 < peak_50,
             "100% CPU peak at {peak_100}s should be earlier than 50% at {peak_50}s"
+        );
+    }
+
+    #[test]
+    fn test_flow_dot_position_in_unit_range() {
+        let mut effect = FlowEffect::new();
+        effect.update(1.5);
+        let pos = effect.flow_dot_position(5_000_000);
+        assert!((0.0..1.0).contains(&pos), "position {pos} should be in 0.0..1.0");
+    }
+
+    #[test]
+    fn test_flow_dot_faster_with_more_traffic() {
+        let mut low = FlowEffect::new();
+        let mut high = FlowEffect::new();
+        low.update(0.5);
+        high.update(0.5);
+        let pos_low = low.flow_dot_position(1_000);
+        let pos_high = high.flow_dot_position(10_000_000);
+        // Higher traffic → higher speed → position advances more per unit time.
+        assert!(
+            pos_high > pos_low || (pos_high - pos_low).abs() < 0.01,
+            "high traffic pos {pos_high} should >= low traffic pos {pos_low}"
+        );
+    }
+
+    #[test]
+    fn test_flow_dot_caps_at_max_bytes() {
+        let mut effect = FlowEffect::new();
+        effect.update(2.0);
+        let at_cap = effect.flow_dot_position(10_000_000);
+        let above_cap = effect.flow_dot_position(100_000_000);
+        assert!(
+            (at_cap - above_cap).abs() < f32::EPSILON,
+            "above-cap {above_cap} should equal at-cap {at_cap}"
         );
     }
 }
