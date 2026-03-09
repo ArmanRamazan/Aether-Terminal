@@ -1,0 +1,11 @@
+[package]
+name = "aether-render"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+aether-core = { path = "../aether-core" }
+ratatui = "0.29"
+crossterm = "0.28"
+glam = "0.29"
+thiserror = "2"

@@ -1,0 +1,9 @@
+[package]
+name = "aether-gamification"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+aether-core = { path = "../aether-core" }
+rusqlite = { version = "0.33", features = ["bundled"] }
+thiserror = "2"

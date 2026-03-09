@@ -1,0 +1,4 @@
+//! System data collection via sysinfo (crossplatform) and eBPF (Linux, feature-gated).
+//!
+//! Implements the `SystemProbe` trait from aether-core, providing process and network
+//! telemetry through a dual-tick ingestion pipeline.

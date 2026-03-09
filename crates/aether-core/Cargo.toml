@@ -1,0 +1,11 @@
+[package]
+name = "aether-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+petgraph = "0.7"
+glam = "0.29"
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+thiserror = "2"

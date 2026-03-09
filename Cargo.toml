@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/aether-terminal",
+    "crates/aether-core",
+    "crates/aether-ingestion",
+    "crates/aether-render",
+    "crates/aether-mcp",
+    "crates/aether-gamification",
+    "crates/aether-ebpf",
+    "crates/aether-predict",
+    "crates/aether-script",
+]
