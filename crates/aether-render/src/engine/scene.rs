@@ -8,7 +8,7 @@ use aether_core::graph::WorldGraph;
 use aether_core::models::ProcessState;
 
 use crate::braille::BrailleCanvas;
-use crate::effects::PulseEffect;
+use crate::effects::{FlowEffect, PulseEffect};
 use crate::engine::camera::OrbitalCamera;
 use crate::engine::layout::ForceLayout;
 use crate::engine::projection::{project_point, ScreenPoint};
@@ -52,6 +52,9 @@ fn dim_color(color: Color) -> Color {
     }
 }
 
+/// Number of flow dots per edge for high-traffic connections (≥1 MB/s).
+const HIGH_TRAFFIC_THRESHOLD: u64 = 1_000_000;
+
 /// Orchestrates the full 3D render pipeline for a process graph.
 ///
 /// Combines camera, force layout, Braille canvas, and z-buffer to produce
@@ -62,6 +65,7 @@ pub struct SceneRenderer {
     canvas: BrailleCanvas,
     zbuffer: ZBuffer,
     pulse: PulseEffect,
+    flow: FlowEffect,
 }
 
 impl SceneRenderer {
@@ -75,6 +79,7 @@ impl SceneRenderer {
             canvas,
             zbuffer,
             pulse: PulseEffect::new(),
+            flow: FlowEffect::new(),
         }
     }
 
@@ -96,6 +101,7 @@ impl SceneRenderer {
         self.zbuffer.clear();
 
         self.pulse.update(dt);
+        self.flow.update(dt);
         self.layout.sync_with_graph(graph);
         self.layout.step(graph);
 
@@ -154,6 +160,7 @@ impl SceneRenderer {
     /// Rasterize all edges as lines between projected node positions.
     ///
     /// Edge color is the blend of source and destination node HP colors.
+    /// Active edges (bytes_per_sec > 0) get animated flow dots.
     fn render_edges(
         &mut self,
         graph: &WorldGraph,
@@ -162,7 +169,7 @@ impl SceneRenderer {
         screen_w: u32,
         screen_h: u32,
     ) {
-        for (src_pid, dst_pid) in graph.edge_pairs() {
+        for (src_pid, dst_pid, edge) in graph.edge_pairs_with_data() {
             let Some(p0) = self.project_node(src_pid, view, proj, screen_w, screen_h) else {
                 continue;
             };
@@ -173,6 +180,39 @@ impl SceneRenderer {
             let dst_hp = graph.find_by_pid(dst_pid).map_or(50.0, |n| n.hp);
             let edge_color = blend_colors(color_for_hp(src_hp), color_for_hp(dst_hp));
             draw_line(&mut self.canvas, &mut self.zbuffer, p0, p1, edge_color);
+
+            if edge.bytes_per_sec > 0 {
+                self.render_flow_dots(p0, p1, edge.bytes_per_sec);
+            }
+        }
+    }
+
+    /// Draw animated flow dots along an edge to visualize data transfer.
+    ///
+    /// High-traffic edges (≥1 MB/s) get 3 evenly spaced dots; others get 1.
+    fn render_flow_dots(&mut self, p0: ScreenPoint, p1: ScreenPoint, bytes_per_sec: u64) {
+        let base_t = self.flow.flow_dot_position(bytes_per_sec);
+        let dot_count = if bytes_per_sec >= HIGH_TRAFFIC_THRESHOLD {
+            3
+        } else {
+            1
+        };
+        let spacing = 1.0 / dot_count as f32;
+
+        for i in 0..dot_count {
+            let t = (base_t + i as f32 * spacing).fract();
+            let bx = (p0.x + (p1.x - p0.x) * t) * 2.0;
+            let by = (p0.y + (p1.y - p0.y) * t) * 4.0;
+            let px = bx as usize;
+            let py = by as usize;
+            let depth = p0.depth + (p1.depth - p0.depth) * t;
+
+            if px < self.canvas.pixel_width()
+                && py < self.canvas.pixel_height()
+                && self.zbuffer.test_and_set(px, py, depth)
+            {
+                self.canvas.set_pixel_colored(px, py, Palette::DATA);
+            }
         }
     }
 

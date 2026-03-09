@@ -121,6 +121,18 @@ impl WorldGraph {
             .collect()
     }
 
+    /// Returns endpoint pids and edge data for all edges.
+    pub fn edge_pairs_with_data(&self) -> Vec<(u32, u32, &NetworkEdge)> {
+        self.graph
+            .edge_indices()
+            .filter_map(|idx| {
+                let (a, b) = self.graph.edge_endpoints(idx)?;
+                let weight = &self.graph[idx];
+                Some((self.graph[a].pid, self.graph[b].pid, weight))
+            })
+            .collect()
+    }
+
     /// Synchronises the graph with a new system snapshot.
     ///
     /// - Adds new processes (by pid) and updates existing ones.
@@ -301,6 +313,20 @@ mod tests {
         let pairs = g.edges_as_pid_pairs();
         assert_eq!(pairs.len(), 1);
         assert_eq!(pairs[0], (1, 2));
+    }
+
+    #[test]
+    fn test_edge_pairs_with_data_returns_edge() {
+        let mut g = WorldGraph::new();
+        g.add_process(make_process(1));
+        g.add_process(make_process(2));
+        g.add_connection(1, 2, make_edge(1));
+
+        let data = g.edge_pairs_with_data();
+        assert_eq!(data.len(), 1, "should have one edge");
+        assert_eq!(data[0].0, 1, "source pid");
+        assert_eq!(data[0].1, 2, "dest pid");
+        assert_eq!(data[0].2.bytes_per_sec, 1024, "edge bytes_per_sec");
     }
 
     #[test]
