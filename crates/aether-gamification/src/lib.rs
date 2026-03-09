@@ -4,3 +4,4 @@
 //! manages achievement unlocks, and persists state to SQLite.
 
 pub mod hp;
+pub mod xp;
