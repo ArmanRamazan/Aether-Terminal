@@ -15,6 +15,7 @@ use aether_core::WorldGraph;
 use crate::RenderError;
 
 use super::overview::OverviewTab;
+use super::widgets::sparklines::SystemSparklines;
 
 /// Active tab in the TUI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -63,6 +64,10 @@ pub struct App {
     overview: OverviewTab,
     /// When `true`, next key press selects a sort column.
     sort_pending: bool,
+    /// Rolling sparkline history for the Overview tab.
+    sparklines: SystemSparklines,
+    /// Frames elapsed since last sparkline sample (used for 1-second tick).
+    sparkline_tick: u32,
 }
 
 impl App {
@@ -75,6 +80,8 @@ impl App {
             tick_rate: Duration::from_millis(16),
             overview: OverviewTab::default(),
             sort_pending: false,
+            sparklines: SystemSparklines::default(),
+            sparkline_tick: 0,
         }
     }
 
@@ -86,7 +93,19 @@ impl App {
         &mut self,
         terminal: &mut ratatui::Terminal<impl ratatui::backend::Backend>,
     ) -> Result<(), RenderError> {
+        /// Approximate frames per sparkline sample (~1 second at 60fps).
+        const SPARKLINE_INTERVAL: u32 = 60;
+
         while !self.should_quit {
+            // Sample sparkline history approximately once per second.
+            self.sparkline_tick += 1;
+            if self.sparkline_tick >= SPARKLINE_INTERVAL {
+                self.sparkline_tick = 0;
+                if let Ok(world) = self.world.read() {
+                    self.sparklines.update(&world);
+                }
+            }
+
             terminal.draw(|frame| self.draw(frame))?;
 
             if event::poll(self.tick_rate)? {
@@ -161,8 +180,14 @@ impl App {
         match self.current_tab {
             Tab::Overview => {
                 if let Ok(world) = self.world.read() {
+                    let chunks = Layout::default()
+                        .direction(Direction::Vertical)
+                        .constraints([Constraint::Length(5), Constraint::Min(0)])
+                        .split(area);
+
                     let buf = frame.buffer_mut();
-                    self.overview.render(area, buf, &world);
+                    self.sparklines.render(chunks[0], buf);
+                    self.overview.render(chunks[1], buf, &world);
                 }
             }
             _ => {

@@ -3,3 +3,4 @@
 pub mod app;
 pub(crate) mod overview;
 pub(crate) mod tabs;
+pub(crate) mod widgets;
