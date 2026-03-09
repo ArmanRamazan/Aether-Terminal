@@ -5,15 +5,13 @@ use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyEvent};
 use ratatui::layout::{Constraint, Direction, Layout};
-use ratatui::style::{Color, Style};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
 use aether_core::WorldGraph;
 
 use crate::RenderError;
 
+use super::arbiter::{ArbiterKeyResult, ArbiterTab};
 use super::help::HelpOverlay;
 use super::input::{InputAction, InputHandler, InputMode};
 use super::network::NetworkTab;
@@ -69,6 +67,8 @@ pub struct App {
     world3d: World3DTab,
     /// State for the Network (F3) tab.
     network: NetworkTab,
+    /// State for the Arbiter (F4) tab.
+    arbiter: ArbiterTab,
     /// When `true`, next key press selects a sort column.
     sort_pending: bool,
     /// Rolling sparkline history for the Overview tab.
@@ -92,6 +92,7 @@ impl App {
             overview: OverviewTab::default(),
             world3d: World3DTab::default(),
             network: NetworkTab::default(),
+            arbiter: ArbiterTab::default(),
             sort_pending: false,
             sparklines: SystemSparklines::default(),
             sparkline_tick: 0,
@@ -160,6 +161,20 @@ impl App {
                     return;
                 }
                 KeyResult::NotConsumed => {}
+            }
+        }
+
+        // Arbiter tab-specific keys (Y/N/I, j/k) are intercepted before
+        // the global InputHandler to avoid conflicts (e.g. 'n' as NextMatch).
+        if self.current_tab == Tab::Arbiter && self.input.mode() == InputMode::Normal {
+            match self.arbiter.handle_key(key.code) {
+                ArbiterKeyResult::Consumed => return,
+                ArbiterKeyResult::InspectPid(pid) => {
+                    self.current_tab = Tab::Overview;
+                    self.overview.set_detail_pid(pid);
+                    return;
+                }
+                ArbiterKeyResult::NotConsumed => {}
             }
         }
 
@@ -343,15 +358,8 @@ impl App {
                 }
             }
             Tab::Arbiter => {
-                let paragraph =
-                    Paragraph::new(Line::from(Span::raw("AI action approval panel (TODO)")))
-                        .block(
-                            Block::default()
-                                .borders(Borders::ALL)
-                                .title(self.current_tab.label()),
-                        )
-                        .style(Style::default().fg(Color::White));
-                frame.render_widget(paragraph, area);
+                let buf = frame.buffer_mut();
+                self.arbiter.render(area, buf);
             }
         }
     }
