@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 aether-core = { path = "../aether-core" }
+glam = "0.29"
 sysinfo = "0.34"
 tokio = { version = "1", features = ["full"] }
 thiserror = "2"
