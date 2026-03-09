@@ -11,4 +11,9 @@ tokio-util = "0.7"
 axum = "0.8"
 rmcp = { version = "1", features = ["server", "server-side-http", "transport-async-rw"] }
 thiserror = "2"
+tokio-stream = "0.1"
 tracing = "0.1"
+
+[dev-dependencies]
+http-body-util = "0.1"
+tower = { version = "0.5", features = ["util"] }

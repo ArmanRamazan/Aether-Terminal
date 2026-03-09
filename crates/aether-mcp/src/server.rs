@@ -63,11 +63,12 @@ impl McpServer {
     ///
     /// Used with `--mcp-sse <PORT>` flag. Runs alongside TUI as a background task.
     pub async fn run_sse(self, port: u16, cancel: CancellationToken) -> Result<(), McpError> {
-        tracing::info!("MCP SSE server starting on port {port}");
-        // TODO: implement axum SSE transport
-        cancel.cancelled().await;
-        tracing::info!("MCP SSE server shutting down");
-        Ok(())
+        crate::transport::sse::run_sse(self, port, cancel).await
+    }
+
+    /// Shared reference to the world graph.
+    pub(crate) fn world(&self) -> &Arc<RwLock<WorldGraph>> {
+        &self.world
     }
 }
 
@@ -98,7 +99,7 @@ impl ServerHandler for McpServer {
 }
 
 /// Build the list of tool definitions exposed by this server.
-fn tool_definitions() -> Vec<Tool> {
+pub(crate) fn tool_definitions() -> Vec<Tool> {
     vec![
         Tool::new(
             TOOL_GET_SYSTEM_TOPOLOGY,
@@ -124,7 +125,7 @@ fn tool_definitions() -> Vec<Tool> {
 }
 
 /// Dispatch a tool call to the appropriate handler stub.
-fn dispatch_tool(
+pub(crate) fn dispatch_tool(
     _server: &McpServer,
     request: CallToolRequestParams,
 ) -> Result<CallToolResult, RmcpError> {
