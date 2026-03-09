@@ -19,7 +19,9 @@ use serde_json::json;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use aether_core::{AgentAction, ArbiterQueue, WorldGraph};
+use aether_core::{AgentAction, WorldGraph};
+
+use crate::arbiter::ArbiterQueue;
 
 use crate::McpError;
 
@@ -163,20 +165,36 @@ pub(crate) fn dispatch_tool(
                 result.to_string(),
             )]))
         }
-        TOOL_EXECUTE_ACTION => Ok(stub_result(TOOL_EXECUTE_ACTION)),
+        TOOL_EXECUTE_ACTION => {
+            let args = request.arguments.as_ref();
+            let action = args
+                .and_then(|a| a.get("action"))
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    RmcpError::new(
+                        rmcp::model::ErrorCode::INVALID_PARAMS,
+                        "missing required parameter: action",
+                        None,
+                    )
+                })?;
+            let pid = args
+                .and_then(|a| a.get("pid"))
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32)
+                .unwrap_or(0);
+            match crate::tools::execute_action(&server.arbiter, action, pid) {
+                Ok(result) => Ok(CallToolResult::success(vec![Content::text(
+                    result.to_string(),
+                )])),
+                Err(msg) => Ok(CallToolResult::error(vec![Content::text(msg)])),
+            }
+        }
         other => Err(RmcpError::new(
             rmcp::model::ErrorCode::METHOD_NOT_FOUND,
             format!("unknown tool: {other}"),
             None,
         )),
     }
-}
-
-/// Placeholder result for unimplemented tools.
-fn stub_result(tool_name: &str) -> CallToolResult {
-    CallToolResult::success(vec![Content::text(
-        json!({"status": "stub", "tool": tool_name}).to_string(),
-    )])
 }
 
 /// Empty JSON Schema (no parameters).
@@ -278,5 +296,32 @@ mod tests {
         assert!(parsed["processes"].is_array());
         assert!(parsed["connections"].is_array());
         assert!(parsed["summary"].is_object());
+    }
+
+    #[test]
+    fn test_dispatch_execute_action_returns_pending_approval() {
+        let server = mock_server();
+        let mut params = CallToolRequestParams::default();
+        params.name = "execute_action".into();
+        params.arguments = Some(serde_json::from_value(json!({"action": "kill", "pid": 42})).unwrap());
+        let result = dispatch_tool(&server, params).expect("should succeed");
+
+        let text = match &result.content[0].raw {
+            rmcp::model::RawContent::Text(t) => &t.text,
+            _ => panic!("expected text content"),
+        };
+        let parsed: serde_json::Value = serde_json::from_str(text).expect("valid JSON");
+        assert_eq!(parsed["status"], "pending_approval");
+        assert!(parsed["action_id"].is_string());
+    }
+
+    #[test]
+    fn test_dispatch_execute_action_missing_action_returns_error() {
+        let server = mock_server();
+        let mut params = CallToolRequestParams::default();
+        params.name = "execute_action".into();
+        params.arguments = Some(serde_json::from_value(json!({"pid": 1})).unwrap());
+        let result = dispatch_tool(&server, params);
+        assert!(result.is_err());
     }
 }

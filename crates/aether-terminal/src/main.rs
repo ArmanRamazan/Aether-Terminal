@@ -5,7 +5,8 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use aether_core::events::SystemEvent;
-use aether_core::{AgentAction, ArbiterQueue, WorldGraph};
+use aether_core::{AgentAction, WorldGraph};
+use aether_mcp::arbiter::ArbiterQueue;
 use aether_ingestion::pipeline::IngestionPipeline;
 use aether_ingestion::sysinfo_probe::SysinfoProbe;
 use aether_mcp::McpServer;
