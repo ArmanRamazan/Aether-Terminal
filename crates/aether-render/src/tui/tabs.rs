@@ -6,6 +6,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 
 use super::app::Tab;
+use super::input::InputHandler;
 
 /// Renders the tab bar showing all tabs with the active one highlighted.
 ///
@@ -35,10 +36,15 @@ pub(crate) fn render_tab_bar(area: Rect, buf: &mut Buffer, active: Tab) {
     }
 }
 
-/// Renders the bottom status bar with live system statistics.
+/// Renders the bottom status bar with input mode and live system statistics.
 ///
-/// Format: `Aether Terminal v0.1 | Processes: N | CPU: X% | RAM: Y.YGB | Rank: Novice | XP: 0`
-pub(crate) fn render_status_bar(area: Rect, buf: &mut Buffer, world: &WorldGraph) {
+/// Format: `[MODE] ... | Aether Terminal v0.1 | Processes: N | CPU: X% | RAM: Y.YGB`
+pub(crate) fn render_status_bar(
+    area: Rect,
+    buf: &mut Buffer,
+    world: &WorldGraph,
+    input: &InputHandler,
+) {
     let process_count = world.process_count();
 
     let avg_cpu = if process_count > 0 {
@@ -52,8 +58,11 @@ pub(crate) fn render_status_bar(area: Rect, buf: &mut Buffer, world: &WorldGraph
     let total_ram_gb = total_ram_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
 
     let text = format!(
-        "Aether Terminal v0.1 | Processes: {} | CPU: {:.0}% | RAM: {:.1}GB | Rank: Novice | XP: 0",
-        process_count, avg_cpu, total_ram_gb
+        "{} | Processes: {} | CPU: {:.0}% | RAM: {:.1}GB | Rank: Novice | XP: 0",
+        input.status_text(),
+        process_count,
+        avg_cpu,
+        total_ram_gb
     );
 
     let style = Style::default()
@@ -125,11 +134,12 @@ mod tests {
         let mut buf = Buffer::empty(area);
         let world = WorldGraph::new();
 
-        render_status_bar(area, &mut buf, &world);
+        render_status_bar(area, &mut buf, &world, &InputHandler::default());
 
         let content: String = (0..100)
             .map(|x| buf[(x, 0)].symbol().chars().next().unwrap_or(' '))
             .collect();
+        assert!(content.contains("[NORMAL]"));
         assert!(content.contains("Processes: 0"));
         assert!(content.contains("CPU: 0%"));
     }
@@ -166,7 +176,7 @@ mod tests {
             position_3d: Vec3::ZERO,
         });
 
-        render_status_bar(area, &mut buf, &world);
+        render_status_bar(area, &mut buf, &world, &InputHandler::default());
 
         let content: String = (0..100)
             .map(|x| buf[(x, 0)].symbol().chars().next().unwrap_or(' '))
@@ -182,7 +192,7 @@ mod tests {
         let mut buf = Buffer::empty(area);
         let world = WorldGraph::new();
 
-        render_status_bar(area, &mut buf, &world);
+        render_status_bar(area, &mut buf, &world, &InputHandler::default());
 
         // Every cell should have the dark gray background.
         for x in 0..80 {
