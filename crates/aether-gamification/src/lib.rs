@@ -3,5 +3,6 @@
 //! Calculates health points based on process metrics, tracks experience and ranks,
 //! manages achievement unlocks, and persists state to SQLite.
 
+pub mod achievements;
 pub mod hp;
 pub mod xp;
