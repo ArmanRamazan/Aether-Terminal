@@ -3,6 +3,7 @@
 //! All other aether crates depend on this crate. It defines the shared vocabulary:
 //! process models, the world graph, system events, and hexagonal port traits.
 
+pub mod arbiter;
 pub mod error;
 pub mod events;
 pub mod graph;
@@ -10,6 +11,7 @@ pub mod models;
 pub mod traits;
 
 // Re-export key types for convenience.
+pub use arbiter::ArbiterQueue;
 pub use error::CoreError;
 pub use events::{AgentAction, GameEvent, SystemEvent};
 pub use graph::WorldGraph;
