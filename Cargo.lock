@@ -28,6 +28,7 @@ name = "aether-gamification"
 version = "0.1.0"
 dependencies = [
  "aether-core",
+ "glam",
  "rusqlite",
  "thiserror",
 ]
