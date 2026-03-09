@@ -51,11 +51,14 @@ version = "0.1.0"
 dependencies = [
  "aether-core",
  "axum",
+ "http-body-util",
  "rmcp",
  "serde_json",
  "thiserror",
  "tokio",
+ "tokio-stream",
  "tokio-util",
+ "tower",
  "tracing",
 ]
 
