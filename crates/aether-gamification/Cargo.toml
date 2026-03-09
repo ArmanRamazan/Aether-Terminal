@@ -7,3 +7,6 @@ edition = "2021"
 aether-core = { path = "../aether-core" }
 rusqlite = { version = "0.33", features = ["bundled"] }
 thiserror = "2"
+
+[dev-dependencies]
+glam = "0.29"
