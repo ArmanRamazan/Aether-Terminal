@@ -136,7 +136,27 @@ pub(crate) fn dispatch_tool(
                 result.to_string(),
             )]))
         }
-        TOOL_INSPECT_PROCESS => Ok(stub_result(TOOL_INSPECT_PROCESS)),
+        TOOL_INSPECT_PROCESS => {
+            let pid = request
+                .arguments
+                .as_ref()
+                .and_then(|args| args.get("pid"))
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32)
+                .ok_or_else(|| {
+                    RmcpError::new(
+                        rmcp::model::ErrorCode::INVALID_PARAMS,
+                        "missing required parameter: pid",
+                        None,
+                    )
+                })?;
+            match crate::tools::inspect_process(&server.world, pid) {
+                Ok(result) => Ok(CallToolResult::success(vec![Content::text(
+                    result.to_string(),
+                )])),
+                Err(msg) => Ok(CallToolResult::error(vec![Content::text(msg)])),
+            }
+        }
         TOOL_LIST_ANOMALIES => Ok(stub_result(TOOL_LIST_ANOMALIES)),
         TOOL_EXECUTE_ACTION => Ok(stub_result(TOOL_EXECUTE_ACTION)),
         other => Err(RmcpError::new(
