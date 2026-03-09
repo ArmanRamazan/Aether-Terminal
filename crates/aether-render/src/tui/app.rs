@@ -14,6 +14,8 @@ use aether_core::WorldGraph;
 
 use crate::RenderError;
 
+use super::overview::OverviewTab;
+
 /// Active tab in the TUI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Tab {
@@ -57,6 +59,10 @@ pub struct App {
     should_quit: bool,
     /// Target frame interval (default 16ms ≈ 60fps).
     tick_rate: Duration,
+    /// State for the Overview (F1) tab.
+    overview: OverviewTab,
+    /// When `true`, next key press selects a sort column.
+    sort_pending: bool,
 }
 
 impl App {
@@ -67,6 +73,8 @@ impl App {
             world,
             should_quit: false,
             tick_rate: Duration::from_millis(16),
+            overview: OverviewTab::default(),
+            sort_pending: false,
         }
     }
 
@@ -92,6 +100,16 @@ impl App {
 
     /// Dispatch a key event to the appropriate handler.
     fn handle_key(&mut self, key: KeyEvent) {
+        // Sort-mode: next key selects the sort column.
+        if self.sort_pending {
+            self.sort_pending = false;
+            if self.current_tab == Tab::Overview
+                && self.overview.handle_sort_key(key.code)
+            {
+                return;
+            }
+        }
+
         match key.code {
             KeyCode::Char('q') => self.should_quit = true,
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -101,6 +119,17 @@ impl App {
             KeyCode::F(2) => self.current_tab = Tab::World3D,
             KeyCode::F(3) => self.current_tab = Tab::Network,
             KeyCode::F(4) => self.current_tab = Tab::Arbiter,
+            KeyCode::Char('s') if self.current_tab == Tab::Overview => {
+                self.sort_pending = true;
+            }
+            _ if self.current_tab == Tab::Overview => {
+                let count = self
+                    .world
+                    .read()
+                    .map(|w| w.process_count())
+                    .unwrap_or(0);
+                self.overview.handle_key(key.code, count);
+            }
             _ => {}
         }
     }
@@ -127,24 +156,32 @@ impl App {
         self.draw_tab_content(frame, chunks[1]);
     }
 
-    /// Render placeholder content for the active tab.
+    /// Render the active tab content.
     fn draw_tab_content(&self, frame: &mut Frame, area: ratatui::layout::Rect) {
-        let content = match self.current_tab {
-            Tab::Overview => "Process table and sparklines (TODO)",
-            Tab::World3D => "3D process graph viewport (TODO)",
-            Tab::Network => "Network connection list (TODO)",
-            Tab::Arbiter => "AI action approval panel (TODO)",
-        };
-
-        let paragraph = Paragraph::new(Line::from(Span::raw(content)))
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(self.current_tab.label()),
-            )
-            .style(Style::default().fg(Color::White));
-
-        frame.render_widget(paragraph, area);
+        match self.current_tab {
+            Tab::Overview => {
+                if let Ok(world) = self.world.read() {
+                    let buf = frame.buffer_mut();
+                    self.overview.render(area, buf, &world);
+                }
+            }
+            _ => {
+                let content = match self.current_tab {
+                    Tab::World3D => "3D process graph viewport (TODO)",
+                    Tab::Network => "Network connection list (TODO)",
+                    Tab::Arbiter => "AI action approval panel (TODO)",
+                    Tab::Overview => unreachable!(),
+                };
+                let paragraph = Paragraph::new(Line::from(Span::raw(content)))
+                    .block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .title(self.current_tab.label()),
+                    )
+                    .style(Style::default().fg(Color::White));
+                frame.render_widget(paragraph, area);
+            }
+        }
     }
 }
 
