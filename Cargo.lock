@@ -51,6 +51,7 @@ version = "0.1.0"
 dependencies = [
  "aether-core",
  "axum",
+ "glam",
  "http-body-util",
  "rmcp",
  "serde_json",
