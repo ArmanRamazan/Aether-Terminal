@@ -3,7 +3,7 @@
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{self, Event, KeyEvent};
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
@@ -14,6 +14,7 @@ use aether_core::WorldGraph;
 
 use crate::RenderError;
 
+use super::input::{InputAction, InputHandler};
 use super::overview::OverviewTab;
 use super::widgets::sparklines::SystemSparklines;
 
@@ -67,6 +68,8 @@ pub struct App {
     sparklines: SystemSparklines,
     /// Frames elapsed since last sparkline sample (used for 1-second tick).
     sparkline_tick: u32,
+    /// Vim-style modal input handler.
+    input: InputHandler,
 }
 
 impl App {
@@ -81,6 +84,7 @@ impl App {
             sort_pending: false,
             sparklines: SystemSparklines::default(),
             sparkline_tick: 0,
+            input: InputHandler::default(),
         }
     }
 
@@ -118,7 +122,7 @@ impl App {
 
     /// Dispatch a key event to the appropriate handler.
     fn handle_key(&mut self, key: KeyEvent) {
-        // Sort-mode: next key selects the sort column.
+        // Sort-mode intercept: next key selects the sort column.
         if self.sort_pending {
             self.sort_pending = false;
             if self.current_tab == Tab::Overview && self.overview.handle_sort_key(key.code) {
@@ -126,28 +130,103 @@ impl App {
             }
         }
 
-        match key.code {
-            KeyCode::Char('q') => self.should_quit = true,
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.should_quit = true;
-            }
-            KeyCode::F(1) => self.current_tab = Tab::Overview,
-            KeyCode::F(2) => self.current_tab = Tab::World3D,
-            KeyCode::F(3) => self.current_tab = Tab::Network,
-            KeyCode::F(4) => self.current_tab = Tab::Arbiter,
-            KeyCode::Char('s') if self.current_tab == Tab::Overview => {
+        let action = self.input.handle_key(key);
+        self.dispatch_action(action);
+    }
+
+    /// Translate an [`InputAction`] into state changes.
+    fn dispatch_action(&mut self, action: InputAction) {
+        match action {
+            InputAction::None | InputAction::CancelInput => {}
+            InputAction::Quit => self.should_quit = true,
+            InputAction::SwitchTab(tab) => self.current_tab = tab,
+            InputAction::Navigate(dir) => self.navigate(dir),
+            InputAction::Select => self.select_current(),
+            InputAction::Deselect => self.deselect_current(),
+            InputAction::EnterSort if self.current_tab == Tab::Overview => {
                 self.sort_pending = true;
             }
-            _ if self.current_tab == Tab::Overview => {
-                if let Ok(world) = self.world.read() {
-                    let count = world.process_count();
-                    let sorted_pids = super::overview::collect_sorted_pids(
-                        &world,
-                        self.overview.sort_column(),
-                        self.overview.sort_ascending(),
-                    );
-                    self.overview.handle_key(key.code, count, &sorted_pids);
-                }
+            InputAction::ExecuteCommand(cmd) => self.execute_command(&cmd),
+            InputAction::Search(_query) => {
+                // TODO: filter process table by query
+            }
+            InputAction::NextMatch | InputAction::PrevMatch => {
+                // TODO: cycle through search matches
+            }
+            InputAction::ToggleHelp => {
+                // TODO: toggle help overlay
+            }
+            _ => {}
+        }
+    }
+
+    /// Navigate within the active tab.
+    fn navigate(&mut self, dir: super::input::Direction) {
+        use super::input::Direction;
+        if self.current_tab == Tab::Overview {
+            if let Ok(world) = self.world.read() {
+                let count = world.process_count();
+                let sorted_pids = super::overview::collect_sorted_pids(
+                    &world,
+                    self.overview.sort_column(),
+                    self.overview.sort_ascending(),
+                );
+                let code = match dir {
+                    Direction::Down => crossterm::event::KeyCode::Char('j'),
+                    Direction::Up => crossterm::event::KeyCode::Char('k'),
+                    _ => return,
+                };
+                self.overview.handle_key(code, count, &sorted_pids);
+            }
+        }
+    }
+
+    /// Select / confirm in the active tab.
+    fn select_current(&mut self) {
+        if self.current_tab == Tab::Overview {
+            if let Ok(world) = self.world.read() {
+                let sorted_pids = super::overview::collect_sorted_pids(
+                    &world,
+                    self.overview.sort_column(),
+                    self.overview.sort_ascending(),
+                );
+                self.overview.handle_key(
+                    crossterm::event::KeyCode::Enter,
+                    world.process_count(),
+                    &sorted_pids,
+                );
+            }
+        }
+    }
+
+    /// Deselect / go back in the active tab.
+    fn deselect_current(&mut self) {
+        if self.current_tab == Tab::Overview {
+            if let Ok(world) = self.world.read() {
+                let sorted_pids = super::overview::collect_sorted_pids(
+                    &world,
+                    self.overview.sort_column(),
+                    self.overview.sort_ascending(),
+                );
+                self.overview.handle_key(
+                    crossterm::event::KeyCode::Esc,
+                    world.process_count(),
+                    &sorted_pids,
+                );
+            }
+        }
+    }
+
+    /// Execute a command string from Command mode.
+    fn execute_command(&mut self, cmd: &str) {
+        let parts: Vec<&str> = cmd.split_whitespace().collect();
+        match parts.first().copied() {
+            Some("q") | Some("quit") => self.should_quit = true,
+            Some("kill") => {
+                // TODO: send kill signal to pid from parts[1]
+            }
+            Some("sort") => {
+                // TODO: parse sort column from parts[1]
             }
             _ => {}
         }
@@ -169,7 +248,7 @@ impl App {
 
         if let Ok(world) = self.world.read() {
             let buf = frame.buffer_mut();
-            super::tabs::render_status_bar(chunks[2], buf, &world);
+            super::tabs::render_status_bar(chunks[2], buf, &world, &self.input);
         }
 
         self.draw_tab_content(frame, chunks[1]);
@@ -213,6 +292,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crossterm::event::{KeyCode, KeyModifiers};
 
     #[test]
     fn test_tab_default_is_overview() {
@@ -278,6 +358,30 @@ mod tests {
 
         app.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
         assert_eq!(app.current_tab, Tab::Overview);
+        assert!(!app.should_quit);
+    }
+
+    #[test]
+    fn test_command_quit() {
+        let world = Arc::new(RwLock::new(WorldGraph::new()));
+        let mut app = App::new(world);
+
+        // Enter command mode, type "q", press Enter
+        app.handle_key(KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn test_colon_enters_command_mode() {
+        let world = Arc::new(RwLock::new(WorldGraph::new()));
+        let mut app = App::new(world);
+
+        app.handle_key(KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE));
+        assert_eq!(app.input.mode(), super::super::input::InputMode::Command);
+        // 'q' in command mode should NOT quit (it's a buffer character)
+        app.handle_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
         assert!(!app.should_quit);
     }
 }
