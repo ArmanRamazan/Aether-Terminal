@@ -7,3 +7,4 @@ pub(crate) mod network;
 pub(crate) mod overview;
 pub(crate) mod tabs;
 pub(crate) mod widgets;
+pub(crate) mod world3d;

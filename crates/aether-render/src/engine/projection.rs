@@ -49,15 +49,15 @@ mod tests {
 
     fn test_matrices() -> (Mat4, Mat4, u32, u32) {
         let view = Mat4::look_at_rh(
-            Vec3::new(0.0, 0.0, 5.0),  // eye
-            Vec3::ZERO,                  // target
-            Vec3::Y,                     // up
+            Vec3::new(0.0, 0.0, 5.0), // eye
+            Vec3::ZERO,               // target
+            Vec3::Y,                  // up
         );
         let proj = Mat4::perspective_rh(
             std::f32::consts::FRAC_PI_4, // 45° fov
             800.0 / 600.0,               // aspect
-            0.1,                          // near
-            100.0,                        // far
+            0.1,                         // near
+            100.0,                       // far
         );
         (view, proj, 800, 600)
     }
@@ -66,8 +66,8 @@ mod tests {
     fn test_center_point_projects_near_screen_center() {
         let (view, proj, w, h) = test_matrices();
 
-        let result = project_point(Vec3::ZERO, &view, &proj, w, h)
-            .expect("origin should be visible");
+        let result =
+            project_point(Vec3::ZERO, &view, &proj, w, h).expect("origin should be visible");
 
         let half_w = w as f32 / 2.0;
         let half_h = h as f32 / 2.0;
@@ -96,8 +96,7 @@ mod tests {
     fn test_right_point_projects_to_right_side() {
         let (view, proj, w, h) = test_matrices();
 
-        let center = project_point(Vec3::ZERO, &view, &proj, w, h)
-            .expect("origin visible");
+        let center = project_point(Vec3::ZERO, &view, &proj, w, h).expect("origin visible");
         let right = project_point(Vec3::new(2.0, 0.0, 0.0), &view, &proj, w, h)
             .expect("right point visible");
 

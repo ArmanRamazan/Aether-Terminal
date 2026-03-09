@@ -26,7 +26,13 @@ pub fn shade_point(normal: Vec3, light_dir: Vec3, base_color: Color) -> Color {
 ///
 /// Given a pixel position and the sphere's center/radius, returns
 /// the outward-facing normal as if the circle were a 3D sphere.
-pub fn sphere_normal(pixel_x: f32, pixel_y: f32, center_x: f32, center_y: f32, radius: f32) -> Vec3 {
+pub fn sphere_normal(
+    pixel_x: f32,
+    pixel_y: f32,
+    center_x: f32,
+    center_y: f32,
+    radius: f32,
+) -> Vec3 {
     let dx = (pixel_x - center_x) / radius;
     let dy = (pixel_y - center_y) / radius;
     let dz = (1.0 - dx * dx - dy * dy).max(0.0).sqrt();

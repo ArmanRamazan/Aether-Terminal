@@ -15,10 +15,11 @@ use aether_core::WorldGraph;
 use crate::RenderError;
 
 use super::help::HelpOverlay;
-use super::input::{InputAction, InputHandler};
+use super::input::{InputAction, InputHandler, InputMode};
 use super::network::NetworkTab;
 use super::overview::OverviewTab;
 use super::widgets::sparklines::SystemSparklines;
+use super::world3d::World3DTab;
 
 /// Active tab in the TUI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -64,6 +65,8 @@ pub struct App {
     tick_rate: Duration,
     /// State for the Overview (F1) tab.
     overview: OverviewTab,
+    /// State for the World 3D (F2) tab.
+    world3d: World3DTab,
     /// State for the Network (F3) tab.
     network: NetworkTab,
     /// When `true`, next key press selects a sort column.
@@ -87,6 +90,7 @@ impl App {
             should_quit: false,
             tick_rate: Duration::from_millis(16),
             overview: OverviewTab::default(),
+            world3d: World3DTab::default(),
             network: NetworkTab::default(),
             sort_pending: false,
             sparklines: SystemSparklines::default(),
@@ -145,6 +149,15 @@ impl App {
             }
         }
 
+        // World3D tab-specific keys (WASD, space, r, c, zoom) are intercepted
+        // before the global InputHandler to avoid conflicts (e.g. 's' = EnterSort).
+        if self.current_tab == Tab::World3D
+            && self.input.mode() == InputMode::Normal
+            && self.world3d.handle_key(key.code)
+        {
+            return;
+        }
+
         let action = self.input.handle_key(key);
         self.dispatch_action(action);
     }
@@ -186,6 +199,12 @@ impl App {
     /// Navigate within the active tab.
     fn navigate(&mut self, dir: super::input::Direction) {
         use super::input::Direction;
+
+        if self.current_tab == Tab::World3D {
+            self.world3d.navigate(dir);
+            return;
+        }
+
         let code = match dir {
             Direction::Down => crossterm::event::KeyCode::Char('j'),
             Direction::Up => crossterm::event::KeyCode::Char('k'),
@@ -265,7 +284,7 @@ impl App {
     }
 
     /// Draw the full UI frame: tab bar, active tab content, and status bar.
-    fn draw(&self, frame: &mut Frame) {
+    fn draw(&mut self, frame: &mut Frame) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -292,7 +311,7 @@ impl App {
     }
 
     /// Render the active tab content.
-    fn draw_tab_content(&self, frame: &mut Frame, area: ratatui::layout::Rect) {
+    fn draw_tab_content(&mut self, frame: &mut Frame, area: ratatui::layout::Rect) {
         match self.current_tab {
             Tab::Overview => {
                 if let Ok(world) = self.world.read() {
@@ -306,25 +325,27 @@ impl App {
                     self.overview.render(chunks[1], buf, &world);
                 }
             }
+            Tab::World3D => {
+                if let Ok(world) = self.world.read() {
+                    let buf = frame.buffer_mut();
+                    self.world3d.render(area, buf, &world);
+                }
+            }
             Tab::Network => {
                 if let Ok(world) = self.world.read() {
                     let buf = frame.buffer_mut();
                     self.network.render(area, buf, &world);
                 }
             }
-            _ => {
-                let content = match self.current_tab {
-                    Tab::World3D => "3D process graph viewport (TODO)",
-                    Tab::Arbiter => "AI action approval panel (TODO)",
-                    _ => unreachable!(),
-                };
-                let paragraph = Paragraph::new(Line::from(Span::raw(content)))
-                    .block(
-                        Block::default()
-                            .borders(Borders::ALL)
-                            .title(self.current_tab.label()),
-                    )
-                    .style(Style::default().fg(Color::White));
+            Tab::Arbiter => {
+                let paragraph =
+                    Paragraph::new(Line::from(Span::raw("AI action approval panel (TODO)")))
+                        .block(
+                            Block::default()
+                                .borders(Borders::ALL)
+                                .title(self.current_tab.label()),
+                        )
+                        .style(Style::default().fg(Color::White));
                 frame.render_widget(paragraph, area);
             }
         }

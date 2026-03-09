@@ -45,11 +45,7 @@ impl NetworkTab {
     }
 
     /// Handle navigation keys. Returns `true` if the key was consumed.
-    pub(crate) fn handle_key(
-        &mut self,
-        code: crossterm::event::KeyCode,
-        row_count: usize,
-    ) {
+    pub(crate) fn handle_key(&mut self, code: crossterm::event::KeyCode, row_count: usize) {
         use crossterm::event::KeyCode;
         match code {
             KeyCode::Char('j') | KeyCode::Down => self.move_down(row_count),
@@ -113,7 +109,12 @@ impl NetworkTab {
             .add_modifier(Modifier::BOLD);
 
         let header = Row::new(vec![
-            "Src PID", "Src Name", "Dest IP:Port", "Proto", "State", "Bytes/s",
+            "Src PID",
+            "Src Name",
+            "Dest IP:Port",
+            "Proto",
+            "State",
+            "Bytes/s",
         ])
         .style(header_style);
 
