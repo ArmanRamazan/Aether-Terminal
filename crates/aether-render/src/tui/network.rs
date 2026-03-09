@@ -1,14 +1,20 @@
 //! Network tab — connection list sorted by bytes/sec (F3).
 
+use std::collections::VecDeque;
+
 use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Row, Table, Widget};
+use ratatui::widgets::{Block, Borders, Paragraph, Row, Sparkline, Table, Widget};
 
+use aether_core::models::Protocol;
 use aether_core::WorldGraph;
 
 use crate::palette::Palette;
+
+/// Maximum number of throughput samples retained (1 per second).
+const THROUGHPUT_HISTORY_CAP: usize = 60;
 
 /// State for the Network (F3) connection list tab.
 #[derive(Debug, Default)]
@@ -19,6 +25,8 @@ pub(crate) struct NetworkTab {
     filter_text: String,
     /// Number of rows scrolled past the top of the visible area.
     scroll_offset: usize,
+    /// Rolling throughput history for the summary sparkline.
+    throughput_history: VecDeque<u64>,
 }
 
 impl NetworkTab {
@@ -51,8 +59,30 @@ impl NetworkTab {
         }
     }
 
-    /// Render the connection table into `buf`.
+    /// Sample current throughput from the world graph.
+    ///
+    /// Call once per second (same cadence as [`SystemSparklines`]).
+    pub(crate) fn update(&mut self, world: &WorldGraph) {
+        let total_bps: u64 = world.edges().map(|e| e.bytes_per_sec).sum();
+        if self.throughput_history.len() >= THROUGHPUT_HISTORY_CAP {
+            self.throughput_history.pop_front();
+        }
+        self.throughput_history.push_back(total_bps);
+    }
+
+    /// Render the full Network tab: summary panel + connection table.
     pub(crate) fn render(&self, area: Rect, buf: &mut Buffer, world: &WorldGraph) {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(6), Constraint::Min(0)])
+            .split(area);
+
+        self.render_summary(chunks[0], buf, world);
+        self.render_table(chunks[1], buf, world);
+    }
+
+    /// Render the connection table into `buf`.
+    fn render_table(&self, area: Rect, buf: &mut Buffer, world: &WorldGraph) {
         let rows = collect_connection_rows(world, &self.filter_text);
         let total = rows.len();
         let offset = self.scroll_offset.min(total.saturating_sub(1));
@@ -114,6 +144,72 @@ impl NetworkTab {
         );
 
         Widget::render(table, area, buf);
+    }
+
+    /// Render the summary panel with aggregate stats and throughput sparkline.
+    fn render_summary(&self, area: Rect, buf: &mut Buffer, world: &WorldGraph) {
+        let halves = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(area);
+
+        // --- Left: text stats ---
+        let stats = compute_stats(world);
+        let lines = vec![
+            Line::from(vec![
+                Span::styled("Connections: ", Style::default().fg(Palette::DATA)),
+                Span::styled(
+                    stats.total.to_string(),
+                    Style::default().fg(Palette::HEALTHY),
+                ),
+                Span::styled("  Active: ", Style::default().fg(Palette::DATA)),
+                Span::styled(
+                    stats.active.to_string(),
+                    Style::default()
+                        .fg(if stats.active > 0 {
+                            Palette::HEALTHY
+                        } else {
+                            Color::DarkGray
+                        })
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled("Throughput: ", Style::default().fg(Palette::DATA)),
+                Span::styled(
+                    format_bytes_per_sec(stats.total_bps),
+                    Style::default().fg(Palette::XP_PURPLE),
+                ),
+            ]),
+            Line::from(vec![Span::styled(
+                stats.protocol_distribution,
+                Style::default().fg(Palette::NEON_BLUE),
+            )]),
+        ];
+
+        let paragraph = Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(Span::styled(
+                    "Network Summary",
+                    Style::default().fg(Palette::NEON_BLUE),
+                ))
+                .border_style(Style::default().fg(Palette::NEON_BLUE)),
+        );
+        Widget::render(paragraph, halves[0], buf);
+
+        // --- Right: throughput sparkline ---
+        let slice: Vec<u64> = self.throughput_history.iter().copied().collect();
+        let sparkline = Sparkline::default()
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Throughput")
+                    .border_style(Style::default().fg(Palette::XP_PURPLE)),
+            )
+            .data(&slice)
+            .style(Style::default().fg(Palette::XP_PURPLE));
+        Widget::render(sparkline, halves[1], buf);
     }
 
     /// Current row count for external callers.
@@ -221,6 +317,68 @@ fn parse_bytes_sort_key(s: &str) -> u64 {
         v.parse::<u64>().unwrap_or(0)
     } else {
         0
+    }
+}
+
+/// Aggregate stats computed from the world graph.
+struct NetworkStats {
+    total: usize,
+    active: usize,
+    total_bps: u64,
+    protocol_distribution: String,
+}
+
+/// Compute aggregate network statistics from the world graph.
+fn compute_stats(world: &WorldGraph) -> NetworkStats {
+    let mut total = 0_usize;
+    let mut active = 0_usize;
+    let mut total_bps = 0_u64;
+    let mut counts: [usize; 7] = [0; 7];
+
+    for edge in world.edges() {
+        total += 1;
+        total_bps += edge.bytes_per_sec;
+        if edge.bytes_per_sec > 0 {
+            active += 1;
+        }
+        counts[protocol_index(edge.protocol)] += 1;
+    }
+
+    let distribution = if total == 0 {
+        "No connections".to_string()
+    } else {
+        let labels = ["TCP", "UDP", "DNS", "QUIC", "HTTP", "HTTPS", "Other"];
+        let mut parts = Vec::new();
+        for (i, label) in labels.iter().enumerate() {
+            if counts[i] > 0 {
+                parts.push(format!(
+                    "{}: {:.0}%",
+                    label,
+                    counts[i] as f64 / total as f64 * 100.0,
+                ));
+            }
+        }
+        parts.join(" | ")
+    };
+
+    NetworkStats {
+        total,
+        active,
+        total_bps,
+        protocol_distribution: distribution,
+    }
+}
+
+/// Map protocol variant to an array index for counting.
+fn protocol_index(proto: Protocol) -> usize {
+    match proto {
+        Protocol::TCP => 0,
+        Protocol::UDP => 1,
+        Protocol::DNS => 2,
+        Protocol::QUIC => 3,
+        Protocol::HTTP => 4,
+        Protocol::HTTPS => 5,
+        Protocol::Unknown => 6,
     }
 }
 
@@ -375,6 +533,71 @@ mod tests {
         let mut tab = NetworkTab::default();
         tab.move_down(0);
         assert_eq!(tab.selected_row, None);
+    }
+
+    #[test]
+    fn test_compute_stats_empty_world() {
+        let world = WorldGraph::new();
+        let stats = compute_stats(&world);
+        assert_eq!(stats.total, 0);
+        assert_eq!(stats.active, 0);
+        assert_eq!(stats.total_bps, 0);
+        assert_eq!(stats.protocol_distribution, "No connections");
+    }
+
+    #[test]
+    fn test_compute_stats_mixed_protocols() {
+        let mut world = WorldGraph::new();
+        world.add_process(make_process(1, "a"));
+        world.add_process(make_process(2, "b"));
+
+        world.add_connection(1, 2, make_edge(1, 80, Protocol::TCP, 1000));
+        world.add_connection(1, 2, make_edge(1, 443, Protocol::TCP, 500));
+        world.add_connection(1, 2, make_edge(1, 53, Protocol::DNS, 0));
+
+        let stats = compute_stats(&world);
+        assert_eq!(stats.total, 3);
+        assert_eq!(stats.active, 2, "only connections with bps > 0");
+        assert_eq!(stats.total_bps, 1500);
+        assert!(stats.protocol_distribution.contains("TCP: 67%"));
+        assert!(stats.protocol_distribution.contains("DNS: 33%"));
+    }
+
+    #[test]
+    fn test_update_pushes_throughput_history() {
+        let mut tab = NetworkTab::default();
+        let mut world = WorldGraph::new();
+        world.add_process(make_process(1, "a"));
+        world.add_process(make_process(2, "b"));
+        world.add_connection(1, 2, make_edge(1, 80, Protocol::TCP, 1000));
+
+        tab.update(&world);
+        assert_eq!(tab.throughput_history.len(), 1);
+        assert_eq!(tab.throughput_history[0], 1000);
+
+        tab.update(&world);
+        assert_eq!(tab.throughput_history.len(), 2);
+    }
+
+    #[test]
+    fn test_throughput_history_caps_at_limit() {
+        let mut tab = NetworkTab::default();
+        let world = WorldGraph::new();
+
+        for _ in 0..100 {
+            tab.update(&world);
+        }
+
+        assert_eq!(tab.throughput_history.len(), THROUGHPUT_HISTORY_CAP);
+    }
+
+    #[test]
+    fn test_render_summary_does_not_panic() {
+        let tab = NetworkTab::default();
+        let world = WorldGraph::new();
+        let area = Rect::new(0, 0, 120, 6);
+        let mut buf = Buffer::empty(area);
+        tab.render_summary(area, &mut buf, &world);
     }
 
     #[test]
