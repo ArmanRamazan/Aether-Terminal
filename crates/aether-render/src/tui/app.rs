@@ -16,6 +16,7 @@ use crate::RenderError;
 
 use super::help::HelpOverlay;
 use super::input::{InputAction, InputHandler};
+use super::network::NetworkTab;
 use super::overview::OverviewTab;
 use super::widgets::sparklines::SystemSparklines;
 
@@ -63,6 +64,8 @@ pub struct App {
     tick_rate: Duration,
     /// State for the Overview (F1) tab.
     overview: OverviewTab,
+    /// State for the Network (F3) tab.
+    network: NetworkTab,
     /// When `true`, next key press selects a sort column.
     sort_pending: bool,
     /// Rolling sparkline history for the Overview tab.
@@ -84,6 +87,7 @@ impl App {
             should_quit: false,
             tick_rate: Duration::from_millis(16),
             overview: OverviewTab::default(),
+            network: NetworkTab::default(),
             sort_pending: false,
             sparklines: SystemSparklines::default(),
             sparkline_tick: 0,
@@ -147,7 +151,12 @@ impl App {
     /// Translate an [`InputAction`] into state changes.
     fn dispatch_action(&mut self, action: InputAction) {
         match action {
-            InputAction::None | InputAction::CancelInput => {}
+            InputAction::None => {}
+            InputAction::CancelInput => {
+                if self.current_tab == Tab::Network {
+                    self.network.clear_filter();
+                }
+            }
             InputAction::Quit => self.should_quit = true,
             InputAction::SwitchTab(tab) => self.current_tab = tab,
             InputAction::Navigate(dir) => self.navigate(dir),
@@ -157,8 +166,11 @@ impl App {
                 self.sort_pending = true;
             }
             InputAction::ExecuteCommand(cmd) => self.execute_command(&cmd),
-            InputAction::Search(_query) => {
-                // TODO: filter process table by query
+            InputAction::Search(query) => {
+                if self.current_tab == Tab::Network {
+                    self.network.set_filter(query);
+                }
+                // TODO: filter process table by query on Overview tab
             }
             InputAction::NextMatch | InputAction::PrevMatch => {
                 // TODO: cycle through search matches
@@ -173,21 +185,30 @@ impl App {
     /// Navigate within the active tab.
     fn navigate(&mut self, dir: super::input::Direction) {
         use super::input::Direction;
-        if self.current_tab == Tab::Overview {
-            if let Ok(world) = self.world.read() {
-                let count = world.process_count();
-                let sorted_pids = super::overview::collect_sorted_pids(
-                    &world,
-                    self.overview.sort_column(),
-                    self.overview.sort_ascending(),
-                );
-                let code = match dir {
-                    Direction::Down => crossterm::event::KeyCode::Char('j'),
-                    Direction::Up => crossterm::event::KeyCode::Char('k'),
-                    _ => return,
-                };
-                self.overview.handle_key(code, count, &sorted_pids);
+        let code = match dir {
+            Direction::Down => crossterm::event::KeyCode::Char('j'),
+            Direction::Up => crossterm::event::KeyCode::Char('k'),
+            _ => return,
+        };
+        match self.current_tab {
+            Tab::Overview => {
+                if let Ok(world) = self.world.read() {
+                    let count = world.process_count();
+                    let sorted_pids = super::overview::collect_sorted_pids(
+                        &world,
+                        self.overview.sort_column(),
+                        self.overview.sort_ascending(),
+                    );
+                    self.overview.handle_key(code, count, &sorted_pids);
+                }
             }
+            Tab::Network => {
+                if let Ok(world) = self.world.read() {
+                    let count = self.network.row_count(&world);
+                    self.network.handle_key(code, count);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -284,12 +305,17 @@ impl App {
                     self.overview.render(chunks[1], buf, &world);
                 }
             }
+            Tab::Network => {
+                if let Ok(world) = self.world.read() {
+                    let buf = frame.buffer_mut();
+                    self.network.render(area, buf, &world);
+                }
+            }
             _ => {
                 let content = match self.current_tab {
                     Tab::World3D => "3D process graph viewport (TODO)",
-                    Tab::Network => "Network connection list (TODO)",
                     Tab::Arbiter => "AI action approval panel (TODO)",
-                    Tab::Overview => unreachable!(),
+                    _ => unreachable!(),
                 };
                 let paragraph = Paragraph::new(Line::from(Span::raw(content)))
                     .block(
