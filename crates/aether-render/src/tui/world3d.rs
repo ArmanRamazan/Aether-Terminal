@@ -82,7 +82,8 @@ impl World3DTab {
             self.scene.camera_mut().rotate(0.02, 0.0);
         }
 
-        let lines = self.scene.render(world);
+        // Assume ~60fps frame time for pulsation effect.
+        let lines = self.scene.render(world, 1.0 / 60.0);
 
         // Draw Braille lines into the ratatui buffer.
         for (row_idx, (line, colors)) in lines.iter().enumerate() {
