@@ -198,7 +198,8 @@ mod tests {
         let content = &response["result"]["content"];
         assert!(content.is_array(), "tool result has content array");
         let text = content[0]["text"].as_str().expect("text content");
-        assert!(text.contains("get_system_topology"), "response contains tool name");
+        let parsed: serde_json::Value = serde_json::from_str(text).expect("valid JSON");
+        assert!(parsed["processes"].is_array(), "response contains processes");
 
         drop(client_write);
         cancel.cancel();

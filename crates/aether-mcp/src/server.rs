@@ -124,13 +124,18 @@ pub(crate) fn tool_definitions() -> Vec<Tool> {
     ]
 }
 
-/// Dispatch a tool call to the appropriate handler stub.
+/// Dispatch a tool call to the appropriate handler.
 pub(crate) fn dispatch_tool(
-    _server: &McpServer,
+    server: &McpServer,
     request: CallToolRequestParams,
 ) -> Result<CallToolResult, RmcpError> {
     match request.name.as_ref() {
-        TOOL_GET_SYSTEM_TOPOLOGY => Ok(stub_result(TOOL_GET_SYSTEM_TOPOLOGY)),
+        TOOL_GET_SYSTEM_TOPOLOGY => {
+            let result = crate::tools::get_system_topology(&server.world);
+            Ok(CallToolResult::success(vec![Content::text(
+                result.to_string(),
+            )]))
+        }
         TOOL_INSPECT_PROCESS => Ok(stub_result(TOOL_INSPECT_PROCESS)),
         TOOL_LIST_ANOMALIES => Ok(stub_result(TOOL_LIST_ANOMALIES)),
         TOOL_EXECUTE_ACTION => Ok(stub_result(TOOL_EXECUTE_ACTION)),
@@ -235,7 +240,7 @@ mod tests {
     }
 
     #[test]
-    fn test_dispatch_known_tool_returns_stub() {
+    fn test_dispatch_get_system_topology_returns_json() {
         let server = mock_server();
         let result = dispatch_tool(&server, make_call("get_system_topology"))
             .expect("should succeed");
@@ -244,7 +249,9 @@ mod tests {
             rmcp::model::RawContent::Text(t) => &t.text,
             _ => panic!("expected text content"),
         };
-        assert!(text.contains("get_system_topology"));
-        assert!(text.contains("stub"));
+        let parsed: serde_json::Value = serde_json::from_str(text).expect("valid JSON");
+        assert!(parsed["processes"].is_array());
+        assert!(parsed["connections"].is_array());
+        assert!(parsed["summary"].is_object());
     }
 }
