@@ -14,6 +14,7 @@ use aether_core::WorldGraph;
 
 use crate::RenderError;
 
+use super::help::HelpOverlay;
 use super::input::{InputAction, InputHandler};
 use super::overview::OverviewTab;
 use super::widgets::sparklines::SystemSparklines;
@@ -70,6 +71,8 @@ pub struct App {
     sparkline_tick: u32,
     /// Vim-style modal input handler.
     input: InputHandler,
+    /// Help overlay toggled with `?`.
+    help: HelpOverlay,
 }
 
 impl App {
@@ -85,6 +88,7 @@ impl App {
             sparklines: SystemSparklines::default(),
             sparkline_tick: 0,
             input: InputHandler::default(),
+            help: HelpOverlay::default(),
         }
     }
 
@@ -122,6 +126,12 @@ impl App {
 
     /// Dispatch a key event to the appropriate handler.
     fn handle_key(&mut self, key: KeyEvent) {
+        // Help overlay intercept: any key dismisses it.
+        if self.help.is_visible() {
+            self.help.dismiss();
+            return;
+        }
+
         // Sort-mode intercept: next key selects the sort column.
         if self.sort_pending {
             self.sort_pending = false;
@@ -154,7 +164,7 @@ impl App {
                 // TODO: cycle through search matches
             }
             InputAction::ToggleHelp => {
-                // TODO: toggle help overlay
+                self.help.toggle();
             }
             _ => {}
         }
@@ -252,6 +262,11 @@ impl App {
         }
 
         self.draw_tab_content(frame, chunks[1]);
+
+        // Help overlay renders on top of everything.
+        let area = frame.area();
+        let buf = frame.buffer_mut();
+        self.help.render(area, buf);
     }
 
     /// Render the active tab content.
@@ -371,6 +386,22 @@ mod tests {
         app.handle_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
         app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert!(app.should_quit);
+    }
+
+    #[test]
+    fn test_help_toggle_and_dismiss() {
+        let world = Arc::new(RwLock::new(WorldGraph::new()));
+        let mut app = App::new(world);
+
+        // '?' toggles help on
+        app.handle_key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
+        assert!(app.help.is_visible());
+
+        // Any key dismisses it (e.g. 'j' should NOT navigate)
+        let tab_before = app.current_tab;
+        app.handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
+        assert!(!app.help.is_visible());
+        assert_eq!(app.current_tab, tab_before);
     }
 
     #[test]
