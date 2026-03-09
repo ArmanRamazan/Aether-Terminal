@@ -2,3 +2,13 @@
 //!
 //! Two layers: a ratatui-based TUI with tabbed views, and a custom 3D engine
 //! that renders the process graph using Braille characters for 2x4 subpixel density.
+
+pub mod tui;
+
+/// Errors produced by the render crate.
+#[derive(Debug, thiserror::Error)]
+pub enum RenderError {
+    /// Terminal I/O failure (crossterm / ratatui).
+    #[error("terminal I/O error: {0}")]
+    Io(#[from] std::io::Error),
+}
