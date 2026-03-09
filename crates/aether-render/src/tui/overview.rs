@@ -66,6 +66,11 @@ impl OverviewTab {
         self.sort_column
     }
 
+    /// Open the detail panel for the given PID (used by World3D inspect).
+    pub(crate) fn set_detail_pid(&mut self, pid: u32) {
+        self.detail_pid = Some(pid);
+    }
+
     /// Current sort direction.
     pub(crate) fn sort_ascending(&self) -> bool {
         self.sort_ascending

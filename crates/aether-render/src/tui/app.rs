@@ -19,7 +19,7 @@ use super::input::{InputAction, InputHandler, InputMode};
 use super::network::NetworkTab;
 use super::overview::OverviewTab;
 use super::widgets::sparklines::SystemSparklines;
-use super::world3d::World3DTab;
+use super::world3d::{KeyResult, World3DTab};
 
 /// Active tab in the TUI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -149,13 +149,18 @@ impl App {
             }
         }
 
-        // World3D tab-specific keys (WASD, space, r, c, zoom) are intercepted
-        // before the global InputHandler to avoid conflicts (e.g. 's' = EnterSort).
-        if self.current_tab == Tab::World3D
-            && self.input.mode() == InputMode::Normal
-            && self.world3d.handle_key(key.code)
-        {
-            return;
+        // World3D tab-specific keys (WASD, space, r, c, zoom, Tab, Enter, Esc, i)
+        // are intercepted before the global InputHandler to avoid conflicts.
+        if self.current_tab == Tab::World3D && self.input.mode() == InputMode::Normal {
+            match self.world3d.handle_key(key.code) {
+                KeyResult::Consumed => return,
+                KeyResult::InspectNode(pid) => {
+                    self.current_tab = Tab::Overview;
+                    self.overview.set_detail_pid(pid);
+                    return;
+                }
+                KeyResult::NotConsumed => {}
+            }
         }
 
         let action = self.input.handle_key(key);
