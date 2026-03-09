@@ -31,12 +31,20 @@ struct Cli {
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_new(&cli.log_level)
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
+    let env_filter = tracing_subscriber::EnvFilter::try_new(&cli.log_level)
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+
+    if cli.mcp_stdio {
+        // Stdio MCP mode: logs go to stderr so stdout stays clean for JSON-RPC.
+        tracing_subscriber::fmt()
+            .with_env_filter(env_filter)
+            .with_writer(std::io::stderr)
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(env_filter)
+            .init();
+    }
 
     let world = Arc::new(RwLock::new(WorldGraph::new()));
     let arbiter = Arc::new(Mutex::new(ArbiterQueue::default()));

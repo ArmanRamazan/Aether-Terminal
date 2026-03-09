@@ -56,11 +56,7 @@ impl McpServer {
     /// Used with `--mcp-stdio` flag. Reads JSON-RPC from stdin, writes to stdout.
     /// TUI must NOT be active when using this mode.
     pub async fn run_stdio(self, cancel: CancellationToken) -> Result<(), McpError> {
-        tracing::info!("MCP stdio server starting");
-        // TODO: implement JSON-RPC stdio transport with rmcp
-        cancel.cancelled().await;
-        tracing::info!("MCP stdio server shutting down");
-        Ok(())
+        crate::transport::stdio::run_stdio(self, cancel).await
     }
 
     /// Run SSE/HTTP transport on the given port (blocks until cancelled).
