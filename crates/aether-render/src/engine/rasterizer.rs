@@ -1,4 +1,4 @@
-//! Rasterization primitives: z-buffer and Bresenham line drawing.
+//! Rasterization primitives: z-buffer, Bresenham line, and circle drawing.
 
 #![allow(dead_code)] // Items used by future scene renderer.
 
@@ -110,6 +110,100 @@ pub(crate) fn draw_line(
             y += sy;
         }
         step += 1;
+    }
+}
+
+/// Rasterize a circle outline using the midpoint circle algorithm.
+///
+/// Coordinates are in screen space; converted to Braille subpixels internally.
+/// All pixels use the center's depth for z-buffer testing.
+pub(crate) fn draw_circle(
+    canvas: &mut BrailleCanvas,
+    zbuf: &mut ZBuffer,
+    center: ScreenPoint,
+    radius: f32,
+    color: Color,
+) {
+    let cx = (center.x * 2.0) as i32;
+    let cy = (center.y * 4.0) as i32;
+    let r = radius as i32;
+    let depth = center.depth;
+
+    let pw = canvas.pixel_width() as i32;
+    let ph = canvas.pixel_height() as i32;
+
+    let mut x = r;
+    let mut y = 0i32;
+    let mut d = 1 - r;
+
+    while x >= y {
+        // Plot all 8 octants.
+        for &(px, py) in &[
+            (cx + x, cy + y),
+            (cx - x, cy + y),
+            (cx + x, cy - y),
+            (cx - x, cy - y),
+            (cx + y, cy + x),
+            (cx - y, cy + x),
+            (cx + y, cy - x),
+            (cx - y, cy - x),
+        ] {
+            if px >= 0 && py >= 0 && px < pw && py < ph {
+                let ux = px as usize;
+                let uy = py as usize;
+                if zbuf.test_and_set(ux, uy, depth) {
+                    canvas.set_pixel_colored(ux, uy, color);
+                }
+            }
+        }
+
+        y += 1;
+        if d <= 0 {
+            d += 2 * y + 1;
+        } else {
+            x -= 1;
+            d += 2 * (y - x) + 1;
+        }
+    }
+}
+
+/// Rasterize a filled circle using scanline fill.
+///
+/// For each row in the circle's bounding box, computes the horizontal span
+/// from the circle equation and fills all pixels. Z-buffer tested per pixel.
+pub(crate) fn draw_filled_circle(
+    canvas: &mut BrailleCanvas,
+    zbuf: &mut ZBuffer,
+    center: ScreenPoint,
+    radius: f32,
+    color: Color,
+) {
+    let cx = (center.x * 2.0) as i32;
+    let cy = (center.y * 4.0) as i32;
+    let r = radius as i32;
+    let depth = center.depth;
+
+    let pw = canvas.pixel_width() as i32;
+    let ph = canvas.pixel_height() as i32;
+
+    let y_min = (cy - r).max(0);
+    let y_max = (cy + r).min(ph - 1);
+
+    let r_sq = radius * radius;
+
+    for py in y_min..=y_max {
+        let dy = py - cy;
+        let dx = (r_sq - (dy as f32 * dy as f32)).sqrt() as i32;
+        let x_min = (cx - dx).max(0);
+        let x_max = (cx + dx).min(pw - 1);
+
+        for px in x_min..=x_max {
+            let ux = px as usize;
+            let uy = py as usize;
+            if zbuf.test_and_set(ux, uy, depth) {
+                canvas.set_pixel_colored(ux, uy, color);
+            }
+        }
     }
 }
 
@@ -235,6 +329,85 @@ mod tests {
                 "cell ({cx},{cy}) should have dots for vertical line at py={py}"
             );
         }
+    }
+
+    #[test]
+    fn test_circle_pixels_at_expected_distance() {
+        // 20 cells wide, 20 cells tall → 40×80 pixel space
+        let mut canvas = BrailleCanvas::new(20, 20);
+        let mut zbuf = ZBuffer::new(canvas.pixel_width(), canvas.pixel_height());
+        let color = Color::White;
+
+        // Center at screen (10, 10) → braille (20, 40), radius 8 pixels
+        let center = make_point(10.0, 10.0, 0.5);
+        let radius = 4.0; // 4 braille pixels
+        draw_circle(&mut canvas, &mut zbuf, center, radius, color);
+
+        let cx = (10.0 * 2.0) as i32; // 20
+        let cy = (10.0 * 4.0) as i32; // 40
+
+        let count = count_pixels(&canvas);
+        assert!(count > 0, "circle should set some pixels");
+
+        // Every set pixel should be approximately `radius` distance from center
+        for y in 0..canvas.pixel_height() {
+            for x in 0..canvas.pixel_width() {
+                if is_pixel_set(&canvas, x, y) {
+                    let dx = x as i32 - cx;
+                    let dy = y as i32 - cy;
+                    let dist = ((dx * dx + dy * dy) as f32).sqrt();
+                    assert!(
+                        (dist - radius).abs() < 1.5,
+                        "pixel ({x},{y}) dist {dist:.1} should be ~{radius} from center"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_filled_circle_has_more_pixels_than_outline() {
+        let mut canvas_outline = BrailleCanvas::new(20, 20);
+        let mut zbuf_outline = ZBuffer::new(canvas_outline.pixel_width(), canvas_outline.pixel_height());
+        let mut canvas_filled = BrailleCanvas::new(20, 20);
+        let mut zbuf_filled = ZBuffer::new(canvas_filled.pixel_width(), canvas_filled.pixel_height());
+        let color = Color::White;
+
+        let center = make_point(10.0, 10.0, 0.5);
+        let radius = 5.0;
+
+        draw_circle(&mut canvas_outline, &mut zbuf_outline, center, radius, color);
+        draw_filled_circle(&mut canvas_filled, &mut zbuf_filled, center, radius, color);
+
+        let outline_count = count_pixels(&canvas_outline);
+        let filled_count = count_pixels(&canvas_filled);
+
+        assert!(
+            filled_count > outline_count,
+            "filled circle ({filled_count} px) should have more pixels than outline ({outline_count} px)"
+        );
+    }
+
+    /// Check if a specific braille pixel is set.
+    fn is_pixel_set(canvas: &BrailleCanvas, x: usize, y: usize) -> bool {
+        let cx = x / 2;
+        let cy = y / 4;
+        let ch = canvas.cell_char(cx, cy);
+        let bits = ch as u32 - 0x2800;
+        let dx = x % 2;
+        let dy = y % 4;
+        let dot: u8 = match (dx, dy) {
+            (0, 0) => 0x01,
+            (0, 1) => 0x02,
+            (0, 2) => 0x04,
+            (0, 3) => 0x40,
+            (1, 0) => 0x08,
+            (1, 1) => 0x10,
+            (1, 2) => 0x20,
+            (1, 3) => 0x80,
+            _ => 0,
+        };
+        bits & dot as u32 != 0
     }
 
     #[test]
