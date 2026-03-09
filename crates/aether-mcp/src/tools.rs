@@ -129,6 +129,85 @@ pub(crate) fn inspect_process(graph: &RwLock<WorldGraph>, pid: u32) -> Result<Va
     }))
 }
 
+/// Scan all processes for anomalies and return sorted results.
+///
+/// Detects: low HP (<50), zombie state, high CPU (>90%).
+/// Sorted by severity (critical first), then HP ascending.
+pub(crate) fn list_anomalies(graph: &RwLock<WorldGraph>) -> Value {
+    let world = graph.read().expect("WorldGraph lock poisoned");
+
+    let mut anomalies: Vec<Value> = world
+        .processes()
+        .flat_map(detect_anomalies)
+        .collect();
+
+    // Sort: critical before warning, then by HP ascending.
+    anomalies.sort_by(|a, b| {
+        let sev_ord = severity_rank(a).cmp(&severity_rank(b));
+        if sev_ord != std::cmp::Ordering::Equal {
+            return sev_ord;
+        }
+        let hp_a = a["hp"].as_f64().unwrap_or(f64::MAX);
+        let hp_b = b["hp"].as_f64().unwrap_or(f64::MAX);
+        hp_a.partial_cmp(&hp_b).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let total = anomalies.len();
+    json!({
+        "anomalies": anomalies,
+        "total": total,
+    })
+}
+
+/// Detect anomalies for a single process. Returns 0..N anomaly entries.
+fn detect_anomalies(proc: &aether_core::models::ProcessNode) -> Vec<Value> {
+    let mut results = Vec::new();
+
+    if proc.state == ProcessState::Zombie {
+        results.push(build_anomaly(proc, "critical", "Zombie process", "kill"));
+    }
+
+    if proc.hp < 50.0 {
+        let severity = if proc.hp < 25.0 { "critical" } else { "warning" };
+        let reason = format!("HP below 50 (HP: {:.1})", proc.hp);
+        let action = "restart";
+        results.push(build_anomaly(proc, severity, &reason, action));
+    }
+
+    if proc.cpu_percent > 90.0 {
+        let reason = format!("CPU above 90% ({:.1}%)", proc.cpu_percent);
+        results.push(build_anomaly(proc, "warning", &reason, "investigate"));
+    }
+
+    results
+}
+
+/// Build a single anomaly JSON object.
+fn build_anomaly(
+    proc: &aether_core::models::ProcessNode,
+    severity: &str,
+    reason: &str,
+    suggested_action: &str,
+) -> Value {
+    json!({
+        "pid": proc.pid,
+        "name": proc.name,
+        "hp": proc.hp,
+        "reason": reason,
+        "severity": severity,
+        "suggested_action": suggested_action,
+    })
+}
+
+/// Map severity string to sort rank (lower = higher priority).
+fn severity_rank(anomaly: &Value) -> u8 {
+    match anomaly["severity"].as_str() {
+        Some("critical") => 0,
+        Some("warning") => 1,
+        _ => 2,
+    }
+}
+
 /// Generate health recommendations based on process metrics.
 fn build_recommendations(proc: &aether_core::models::ProcessNode) -> Vec<&'static str> {
     let mut recs = Vec::new();
@@ -393,5 +472,129 @@ mod tests {
             recs.iter().any(|r| r.contains("High memory")),
             "should recommend for high memory, got: {recs:?}"
         );
+    }
+
+    // --- list_anomalies tests ---
+
+    #[test]
+    fn test_list_anomalies_zombie_detected_as_critical() {
+        let mut g = WorldGraph::new();
+        let mut proc = make_process(1, 5.0, 1000);
+        proc.state = ProcessState::Zombie;
+        proc.hp = 80.0;
+        g.add_process(proc);
+        let graph = RwLock::new(g);
+
+        let result = list_anomalies(&graph);
+        let anomalies = result["anomalies"].as_array().expect("anomalies array");
+
+        assert_eq!(result["total"], 1);
+        assert_eq!(anomalies[0]["pid"], 1);
+        assert_eq!(anomalies[0]["severity"], "critical");
+        assert!(
+            anomalies[0]["reason"].as_str().unwrap().contains("Zombie"),
+            "reason should mention zombie"
+        );
+        assert_eq!(anomalies[0]["suggested_action"], "kill");
+    }
+
+    #[test]
+    fn test_list_anomalies_high_cpu_detected_as_warning() {
+        let mut g = WorldGraph::new();
+        let proc = make_process(2, 95.0, 1000);
+        g.add_process(proc);
+        let graph = RwLock::new(g);
+
+        let result = list_anomalies(&graph);
+        let anomalies = result["anomalies"].as_array().expect("anomalies array");
+
+        assert_eq!(result["total"], 1);
+        assert_eq!(anomalies[0]["pid"], 2);
+        assert_eq!(anomalies[0]["severity"], "warning");
+        assert!(
+            anomalies[0]["reason"].as_str().unwrap().contains("CPU"),
+            "reason should mention CPU"
+        );
+        assert_eq!(anomalies[0]["suggested_action"], "investigate");
+    }
+
+    #[test]
+    fn test_list_anomalies_normal_processes_excluded() {
+        let mut g = WorldGraph::new();
+        g.add_process(make_process(1, 10.0, 1000)); // hp=95, cpu=10, running
+        g.add_process(make_process(2, 20.0, 2000));
+        let graph = RwLock::new(g);
+
+        let result = list_anomalies(&graph);
+        assert_eq!(result["total"], 0);
+        assert!(
+            result["anomalies"].as_array().unwrap().is_empty(),
+            "healthy processes should not appear"
+        );
+    }
+
+    #[test]
+    fn test_list_anomalies_sorted_critical_first_then_hp() {
+        let mut g = WorldGraph::new();
+
+        // Warning: high CPU, hp=95
+        let high_cpu = make_process(1, 95.0, 1000);
+        g.add_process(high_cpu);
+
+        // Critical: zombie, hp=80
+        let mut zombie = make_process(2, 0.0, 0);
+        zombie.state = ProcessState::Zombie;
+        zombie.hp = 80.0;
+        g.add_process(zombie);
+
+        // Critical: very low HP
+        let mut low_hp = make_process(3, 10.0, 1000);
+        low_hp.hp = 20.0;
+        g.add_process(low_hp);
+
+        let graph = RwLock::new(g);
+        let result = list_anomalies(&graph);
+        let anomalies = result["anomalies"].as_array().expect("anomalies array");
+
+        // All critical entries should come before warning entries.
+        let severities: Vec<&str> = anomalies
+            .iter()
+            .map(|a| a["severity"].as_str().unwrap())
+            .collect();
+
+        let first_warning = severities.iter().position(|&s| s == "warning");
+        let last_critical = severities.iter().rposition(|&s| s == "critical");
+        if let (Some(fw), Some(lc)) = (first_warning, last_critical) {
+            assert!(
+                lc < fw,
+                "all critical should precede warning, got: {severities:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_list_anomalies_low_hp_severity_tiers() {
+        let mut g = WorldGraph::new();
+
+        // HP=20 → critical (below 25)
+        let mut critical_hp = make_process(1, 5.0, 1000);
+        critical_hp.hp = 20.0;
+        g.add_process(critical_hp);
+
+        // HP=40 → warning (below 50 but above 25)
+        let mut warning_hp = make_process(2, 5.0, 1000);
+        warning_hp.hp = 40.0;
+        g.add_process(warning_hp);
+
+        let graph = RwLock::new(g);
+        let result = list_anomalies(&graph);
+        let anomalies = result["anomalies"].as_array().expect("anomalies array");
+
+        assert_eq!(result["total"], 2);
+        // Critical should come first.
+        assert_eq!(anomalies[0]["severity"], "critical");
+        assert_eq!(anomalies[0]["pid"], 1);
+        assert_eq!(anomalies[1]["severity"], "warning");
+        assert_eq!(anomalies[1]["pid"], 2);
     }
 }

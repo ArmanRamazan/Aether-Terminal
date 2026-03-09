@@ -157,7 +157,12 @@ pub(crate) fn dispatch_tool(
                 Err(msg) => Ok(CallToolResult::error(vec![Content::text(msg)])),
             }
         }
-        TOOL_LIST_ANOMALIES => Ok(stub_result(TOOL_LIST_ANOMALIES)),
+        TOOL_LIST_ANOMALIES => {
+            let result = crate::tools::list_anomalies(&server.world);
+            Ok(CallToolResult::success(vec![Content::text(
+                result.to_string(),
+            )]))
+        }
         TOOL_EXECUTE_ACTION => Ok(stub_result(TOOL_EXECUTE_ACTION)),
         other => Err(RmcpError::new(
             rmcp::model::ErrorCode::METHOD_NOT_FOUND,
