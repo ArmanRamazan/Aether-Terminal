@@ -62,6 +62,11 @@ impl ForceLayout {
         self.positions.get(&pid).copied()
     }
 
+    /// Returns all layout positions as a vec.
+    pub fn all_positions(&self) -> Vec<Vec3> {
+        self.positions.values().copied().collect()
+    }
+
     /// Synchronises layout state with the graph: adds new pids, removes dead ones.
     pub fn sync_with_graph(&mut self, graph: &WorldGraph) {
         let live_pids: Vec<u32> = graph.processes().map(|p| p.pid).collect();
@@ -122,11 +127,7 @@ impl ForceLayout {
         }
     }
 
-    fn apply_attractive_forces(
-        &self,
-        graph: &WorldGraph,
-        displacements: &mut HashMap<u32, Vec3>,
-    ) {
+    fn apply_attractive_forces(&self, graph: &WorldGraph, displacements: &mut HashMap<u32, Vec3>) {
         for (a, b) in graph.edge_pairs() {
             let (Some(&pa), Some(&pb)) = (self.positions.get(&a), self.positions.get(&b)) else {
                 continue;
@@ -238,15 +239,17 @@ mod tests {
         let mut layout = ForceLayout::new();
         layout.initial_placement(&[1, 2]);
 
-        let initial_dist = layout.get_position(1).expect("pid 1").distance(
-            layout.get_position(2).expect("pid 2"),
-        );
+        let initial_dist = layout
+            .get_position(1)
+            .expect("pid 1")
+            .distance(layout.get_position(2).expect("pid 2"));
 
         layout.converge(&graph, 50);
 
-        let final_dist = layout.get_position(1).expect("pid 1").distance(
-            layout.get_position(2).expect("pid 2"),
-        );
+        let final_dist = layout
+            .get_position(1)
+            .expect("pid 1")
+            .distance(layout.get_position(2).expect("pid 2"));
 
         assert!(
             final_dist < initial_dist,
@@ -270,15 +273,17 @@ mod tests {
         layout.k = compute_k(2);
         layout.temperature = 1.0;
 
-        let initial_dist = layout.get_position(1).expect("1").distance(
-            layout.get_position(2).expect("2"),
-        );
+        let initial_dist = layout
+            .get_position(1)
+            .expect("1")
+            .distance(layout.get_position(2).expect("2"));
 
         layout.converge(&graph, 50);
 
-        let final_dist = layout.get_position(1).expect("1").distance(
-            layout.get_position(2).expect("2"),
-        );
+        let final_dist = layout
+            .get_position(1)
+            .expect("1")
+            .distance(layout.get_position(2).expect("2"));
 
         assert!(
             final_dist > initial_dist,
@@ -321,8 +326,14 @@ mod tests {
         let p1 = graph.find_by_pid(1).expect("pid 1 exists");
         let p2 = graph.find_by_pid(2).expect("pid 2 exists");
 
-        assert_eq!(p1.position_3d, layout.get_position(1).expect("layout has pid 1"));
-        assert_eq!(p2.position_3d, layout.get_position(2).expect("layout has pid 2"));
+        assert_eq!(
+            p1.position_3d,
+            layout.get_position(1).expect("layout has pid 1")
+        );
+        assert_eq!(
+            p2.position_3d,
+            layout.get_position(2).expect("layout has pid 2")
+        );
     }
 
     #[test]

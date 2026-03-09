@@ -88,6 +88,21 @@ impl SceneRenderer {
         &mut self.camera
     }
 
+    /// Read-only access to the camera for projection queries.
+    pub fn camera_ref(&self) -> &OrbitalCamera {
+        &self.camera
+    }
+
+    /// Get a node's layout position by PID.
+    pub fn layout_position(&self, pid: u32) -> Option<glam::Vec3> {
+        self.layout.get_position(pid)
+    }
+
+    /// Collect all layout positions (for auto-centering).
+    pub fn all_layout_positions(&self) -> Vec<glam::Vec3> {
+        self.layout.all_positions()
+    }
+
     /// Project a node position through the camera to screen space.
     fn project_node(
         &self,
@@ -117,7 +132,13 @@ impl SceneRenderer {
             let Some(p1) = self.project_node(dst_pid, view, proj, screen_w, screen_h) else {
                 continue;
             };
-            draw_line(&mut self.canvas, &mut self.zbuffer, p0, p1, Palette::NEON_BLUE);
+            draw_line(
+                &mut self.canvas,
+                &mut self.zbuffer,
+                p0,
+                p1,
+                Palette::NEON_BLUE,
+            );
         }
     }
 

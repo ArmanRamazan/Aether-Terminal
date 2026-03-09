@@ -112,8 +112,10 @@ mod tests {
         // No column should be all zeros or contain NaN
         for col in 0..4 {
             let c = view.col(col);
-            assert!(!c.x.is_nan() && !c.y.is_nan() && !c.z.is_nan() && !c.w.is_nan(),
-                "view matrix column {col} contains NaN");
+            assert!(
+                !c.x.is_nan() && !c.y.is_nan() && !c.z.is_nan() && !c.w.is_nan(),
+                "view matrix column {col} contains NaN"
+            );
         }
         assert_ne!(view, Mat4::ZERO, "view matrix should not be zero");
     }
@@ -125,18 +127,30 @@ mod tests {
 
         cam.rotate(0.5, 0.2);
 
-        assert!((cam.yaw - (orig_yaw + 0.5)).abs() < 1e-6, "yaw should increase by 0.5");
-        assert!((cam.pitch - (orig_pitch + 0.2)).abs() < 1e-6, "pitch should increase by 0.2");
+        assert!(
+            (cam.yaw - (orig_yaw + 0.5)).abs() < 1e-6,
+            "yaw should increase by 0.5"
+        );
+        assert!(
+            (cam.pitch - (orig_pitch + 0.2)).abs() < 1e-6,
+            "pitch should increase by 0.2"
+        );
     }
 
     #[test]
     fn test_rotate_clamps_pitch() {
         let mut cam = OrbitalCamera::new();
         cam.rotate(0.0, 100.0);
-        assert!(cam.pitch <= PITCH_LIMIT, "pitch should be clamped to PITCH_LIMIT");
+        assert!(
+            cam.pitch <= PITCH_LIMIT,
+            "pitch should be clamped to PITCH_LIMIT"
+        );
 
         cam.rotate(0.0, -200.0);
-        assert!(cam.pitch >= -PITCH_LIMIT, "pitch should be clamped to -PITCH_LIMIT");
+        assert!(
+            cam.pitch >= -PITCH_LIMIT,
+            "pitch should be clamped to -PITCH_LIMIT"
+        );
     }
 
     #[test]
@@ -144,10 +158,16 @@ mod tests {
         let mut cam = OrbitalCamera::new();
 
         cam.zoom(-100.0);
-        assert!((cam.distance - MIN_DISTANCE).abs() < 1e-6, "distance should clamp to minimum");
+        assert!(
+            (cam.distance - MIN_DISTANCE).abs() < 1e-6,
+            "distance should clamp to minimum"
+        );
 
         cam.zoom(200.0);
-        assert!((cam.distance - MAX_DISTANCE).abs() < 1e-6, "distance should clamp to maximum");
+        assert!(
+            (cam.distance - MAX_DISTANCE).abs() < 1e-6,
+            "distance should clamp to maximum"
+        );
     }
 
     #[test]
@@ -162,21 +182,23 @@ mod tests {
         // At yaw=0, pitch=0: position should be (0, 0, distance)
         assert!((pos.x).abs() < 1e-5, "x should be ~0 at yaw=0, pitch=0");
         assert!((pos.y).abs() < 1e-5, "y should be ~0 at pitch=0");
-        assert!((pos.z - 10.0).abs() < 1e-5, "z should be ~distance at yaw=0, pitch=0");
+        assert!(
+            (pos.z - 10.0).abs() < 1e-5,
+            "z should be ~distance at yaw=0, pitch=0"
+        );
     }
 
     #[test]
     fn test_auto_center_moves_to_centroid() {
         let mut cam = OrbitalCamera::new();
-        let points = [
-            Vec3::new(2.0, 4.0, 6.0),
-            Vec3::new(4.0, 6.0, 8.0),
-        ];
+        let points = [Vec3::new(2.0, 4.0, 6.0), Vec3::new(4.0, 6.0, 8.0)];
         cam.auto_center(&points);
 
         let expected = Vec3::new(3.0, 5.0, 7.0);
-        assert!((cam.center - expected).length() < 1e-5,
-            "center should be centroid of points");
+        assert!(
+            (cam.center - expected).length() < 1e-5,
+            "center should be centroid of points"
+        );
     }
 
     #[test]
@@ -184,7 +206,10 @@ mod tests {
         let mut cam = OrbitalCamera::new();
         let orig = cam.center;
         cam.auto_center(&[]);
-        assert_eq!(cam.center, orig, "center should not change for empty points");
+        assert_eq!(
+            cam.center, orig,
+            "center should not change for empty points"
+        );
     }
 
     #[test]

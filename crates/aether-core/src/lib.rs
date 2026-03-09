@@ -10,10 +10,10 @@ pub mod models;
 pub mod traits;
 
 // Re-export key types for convenience.
+pub use error::CoreError;
 pub use events::{AgentAction, GameEvent, SystemEvent};
 pub use graph::WorldGraph;
 pub use models::{
     ConnectionState, NetworkEdge, ProcessNode, ProcessState, Protocol, SystemSnapshot,
 };
-pub use error::CoreError;
 pub use traits::{GameSession, Ranking, Storage, SystemProbe};

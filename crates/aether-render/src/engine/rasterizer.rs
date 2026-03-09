@@ -223,7 +223,10 @@ mod tests {
     fn test_farther_pixel_rejected_after_closer() {
         let mut zb = ZBuffer::new(4, 4);
         assert!(zb.test_and_set(2, 2, 0.5));
-        assert!(!zb.test_and_set(2, 2, 1.0), "farther depth should be rejected");
+        assert!(
+            !zb.test_and_set(2, 2, 1.0),
+            "farther depth should be rejected"
+        );
     }
 
     #[test]
@@ -231,13 +234,19 @@ mod tests {
         let mut zb = ZBuffer::new(4, 4);
         assert!(zb.test_and_set(0, 0, 0.1));
         zb.clear();
-        assert!(zb.test_and_set(0, 0, 0.9), "after clear, any depth should succeed");
+        assert!(
+            zb.test_and_set(0, 0, 0.9),
+            "after clear, any depth should succeed"
+        );
     }
 
     #[test]
     fn test_out_of_bounds_returns_false() {
         let mut zb = ZBuffer::new(2, 2);
-        assert!(!zb.test_and_set(5, 5, 0.5), "out-of-bounds should return false");
+        assert!(
+            !zb.test_and_set(5, 5, 0.5),
+            "out-of-bounds should return false"
+        );
     }
 
     /// Count raised dots across the entire canvas.
@@ -289,8 +298,8 @@ mod tests {
         draw_line(&mut canvas, &mut zbuf, p0, p1, color);
 
         let expected_py = 8usize; // 2.0 * 4
-        let px_start = 2usize;   // 1.0 * 2
-        let px_end = 10usize;    // 5.0 * 2
+        let px_start = 2usize; // 1.0 * 2
+        let px_end = 10usize; // 5.0 * 2
 
         // All pixels on the line should be at the expected y
         for px in px_start..=px_end {
@@ -317,8 +326,8 @@ mod tests {
         draw_line(&mut canvas, &mut zbuf, p0, p1, color);
 
         let expected_px = 6usize; // 3.0 * 2
-        let py_start = 4usize;   // 1.0 * 4
-        let py_end = 20usize;    // 5.0 * 4
+        let py_start = 4usize; // 1.0 * 4
+        let py_end = 20usize; // 5.0 * 4
 
         // Check that pixels along the expected x column are set
         for py in py_start..=py_end {
@@ -369,15 +378,23 @@ mod tests {
     #[test]
     fn test_filled_circle_has_more_pixels_than_outline() {
         let mut canvas_outline = BrailleCanvas::new(20, 20);
-        let mut zbuf_outline = ZBuffer::new(canvas_outline.pixel_width(), canvas_outline.pixel_height());
+        let mut zbuf_outline =
+            ZBuffer::new(canvas_outline.pixel_width(), canvas_outline.pixel_height());
         let mut canvas_filled = BrailleCanvas::new(20, 20);
-        let mut zbuf_filled = ZBuffer::new(canvas_filled.pixel_width(), canvas_filled.pixel_height());
+        let mut zbuf_filled =
+            ZBuffer::new(canvas_filled.pixel_width(), canvas_filled.pixel_height());
         let color = Color::White;
 
         let center = make_point(10.0, 10.0, 0.5);
         let radius = 5.0;
 
-        draw_circle(&mut canvas_outline, &mut zbuf_outline, center, radius, color);
+        draw_circle(
+            &mut canvas_outline,
+            &mut zbuf_outline,
+            center,
+            radius,
+            color,
+        );
         draw_filled_circle(&mut canvas_filled, &mut zbuf_filled, center, radius, color);
 
         let outline_count = count_pixels(&canvas_outline);
@@ -425,8 +442,8 @@ mod tests {
         let count = count_pixels(&canvas);
         // Braille displacement: dx=14, dy=28 → Bresenham produces max(14,28)+1 = 29 pixels
         let dx = ((8.0 - 1.0) * 2.0) as usize; // 14
-        let dy = ((8.0 - 1.0) * 4.0) as usize;  // 28
-        let expected = dx.max(dy) + 1;           // 29
+        let dy = ((8.0 - 1.0) * 4.0) as usize; // 28
+        let expected = dx.max(dy) + 1; // 29
         assert_eq!(
             count, expected,
             "diagonal line should produce ~{expected} pixels, got {count}"
