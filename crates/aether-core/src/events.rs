@@ -115,11 +115,7 @@ mod tests {
             new_hp: 75.0,
         };
         match event.clone() {
-            GameEvent::HpChanged {
-                pid,
-                delta,
-                new_hp,
-            } => {
+            GameEvent::HpChanged { pid, delta, new_hp } => {
                 assert_eq!(pid, 10);
                 assert_eq!(delta, -25.0);
                 assert_eq!(new_hp, 75.0);

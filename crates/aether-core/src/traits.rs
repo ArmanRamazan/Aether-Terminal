@@ -31,8 +31,9 @@ pub trait SystemProbe: Send + Sync + 'static {
     /// Collect a point-in-time snapshot of all processes and connections.
     fn snapshot(
         &self,
-    ) -> impl std::future::Future<Output = Result<SystemSnapshot, Box<dyn std::error::Error + Send + Sync>>>
-           + Send;
+    ) -> impl std::future::Future<
+        Output = Result<SystemSnapshot, Box<dyn std::error::Error + Send + Sync>>,
+    > + Send;
 }
 
 /// Port for gamification data persistence.
@@ -43,14 +44,14 @@ pub trait Storage: Send + Sync + 'static {
     fn save_session(
         &self,
         session: &GameSession,
-    ) -> impl std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>>
-           + Send;
+    ) -> impl std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send;
 
     /// Load the ranking leaderboard.
     fn load_rankings(
         &self,
-    ) -> impl std::future::Future<Output = Result<Vec<Ranking>, Box<dyn std::error::Error + Send + Sync>>>
-           + Send;
+    ) -> impl std::future::Future<
+        Output = Result<Vec<Ranking>, Box<dyn std::error::Error + Send + Sync>>,
+    > + Send;
 }
 
 #[cfg(test)]

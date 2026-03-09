@@ -1,14 +1,14 @@
-//! Overview tab — sortable process table (F1).
+//! Overview tab — sortable process table (F1) with detail panel.
 //!
 //! Renders all processes from the [`WorldGraph`] as a ratatui [`Table`] with
 //! color-coded rows based on CPU load. Supports keyboard-driven sorting,
-//! scrolling, and row selection.
+//! scrolling, row selection, and a detail panel (Enter/Esc).
 
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Constraint, Rect};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Row, Table, Widget};
+use ratatui::widgets::{Block, Borders, Gauge, Paragraph, Row, Table, Widget, Wrap};
 
 use aether_core::models::ProcessState;
 use aether_core::WorldGraph;
@@ -44,6 +44,8 @@ pub(crate) struct OverviewTab {
     sort_ascending: bool,
     /// Number of rows scrolled past the top of the visible area.
     scroll_offset: usize,
+    /// PID of the process whose detail panel is open (Enter to open, Esc to close).
+    detail_pid: Option<u32>,
 }
 
 impl Default for OverviewTab {
@@ -53,18 +55,46 @@ impl Default for OverviewTab {
             sort_column: SortColumn::Cpu,
             sort_ascending: false,
             scroll_offset: 0,
+            detail_pid: None,
         }
     }
 }
 
 impl OverviewTab {
-    /// Handle a navigation key. Returns `true` if the key was consumed.
-    pub(crate) fn handle_key(&mut self, code: crossterm::event::KeyCode, process_count: usize) {
+    /// Current sort column.
+    pub(crate) fn sort_column(&self) -> SortColumn {
+        self.sort_column
+    }
+
+    /// Current sort direction.
+    pub(crate) fn sort_ascending(&self) -> bool {
+        self.sort_ascending
+    }
+
+    /// Handle a navigation key.
+    ///
+    /// `sorted_pids` maps each row index (in current sort order) to a PID.
+    /// Pass an empty slice when the world graph is unavailable.
+    pub(crate) fn handle_key(
+        &mut self,
+        code: crossterm::event::KeyCode,
+        process_count: usize,
+        sorted_pids: &[u32],
+    ) {
         use crossterm::event::KeyCode;
         match code {
             KeyCode::Char('j') | KeyCode::Down => self.move_selection_down(process_count),
             KeyCode::Char('k') | KeyCode::Up => self.move_selection_up(),
-            KeyCode::Enter => { /* selection confirmed — no-op for now */ }
+            KeyCode::Enter => {
+                if let Some(idx) = self.selected_row {
+                    if let Some(&pid) = sorted_pids.get(idx) {
+                        self.detail_pid = Some(pid);
+                    }
+                }
+            }
+            KeyCode::Esc => {
+                self.detail_pid = None;
+            }
             _ => {}
         }
     }
@@ -90,8 +120,27 @@ impl OverviewTab {
         true
     }
 
-    /// Render the process table into `buf` using data from `world`.
+    /// Render the process table (and detail panel if open) into `buf`.
     pub(crate) fn render(&self, area: Rect, buf: &mut Buffer, world: &WorldGraph) {
+        let (table_area, detail_area) = if self.detail_pid.is_some() {
+            let chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+                .split(area);
+            (chunks[0], Some(chunks[1]))
+        } else {
+            (area, None)
+        };
+
+        self.render_table(table_area, buf, world);
+
+        if let (Some(pid), Some(panel_area)) = (self.detail_pid, detail_area) {
+            render_detail_panel(panel_area, buf, world, pid);
+        }
+    }
+
+    /// Render the process table into the given area.
+    fn render_table(&self, area: Rect, buf: &mut Buffer, world: &WorldGraph) {
         let mut rows = collect_sorted_rows(world, self.sort_column, self.sort_ascending);
 
         // Apply scroll offset.
@@ -156,17 +205,15 @@ impl OverviewTab {
         ];
 
         let title = format!("Overview [F1] — {} processes", total);
-        let table = Table::new(styled_rows, widths)
-            .header(header)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(Line::from(Span::styled(
-                        title,
-                        Style::default().fg(Palette::HEALTHY),
-                    )))
-                    .border_style(Style::default().fg(Palette::NEON_BLUE)),
-            );
+        let table = Table::new(styled_rows, widths).header(header).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(Line::from(Span::styled(
+                    title,
+                    Style::default().fg(Palette::HEALTHY),
+                )))
+                .border_style(Style::default().fg(Palette::NEON_BLUE)),
+        );
 
         Widget::render(table, area, buf);
     }
@@ -250,10 +297,189 @@ fn collect_sorted_rows(
                 ha.partial_cmp(&hb).unwrap_or(std::cmp::Ordering::Equal)
             }
         };
-        if ascending { cmp } else { cmp.reverse() }
+        if ascending {
+            cmp
+        } else {
+            cmp.reverse()
+        }
     });
 
     rows
+}
+
+/// Extract sorted PIDs from the world graph in the same order as [`collect_sorted_rows`].
+pub(crate) fn collect_sorted_pids(
+    world: &WorldGraph,
+    sort_column: SortColumn,
+    ascending: bool,
+) -> Vec<u32> {
+    collect_sorted_rows(world, sort_column, ascending)
+        .iter()
+        .filter_map(|row| row[0].parse().ok())
+        .collect()
+}
+
+/// Render the process detail panel showing full info for a single process.
+fn render_detail_panel(area: Rect, buf: &mut Buffer, world: &WorldGraph, pid: u32) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Palette::NEON_BLUE))
+        .style(Style::default().bg(Palette::BG));
+
+    let inner = block.inner(area);
+    Widget::render(block, area, buf);
+
+    let Some(proc) = world.find_by_pid(pid) else {
+        let msg = Paragraph::new("Process exited").style(Style::default().fg(Palette::CRITICAL));
+        Widget::render(msg, inner, buf);
+        return;
+    };
+
+    // Layout: title(1) + info(5) + gap(1) + hp_label(1) + hp_gauge(1) + xp(1) + gap(1) + conn_title(1) + conn_list(rest)
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // title
+            Constraint::Length(5), // info lines
+            Constraint::Length(1), // gap
+            Constraint::Length(1), // HP label
+            Constraint::Length(1), // HP gauge
+            Constraint::Length(1), // XP
+            Constraint::Length(1), // gap
+            Constraint::Length(1), // connections header
+            Constraint::Min(0),    // connections list
+        ])
+        .split(inner);
+
+    render_detail_title(chunks[0], buf, proc.pid, &proc.name);
+    render_detail_info(chunks[1], buf, proc);
+    render_detail_hp(chunks[3], chunks[4], buf, proc.hp);
+    render_detail_xp(chunks[5], buf, proc.xp);
+    render_detail_connections(chunks[7], chunks[8], buf, world, pid);
+}
+
+/// Render the detail panel title line.
+fn render_detail_title(area: Rect, buf: &mut Buffer, pid: u32, name: &str) {
+    let title = Paragraph::new(Line::from(vec![
+        Span::styled(
+            format!("{name} "),
+            Style::default()
+                .fg(Palette::DATA)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("[PID {pid}]"),
+            Style::default().fg(Palette::NEON_BLUE),
+        ),
+    ]));
+    Widget::render(title, area, buf);
+}
+
+/// Render process info fields (ppid, state, cpu, mem).
+fn render_detail_info(area: Rect, buf: &mut Buffer, proc: &aether_core::models::ProcessNode) {
+    let lines = vec![
+        Line::from(vec![
+            Span::styled("PPID:  ", Style::default().fg(Palette::NEON_BLUE)),
+            Span::styled(proc.ppid.to_string(), Style::default().fg(Palette::DATA)),
+        ]),
+        Line::from(vec![
+            Span::styled("State: ", Style::default().fg(Palette::NEON_BLUE)),
+            Span::styled(format_state(proc.state), Style::default().fg(Palette::DATA)),
+        ]),
+        Line::from(vec![
+            Span::styled("CPU:   ", Style::default().fg(Palette::NEON_BLUE)),
+            Span::styled(
+                format!("{:.1}%", proc.cpu_percent),
+                Style::default().fg(palette::color_for_load(proc.cpu_percent)),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("MEM:   ", Style::default().fg(Palette::NEON_BLUE)),
+            Span::styled(
+                format_mem(proc.mem_bytes),
+                Style::default().fg(Palette::DATA),
+            ),
+        ]),
+    ];
+    let paragraph = Paragraph::new(lines);
+    Widget::render(paragraph, area, buf);
+}
+
+/// Render the HP label and gauge bar.
+fn render_detail_hp(label_area: Rect, gauge_area: Rect, buf: &mut Buffer, hp: f32) {
+    let hp_color = palette::color_for_hp(hp);
+    let label = Paragraph::new(Line::from(vec![
+        Span::styled("HP:    ", Style::default().fg(Palette::NEON_BLUE)),
+        Span::styled(format!("{:.0}/100", hp), Style::default().fg(hp_color)),
+    ]));
+    Widget::render(label, label_area, buf);
+
+    let ratio = (hp / 100.0).clamp(0.0, 1.0) as f64;
+    let gauge = Gauge::default()
+        .gauge_style(Style::default().fg(hp_color).bg(Palette::BG))
+        .ratio(ratio)
+        .label("");
+    Widget::render(gauge, gauge_area, buf);
+}
+
+/// Render the XP display line.
+fn render_detail_xp(area: Rect, buf: &mut Buffer, xp: u32) {
+    let line = Paragraph::new(Line::from(vec![
+        Span::styled("XP:    ", Style::default().fg(Palette::NEON_BLUE)),
+        Span::styled(xp.to_string(), Style::default().fg(Palette::XP_PURPLE)),
+    ]));
+    Widget::render(line, area, buf);
+}
+
+/// Render the connections header and list for a process.
+fn render_detail_connections(
+    header_area: Rect,
+    list_area: Rect,
+    buf: &mut Buffer,
+    world: &WorldGraph,
+    pid: u32,
+) {
+    let header = Paragraph::new(Span::styled(
+        "Connections",
+        Style::default()
+            .fg(Palette::HEALTHY)
+            .add_modifier(Modifier::BOLD),
+    ));
+    Widget::render(header, header_area, buf);
+
+    let edges: Vec<_> = world.edges().filter(|e| e.source_pid == pid).collect();
+
+    if edges.is_empty() {
+        let msg = Paragraph::new(Span::styled(
+            "  (none)",
+            Style::default().fg(Palette::NEON_BLUE),
+        ));
+        Widget::render(msg, list_area, buf);
+        return;
+    }
+
+    let lines: Vec<Line> = edges
+        .iter()
+        .map(|e| {
+            Line::from(vec![
+                Span::styled(
+                    format!("  {:?}", e.protocol),
+                    Style::default().fg(Palette::NEON_BLUE),
+                ),
+                Span::styled(
+                    format!(" → {} ", e.dest),
+                    Style::default().fg(Palette::DATA),
+                ),
+                Span::styled(
+                    format!("({:?})", e.state),
+                    Style::default().fg(Palette::HEALTHY),
+                ),
+            ])
+        })
+        .collect();
+
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+    Widget::render(paragraph, list_area, buf);
 }
 
 /// Format bytes into a human-readable string (B, KB, MB, GB).
@@ -426,5 +652,50 @@ mod tests {
         let mut tab = OverviewTab::default();
         tab.move_selection_down(0);
         assert_eq!(tab.selected_row, None);
+    }
+
+    #[test]
+    fn test_enter_opens_detail_panel() {
+        let mut tab = OverviewTab::default();
+        tab.selected_row = Some(1);
+        let pids = vec![10, 20, 30];
+        tab.handle_key(crossterm::event::KeyCode::Enter, 3, &pids);
+        assert_eq!(tab.detail_pid, Some(20));
+    }
+
+    #[test]
+    fn test_enter_without_selection_does_nothing() {
+        let mut tab = OverviewTab::default();
+        let pids = vec![10, 20];
+        tab.handle_key(crossterm::event::KeyCode::Enter, 2, &pids);
+        assert_eq!(tab.detail_pid, None);
+    }
+
+    #[test]
+    fn test_esc_closes_detail_panel() {
+        let mut tab = OverviewTab::default();
+        tab.detail_pid = Some(42);
+        tab.handle_key(crossterm::event::KeyCode::Esc, 3, &[10, 20, 30]);
+        assert_eq!(tab.detail_pid, None);
+    }
+
+    #[test]
+    fn test_collect_sorted_pids_matches_rows() {
+        let mut world = WorldGraph::new();
+        world.add_process(make_process(1, "low", 10.0, 1024, 100.0));
+        world.add_process(make_process(2, "high", 90.0, 2048, 50.0));
+
+        let pids = collect_sorted_pids(&world, SortColumn::Cpu, false);
+        let rows = collect_sorted_rows(&world, SortColumn::Cpu, false);
+        assert_eq!(pids.len(), rows.len());
+        for (pid, row) in pids.iter().zip(rows.iter()) {
+            assert_eq!(*pid, row[0].parse::<u32>().unwrap());
+        }
+    }
+
+    #[test]
+    fn test_default_detail_pid_is_none() {
+        let tab = OverviewTab::default();
+        assert_eq!(tab.detail_pid, None);
     }
 }
