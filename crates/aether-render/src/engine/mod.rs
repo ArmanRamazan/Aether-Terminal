@@ -4,3 +4,4 @@ pub mod camera;
 pub mod layout;
 pub mod projection;
 pub mod rasterizer;
+pub mod shading;
