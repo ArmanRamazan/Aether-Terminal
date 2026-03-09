@@ -100,6 +100,16 @@ impl WorldGraph {
         self.graph.edge_count()
     }
 
+    /// Returns all process pids in the graph.
+    pub fn pids(&self) -> Vec<u32> {
+        self.pid_index.keys().copied().collect()
+    }
+
+    /// Returns endpoint pids for all edges as (source_pid, target_pid) pairs.
+    pub fn edges_as_pid_pairs(&self) -> Vec<(u32, u32)> {
+        self.edge_pairs()
+    }
+
     /// Returns endpoint pids for all edges as (source_pid, target_pid) pairs.
     pub fn edge_pairs(&self) -> Vec<(u32, u32)> {
         self.graph
@@ -267,6 +277,30 @@ mod tests {
 
         // Iterators agree with counts.
         assert_eq!(g.processes().count(), 2);
+    }
+
+    #[test]
+    fn test_pids_returns_all() {
+        let mut g = WorldGraph::new();
+        g.add_process(make_process(1));
+        g.add_process(make_process(2));
+        g.add_process(make_process(3));
+
+        let mut pids = g.pids();
+        pids.sort();
+        assert_eq!(pids, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn test_edges_as_pid_pairs() {
+        let mut g = WorldGraph::new();
+        g.add_process(make_process(1));
+        g.add_process(make_process(2));
+        g.add_connection(1, 2, make_edge(1));
+
+        let pairs = g.edges_as_pid_pairs();
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(pairs[0], (1, 2));
     }
 
     #[test]
