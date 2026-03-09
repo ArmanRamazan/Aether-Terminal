@@ -1,0 +1,23 @@
+phase: "ms1-ingestion"
+description: "[DONE] Async ingestion pipeline and terminal integration."
+
+tasks:
+  - id: ingestion-pipeline
+    title: "Add dual-tick async ingestion pipeline"
+    agent: rust-engineer
+    scope: ingestion
+    type: feat
+    context: "COMPLETED — error.rs + pipeline.rs with dual-tick, MockProbe tests"
+    prompt: "DONE"
+    test: "cargo test -p aether-ingestion"
+    depends_on: []
+
+  - id: terminal-main-integration
+    title: "Wire ingestion to main with TUI"
+    agent: rust-engineer
+    scope: terminal
+    type: feat
+    context: "COMPLETED — main.rs wires SysinfoProbe → Pipeline → WorldGraph → App TUI"
+    prompt: "DONE"
+    test: "cargo run -p aether-terminal"
+    depends_on: [ingestion-pipeline]

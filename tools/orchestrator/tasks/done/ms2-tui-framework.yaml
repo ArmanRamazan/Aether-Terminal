@@ -1,0 +1,43 @@
+phase: "ms2-tui-framework"
+description: "[DONE] Basic TUI framework with app struct, tabs, palette, and live data wiring"
+
+tasks:
+  - id: tui-app-struct
+    title: "Add TUI app struct with event loop"
+    agent: rust-engineer
+    scope: render
+    type: feat
+    context: "COMPLETED — app.rs with Tab enum, App struct, event loop, F1-F4 tab switching"
+    prompt: "DONE"
+    test: "cargo check -p aether-render"
+    depends_on: []
+
+  - id: tab-system
+    title: "Add tab system with status bar"
+    agent: rust-engineer
+    scope: render
+    type: feat
+    context: "COMPLETED — tabs.rs with render_tab_bar, render_status_bar, 5 tests"
+    prompt: "DONE"
+    test: "cargo check -p aether-render"
+    depends_on: [tui-app-struct]
+
+  - id: palette-theme
+    title: "Add cyberpunk color palette"
+    agent: rust-engineer
+    scope: render
+    type: feat
+    context: "COMPLETED — palette.rs with Palette constants, color_for_load, color_for_hp, 7 tests"
+    prompt: "DONE"
+    test: "cargo test -p aether-render"
+    depends_on: [tab-system]
+
+  - id: tui-main-wire
+    title: "Wire TUI app with live data pipeline"
+    agent: rust-engineer
+    scope: terminal
+    type: feat
+    context: "COMPLETED — main.rs wires SysinfoProbe → Pipeline → WorldGraph → App TUI with crossterm"
+    prompt: "DONE"
+    test: "cargo run -p aether-terminal"
+    depends_on: [palette-theme]

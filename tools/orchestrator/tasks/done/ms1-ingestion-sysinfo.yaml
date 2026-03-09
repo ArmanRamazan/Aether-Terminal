@@ -1,0 +1,13 @@
+phase: "ms1-ingestion-sysinfo"
+description: "[DONE] SysinfoProbe — cross-platform metrics collection"
+
+tasks:
+  - id: sysinfo-probe
+    title: "Implement SysinfoProbe for cross-platform metrics"
+    agent: rust-engineer
+    scope: ingestion
+    type: feat
+    context: "COMPLETED — merged to main as commit eb79904"
+    prompt: "DONE"
+    test: "cargo test -p aether-ingestion"
+    depends_on: []

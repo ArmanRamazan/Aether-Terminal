@@ -41,6 +41,139 @@ aether-gamification(lib) → HP, XP, achievements, SQLite
 
 Design doc: `docs/plans/2026-03-08-aether-terminal-design.md`
 
+## Architecture Principles
+
+**Hexagonal Architecture (Ports & Adapters)**
+- `aether-core` — центр: доменные типы, traits (ports), события. Нулевые зависимости на внешние crates кроме `petgraph`, `glam`, `serde`.
+- Все остальные crates — адаптеры: реализуют traits из core. **НИКОГДА** не зависят друг от друга, только от core.
+- Связь между crates — исключительно через `tokio::sync` каналы (`mpsc`, `broadcast`) и `Arc<RwLock<T>>`.
+- Dependency rule: зависимости направлены ВНУТРЬ (к core), никогда наружу. `aether-terminal` (bin) — единственный crate, который знает обо всех адаптерах.
+
+**YAGNI — You Aren't Gonna Need It**
+- Реализуй только то, что требуется текущей задачей. Никаких "а вдруг пригодится".
+- Не добавляй конфигурационных параметров, feature flags, абстрактных фабрик "на будущее".
+- Если функционал не описан в задаче — его не существует. Не угадывай требования.
+- Builder pattern, generic-и, trait objects — только когда реально есть >1 реализация СЕЙЧАС.
+
+**KISS — Keep It Simple, Stupid**
+- Предпочитай простой линейный код вложенным абстракциям.
+- Конкретные типы лучше trait objects, пока нет реальной нужды в динамическом диспатче.
+- `match` лучше цепочки `if let`. Прямой вызов лучше indirect dispatch.
+- Если решение помещается в одну функцию — не создавай struct + impl + trait.
+- Плоская структура модулей: не делай `mod foo { mod bar { mod baz } }` если `foo.rs` достаточно.
+
+**DRY — Don't Repeat Yourself (но с умом)**
+- Извлекай общий код в функцию/метод только когда паттерн повторяется **3+ раза** и **семантически идентичен**.
+- Два похожих блока кода ≠ дублирование, если они меняются по разным причинам.
+- Не абстрагируй ради красоты. Копипаста лучше неправильной абстракции.
+- Общие типы — в `aether-core`. Утилиты уровня crate — в `utils.rs` того же crate.
+
+**Single Responsibility**
+- Каждый файл — одна ответственность. `graph.rs` = WorldGraph, `events.rs` = события, `pipeline.rs` = pipeline.
+- Каждый struct — одна роль. Не смешивай состояние, конфигурацию и логику в одном struct.
+- Функции до ~50 строк. Если длиннее — разбей на вспомогательные с говорящими именами.
+
+**Dependency Injection**
+- Конструкторы принимают зависимости явно: `fn new(probe: Arc<dyn SystemProbe>, tx: mpsc::Sender<SystemEvent>)`.
+- Никаких глобальных `static mut`, `lazy_static` с мутабельным состоянием, синглтонов.
+- Тестируемость: любой struct можно создать в тесте с mock-зависимостями.
+
+## Rust Best Practices
+
+### Ownership & Borrowing
+- Передавай `&self` для read, `&mut self` для write. Избегай `Clone` без необходимости.
+- `Arc<T>` — для shared ownership через async boundaries. `Rc<T>` запрещён (не Send).
+- `Arc<RwLock<T>>` — для shared mutable state (WorldGraph). `Arc<Mutex<T>>` — для простых случаев.
+- Возвращай `impl Iterator` вместо `Vec` когда вызывающий может быть ленивым.
+- Используй `Cow<'_, str>` только при реальной нужде избежать аллокации, не "на всякий случай".
+
+### Error Handling
+- **Library crates**: `thiserror` с конкретными enum вариантами. Каждый crate — свой `Error` тип.
+  ```rust
+  #[derive(Debug, thiserror::Error)]
+  pub enum CoreError {
+      #[error("process {pid} not found")]
+      ProcessNotFound { pid: u32 },
+      #[error("graph operation failed: {0}")]
+      GraphError(String),
+  }
+  ```
+- **Binary crate**: `anyhow::Result` в main и интеграционном коде.
+- Не используй `.unwrap()` в production code. Допустимо ТОЛЬКО в тестах и `const` инициализации.
+- `.expect("описание инварианта")` — допустимо когда паника = баг в нашем коде (не пользовательский ввод).
+- `?` operator — основной способ проброса ошибок. Не оборачивай в `.map_err()` без добавления контекста.
+
+### Type System
+- Используй newtype pattern для доменных значений: `struct Pid(u32)`, `struct Hp(f32)` — когда это улучшает читаемость API.
+- `enum` > bool параметры. `fn set_mode(mode: Mode)` >> `fn set_mode(is_fast: bool)`.
+- Derive порядок: `#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]` — от самого базового.
+- `#[must_use]` на функциях, возвращающих Result или значимые результаты.
+- `#[non_exhaustive]` на public enums, которые могут расширяться.
+
+### Naming Conventions
+- **Файлы**: `snake_case.rs` — одно слово или два через `_`. Никаких длинных имён типа `system_probe_implementation.rs`.
+- **Типы**: `PascalCase`. Без суффиксов `Manager`, `Handler`, `Helper` — называй по роли: `Pipeline`, `Engine`, `Canvas`.
+- **Функции**: `snake_case`. Начинай с глагола: `add_process`, `render_frame`, `parse_rule`.
+- **Константы**: `SCREAMING_SNAKE`. Группируй в `impl` блоки или модули.
+- **Модули**: совпадают с главным типом файла. `graph.rs` → `pub struct WorldGraph`.
+- **Trait-ы**: прилагательное или существительное: `SystemProbe`, `Storage`, `Renderable`. Без `I` prefix.
+
+### Async Code
+- `async fn` — только когда функция реально делает I/O или await-ит.
+- Не делай функцию async если она просто вычисляет значение синхронно.
+- `tokio::spawn` — для долгоживущих задач (pipeline, engine). Не спавнь таск для одного await.
+- `tokio::select!` — для multiplexing каналов с cancellation. Всегда включай cancel branch.
+- `CancellationToken` (из `tokio-util`) — для graceful shutdown вместо raw channels.
+
+### Testing
+- Inline тесты: `#[cfg(test)] mod tests { use super::*; ... }` в конце каждого файла.
+- Каждый тест — одно утверждение (логически). Имя = `test_<что_проверяем>_<ожидание>`.
+  ```rust
+  #[test]
+  fn test_add_process_increases_count() { ... }
+  #[test]
+  fn test_remove_nonexistent_returns_false() { ... }
+  ```
+- Используй `assert_eq!`, `assert!`, `assert_matches!` с описанием: `assert_eq!(count, 1, "after adding one process")`.
+- Для async тестов: `#[tokio::test]`. Для тестов с таймаутом: `tokio::time::timeout`.
+- Тестовые утилиты и фикстуры — в `#[cfg(test)]` блоке, не в production коде.
+- **Не** мокай то, что можно создать напрямую. Реальный `WorldGraph` в тестах лучше мока.
+
+### Documentation
+- `///` doc-comment на каждом `pub` item. Одна строка — достаточно для очевидных вещей.
+- Первая строка — краткое описание (без "This function..."). Просто что делает.
+  ```rust
+  /// Add a process node to the graph. Returns its index.
+  pub fn add_process(&mut self, node: ProcessNode) -> NodeIndex { ... }
+  ```
+- `//` inline комментарии — только для неочевидной логики, хаков, бизнес-правил.
+- **НЕ** комментируй очевидное: `// increment counter` перед `counter += 1` — запрещено.
+- `// TODO:` — допустимо с issue reference или описанием "зачем потом".
+- Никакого закомментированного кода. Dead code → удаляй.
+
+### Module Structure Per Crate
+```
+crates/aether-<name>/
+├── Cargo.toml
+├── CLAUDE.md            # crate-specific context
+└── src/
+    ├── lib.rs           # pub mod declarations, re-exports
+    ├── <module>.rs      # один файл = один модуль = один ключевой struct
+    ├── error.rs         # crate Error enum (thiserror)
+    └── tests/           # integration tests (optional)
+```
+- `lib.rs` — только `pub mod` и `pub use` re-exports. Нулевая логика.
+- Не создавай подпапки (`src/tui/widgets/`) пока в модуле < 3 файлов.
+- Когда модуль растёт до 3+ файлов — конвертируй `module.rs` → `module/mod.rs` + подфайлы.
+
+### Performance Mindset
+- Не оптимизируй преждевременно, но и не пессимизируй.
+- `&str` вместо `String` в параметрах. `Into<String>` для конструкторов если нужен owned.
+- `Vec::with_capacity(n)` когда размер известен заранее.
+- `HashMap`/`HashSet` — дефолтный hasher ок. `FxHashMap` только после профилирования.
+- Hot path (60fps render loop): минимум аллокаций, переиспользуй буферы.
+- Cold path (инициализация, конфиг): читаемость важнее наносекунд.
+
 ## Code Style
 
 - **Formatting**: `cargo fmt` (rustfmt defaults)

@@ -4,6 +4,7 @@
 //! - [`SystemProbe`] — implemented by `aether-ingestion` (sysinfo) and `aether-ebpf`
 //! - [`Storage`] — implemented by `aether-gamification` (SQLite)
 
+use crate::error::CoreError;
 use crate::models::SystemSnapshot;
 
 /// A session record for gamification persistence.
@@ -31,9 +32,7 @@ pub trait SystemProbe: Send + Sync + 'static {
     /// Collect a point-in-time snapshot of all processes and connections.
     fn snapshot(
         &self,
-    ) -> impl std::future::Future<
-        Output = Result<SystemSnapshot, Box<dyn std::error::Error + Send + Sync>>,
-    > + Send;
+    ) -> impl std::future::Future<Output = Result<SystemSnapshot, CoreError>> + Send;
 }
 
 /// Port for gamification data persistence.
@@ -44,14 +43,12 @@ pub trait Storage: Send + Sync + 'static {
     fn save_session(
         &self,
         session: &GameSession,
-    ) -> impl std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send;
+    ) -> impl std::future::Future<Output = Result<(), CoreError>> + Send;
 
     /// Load the ranking leaderboard.
     fn load_rankings(
         &self,
-    ) -> impl std::future::Future<
-        Output = Result<Vec<Ranking>, Box<dyn std::error::Error + Send + Sync>>,
-    > + Send;
+    ) -> impl std::future::Future<Output = Result<Vec<Ranking>, CoreError>> + Send;
 }
 
 #[cfg(test)]
@@ -59,7 +56,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn game_session_construction() {
+    fn test_game_session_clone_preserves_fields() {
         let session = GameSession {
             id: 1,
             started_at: "2026-03-09T12:00:00Z".to_string(),
@@ -75,7 +72,7 @@ mod tests {
     }
 
     #[test]
-    fn ranking_construction() {
+    fn test_ranking_clone_preserves_fields() {
         let ranking = Ranking {
             session_id: 1,
             total_xp: 500,

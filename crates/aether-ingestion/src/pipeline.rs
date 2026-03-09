@@ -94,9 +94,7 @@ mod tests {
     struct MockProbe;
 
     impl SystemProbe for MockProbe {
-        async fn snapshot(
-            &self,
-        ) -> Result<SystemSnapshot, Box<dyn std::error::Error + Send + Sync>> {
+        async fn snapshot(&self) -> Result<SystemSnapshot, aether_core::error::CoreError> {
             Ok(SystemSnapshot {
                 processes: vec![ProcessNode {
                     pid: 1,

@@ -3,6 +3,7 @@
 use std::sync::Mutex;
 use std::time::SystemTime;
 
+use aether_core::error::CoreError;
 use aether_core::models::{ProcessNode, ProcessState, SystemSnapshot};
 use aether_core::traits::SystemProbe;
 use glam::Vec3;
@@ -33,9 +34,12 @@ impl Default for SysinfoProbe {
 }
 
 impl SystemProbe for SysinfoProbe {
-    async fn snapshot(&self) -> Result<SystemSnapshot, Box<dyn std::error::Error + Send + Sync>> {
+    async fn snapshot(&self) -> Result<SystemSnapshot, CoreError> {
         let processes = {
-            let mut sys = self.system.lock().map_err(|e| e.to_string())?;
+            let mut sys = self
+                .system
+                .lock()
+                .map_err(|e| CoreError::Probe(e.to_string()))?;
             sys.refresh_processes(ProcessesToUpdate::All, true);
 
             sys.processes()

@@ -1,0 +1,215 @@
+phase: "ms1-workspace-setup"
+description: "Create cargo workspace with 9 crates, core types, world graph, events and traits"
+
+tasks:
+  - id: workspace-init
+    title: "Initialize cargo workspace with 9 crates"
+    agent: rust-engineer
+    scope: workspace
+    type: feat
+    context: |
+      See docs/plans/2026-03-08-aether-terminal-design.md for full architecture.
+      Workspace structure:
+        crates/aether-terminal/  (bin, depends on all)
+        crates/aether-core/      (lib, no deps)
+        crates/aether-ingestion/ (lib, depends on core)
+        crates/aether-render/    (lib, depends on core)
+        crates/aether-mcp/       (lib, depends on core)
+        crates/aether-gamification/ (lib, depends on core)
+        crates/aether-ebpf/      (lib, depends on core, feature-gated)
+        crates/aether-predict/   (lib, depends on core, feature-gated)
+        crates/aether-script/    (lib, depends on core)
+    prompt: |
+      Create a Rust cargo workspace for the Aether-Terminal project.
+
+      1. Create root Cargo.toml as workspace:
+         ```toml
+         [workspace]
+         resolver = "2"
+         members = [
+           "crates/aether-terminal",
+           "crates/aether-core",
+           "crates/aether-ingestion",
+           "crates/aether-render",
+           "crates/aether-mcp",
+           "crates/aether-gamification",
+           "crates/aether-ebpf",
+           "crates/aether-predict",
+           "crates/aether-script",
+         ]
+         ```
+
+      2. Create each crate with `cargo init`:
+         - aether-terminal: binary crate
+         - All others: library crates
+
+      3. Set up dependencies in each crate's Cargo.toml:
+         - aether-core: petgraph, glam, serde (with derive), tokio (full), thiserror
+         - aether-ingestion: aether-core (path = "../aether-core"), sysinfo, tokio (full), thiserror
+         - aether-render: aether-core (path), ratatui, crossterm, glam, thiserror
+         - aether-mcp: aether-core (path), serde_json, tokio (full), axum, rmcp, thiserror
+         - aether-gamification: aether-core (path), rusqlite (with bundled feature), thiserror
+         - aether-ebpf: aether-core (path), tokio (full), thiserror
+         - aether-predict: aether-core (path), tokio (full), thiserror
+         - aether-script: aether-core (path), logos, cranelift-codegen, cranelift-frontend, cranelift-jit, cranelift-module, thiserror
+         - aether-terminal: all 8 crates as path deps, clap (with derive), tokio (full), tracing, tracing-subscriber, anyhow
+
+      4. Each lib crate should have a minimal lib.rs with a comment about its purpose.
+      5. aether-terminal/src/main.rs should have a minimal main() that prints "Aether Terminal v0.1.0".
+
+      6. Verify: `cargo check --workspace` must pass.
+
+      COMMIT: feat(workspace): initialize cargo workspace with 9 crates
+    test: "cargo check --workspace"
+    depends_on: []
+
+  - id: core-types
+    title: "Define core data models"
+    agent: rust-engineer
+    scope: core
+    type: feat
+    context: |
+      See design doc Component 1: aether-core.
+      Key types: ProcessNode, NetworkEdge, ProcessState, Protocol, ConnectionState, SystemSnapshot.
+      All types derive Debug, Clone, Serialize, Deserialize.
+    prompt: |
+      Implement the aether-core crate data models.
+
+      File: crates/aether-core/src/models.rs
+      ```rust
+      use glam::Vec3;
+      use serde::{Deserialize, Serialize};
+      use std::net::SocketAddr;
+
+      #[derive(Debug, Clone, Serialize, Deserialize)]
+      pub struct ProcessNode {
+          pub pid: u32,
+          pub ppid: u32,
+          pub name: String,
+          pub cpu_percent: f32,
+          pub mem_bytes: u64,
+          pub state: ProcessState,
+          pub hp: f32,
+          pub xp: u32,
+          pub position_3d: Vec3,
+      }
+
+      #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+      pub enum ProcessState {
+          Running,
+          Sleeping,
+          Zombie,
+          Stopped,
+      }
+
+      #[derive(Debug, Clone, Serialize, Deserialize)]
+      pub struct NetworkEdge {
+          pub source_pid: u32,
+          pub dest: SocketAddr,
+          pub protocol: Protocol,
+          pub bytes_per_sec: u64,
+          pub state: ConnectionState,
+      }
+
+      #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+      pub enum Protocol {
+          TCP, UDP, DNS, QUIC, HTTP, HTTPS, Unknown,
+      }
+
+      #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+      pub enum ConnectionState {
+          Established, Listen, TimeWait, CloseWait,
+      }
+
+      #[derive(Debug, Clone, Serialize, Deserialize)]
+      pub struct SystemSnapshot {
+          pub processes: Vec<ProcessNode>,
+          pub edges: Vec<NetworkEdge>,
+          pub timestamp: std::time::SystemTime,
+      }
+      ```
+
+      File: crates/aether-core/src/lib.rs — `pub mod models;`
+
+      Write unit tests: construction, serialization round-trip with serde_json.
+
+      COMMIT: feat(core): define process and network data models
+    test: "cargo test -p aether-core"
+    depends_on: [workspace-init]
+
+  - id: core-graph
+    title: "Implement WorldGraph with petgraph"
+    agent: rust-engineer
+    scope: core
+    type: feat
+    context: |
+      WorldGraph wraps petgraph::StableGraph<ProcessNode, NetworkEdge>.
+      Uses HashMap<u32, NodeIndex> for O(1) pid lookups.
+      StableGraph chosen because indices survive node removal.
+    prompt: |
+      Implement the world graph in aether-core.
+
+      File: crates/aether-core/src/graph.rs
+      - WorldGraph struct wrapping petgraph::StableGraph<ProcessNode, NetworkEdge>
+      - Internal HashMap<u32, NodeIndex> for O(1) pid → node lookup
+      - impl WorldGraph:
+        - pub fn new() -> Self
+        - pub fn add_process(&mut self, node: ProcessNode) -> NodeIndex
+        - pub fn remove_process(&mut self, pid: u32) -> bool
+        - pub fn update_process(&mut self, pid: u32, f: impl FnOnce(&mut ProcessNode))
+        - pub fn add_connection(&mut self, from_pid: u32, to_pid: u32, edge: NetworkEdge) -> Option<EdgeIndex>
+        - pub fn find_by_pid(&self, pid: u32) -> Option<&ProcessNode>
+        - pub fn find_by_pid_mut(&mut self, pid: u32) -> Option<&mut ProcessNode>
+        - pub fn processes(&self) -> impl Iterator<Item = &ProcessNode>
+        - pub fn edges(&self) -> impl Iterator<Item = &NetworkEdge>
+        - pub fn process_count(&self) -> usize
+        - pub fn edge_count(&self) -> usize
+        - pub fn apply_snapshot(&mut self, snapshot: &SystemSnapshot) — sync graph with new data
+
+      Update crates/aether-core/src/lib.rs: add `pub mod graph;`
+
+      Write unit tests in #[cfg(test)] module:
+      - test_add_and_find_process
+      - test_remove_process
+      - test_update_process
+      - test_add_connection
+      - test_process_count
+      - test_apply_snapshot
+
+      COMMIT: feat(core): implement WorldGraph with petgraph
+    test: "cargo test -p aether-core"
+    depends_on: [core-types]
+
+  - id: core-events
+    title: "Add event types and hexagonal trait ports"
+    agent: rust-engineer
+    scope: core
+    type: feat
+    context: |
+      Hexagonal architecture: all crates implement traits from core.
+      Events are the communication mechanism between crates via tokio channels.
+      SystemProbe trait is implemented by SysinfoProbe (ingestion) and EbpfProbe (ebpf).
+      Storage trait is implemented by SqliteStorage (gamification).
+    prompt: |
+      Add events and traits to aether-core.
+
+      File: crates/aether-core/src/events.rs
+      - SystemEvent enum: ProcessCreated{pid, name}, ProcessExited{pid}, MetricsUpdate{snapshot: SystemSnapshot}, TopologyChange
+      - GameEvent enum: HpChanged{pid, delta, new_hp}, XpEarned{amount, reason: String}, AchievementUnlocked{id: String, name: String}
+      - AgentAction enum: KillProcess{pid}, RestartService{name: String}, Inspect{pid}, CustomScript{command: String}
+      - All: #[derive(Debug, Clone)]
+
+      File: crates/aether-core/src/traits.rs
+      - trait SystemProbe: Send + Sync + 'static
+        - async fn snapshot(&self) -> Result<SystemSnapshot, Box<dyn std::error::Error + Send + Sync>>
+      - trait Storage: Send + Sync + 'static
+        - async fn save_session(&self, session: &GameSession) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+        - async fn load_rankings(&self) -> Result<Vec<Ranking>, Box<dyn std::error::Error + Send + Sync>>
+      - GameSession struct: id: u64, started_at: String, total_xp: u32, rank: String, uptime_secs: u64
+      - Ranking struct: session_id: u64, total_xp: u32, rank: String
+
+      Update crates/aether-core/src/lib.rs: add pub mod events, traits; re-export key types.
+
+      COMMIT: feat(core): add event types and hexagonal trait ports
+    test: "cargo test -p aether-core"
+    depends_on: [core-graph]

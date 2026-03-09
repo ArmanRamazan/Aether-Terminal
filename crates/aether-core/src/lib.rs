@@ -3,6 +3,7 @@
 //! All other aether crates depend on this crate. It defines the shared vocabulary:
 //! process models, the world graph, system events, and hexagonal port traits.
 
+pub mod error;
 pub mod events;
 pub mod graph;
 pub mod models;
@@ -14,4 +15,5 @@ pub use graph::WorldGraph;
 pub use models::{
     ConnectionState, NetworkEdge, ProcessNode, ProcessState, Protocol, SystemSnapshot,
 };
+pub use error::CoreError;
 pub use traits::{GameSession, Ranking, Storage, SystemProbe};
