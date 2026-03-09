@@ -1,0 +1,10 @@
+[package]
+name = "aether-ingestion"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+aether-core = { path = "../aether-core" }
+sysinfo = "0.34"
+tokio = { version = "1", features = ["full"] }
+thiserror = "2"

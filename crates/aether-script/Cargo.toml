@@ -1,0 +1,13 @@
+[package]
+name = "aether-script"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+aether-core = { path = "../aether-core" }
+logos = "0.15"
+cranelift-codegen = "0.129"
+cranelift-frontend = "0.129"
+cranelift-jit = "0.129"
+cranelift-module = "0.129"
+thiserror = "2"

@@ -1,0 +1,19 @@
+[package]
+name = "aether-terminal"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+aether-core = { path = "../aether-core" }
+aether-ingestion = { path = "../aether-ingestion" }
+aether-render = { path = "../aether-render" }
+aether-mcp = { path = "../aether-mcp" }
+aether-gamification = { path = "../aether-gamification" }
+aether-ebpf = { path = "../aether-ebpf" }
+aether-predict = { path = "../aether-predict" }
+aether-script = { path = "../aether-script" }
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+anyhow = "1"
