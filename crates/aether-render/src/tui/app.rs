@@ -5,9 +5,9 @@ use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::{Constraint, Direction, Layout};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Tabs as TabsWidget};
+use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
 use aether_core::WorldGraph;
@@ -30,7 +30,7 @@ pub enum Tab {
 
 impl Tab {
     /// All tabs in display order.
-    const ALL: [Tab; 4] = [Tab::Overview, Tab::World3D, Tab::Network, Tab::Arbiter];
+    pub(crate) const ALL: [Tab; 4] = [Tab::Overview, Tab::World3D, Tab::Network, Tab::Arbiter];
 
     /// Human-readable label for the tab bar.
     pub fn label(self) -> &'static str {
@@ -42,15 +42,6 @@ impl Tab {
         }
     }
 
-    /// Index in the tab bar (0-based).
-    fn index(self) -> usize {
-        match self {
-            Tab::Overview => 0,
-            Tab::World3D => 1,
-            Tab::Network => 2,
-            Tab::Arbiter => 3,
-        }
-    }
 }
 
 /// Main TUI application state and controller.
@@ -61,8 +52,6 @@ pub struct App {
     /// Currently active tab.
     current_tab: Tab,
     /// Shared world graph (read-only from render side).
-    /// Used by tab renderers once real widgets are implemented.
-    #[allow(dead_code)]
     world: Arc<RwLock<WorldGraph>>,
     /// Set to `true` to exit the event loop.
     should_quit: bool,
@@ -116,35 +105,26 @@ impl App {
         }
     }
 
-    /// Draw the full UI frame: tab bar + active tab content.
+    /// Draw the full UI frame: tab bar, active tab content, and status bar.
     fn draw(&self, frame: &mut Frame) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(3), Constraint::Min(0)])
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Min(0),
+                Constraint::Length(1),
+            ])
             .split(frame.area());
 
-        self.draw_tab_bar(frame, chunks[0]);
+        let buf = frame.buffer_mut();
+        super::tabs::render_tab_bar(chunks[0], buf, self.current_tab);
+
+        if let Ok(world) = self.world.read() {
+            let buf = frame.buffer_mut();
+            super::tabs::render_status_bar(chunks[2], buf, &world);
+        }
+
         self.draw_tab_content(frame, chunks[1]);
-    }
-
-    /// Render the tab bar at the top of the screen.
-    fn draw_tab_bar(&self, frame: &mut Frame, area: ratatui::layout::Rect) {
-        let titles: Vec<Line> = Tab::ALL.iter().map(|t| Line::from(t.label())).collect();
-
-        let tabs = TabsWidget::new(titles)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title("Aether Terminal"),
-            )
-            .select(self.current_tab.index())
-            .highlight_style(
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            );
-
-        frame.render_widget(tabs, area);
     }
 
     /// Render placeholder content for the active tab.
@@ -175,13 +155,6 @@ mod tests {
     #[test]
     fn test_tab_default_is_overview() {
         assert_eq!(Tab::default(), Tab::Overview);
-    }
-
-    #[test]
-    fn test_tab_index_matches_order() {
-        for (i, tab) in Tab::ALL.iter().enumerate() {
-            assert_eq!(tab.index(), i);
-        }
     }
 
     #[test]
