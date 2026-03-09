@@ -33,9 +33,7 @@ impl Default for SysinfoProbe {
 }
 
 impl SystemProbe for SysinfoProbe {
-    async fn snapshot(
-        &self,
-    ) -> Result<SystemSnapshot, Box<dyn std::error::Error + Send + Sync>> {
+    async fn snapshot(&self) -> Result<SystemSnapshot, Box<dyn std::error::Error + Send + Sync>> {
         let processes = {
             let mut sys = self.system.lock().map_err(|e| e.to_string())?;
             sys.refresh_processes(ProcessesToUpdate::All, true);
@@ -107,22 +105,34 @@ mod tests {
 
     #[test]
     fn map_status_run() {
-        assert_eq!(map_process_status(ProcessStatus::Run), ProcessState::Running);
+        assert_eq!(
+            map_process_status(ProcessStatus::Run),
+            ProcessState::Running
+        );
     }
 
     #[test]
     fn map_status_sleep() {
-        assert_eq!(map_process_status(ProcessStatus::Sleep), ProcessState::Sleeping);
+        assert_eq!(
+            map_process_status(ProcessStatus::Sleep),
+            ProcessState::Sleeping
+        );
     }
 
     #[test]
     fn map_status_zombie() {
-        assert_eq!(map_process_status(ProcessStatus::Zombie), ProcessState::Zombie);
+        assert_eq!(
+            map_process_status(ProcessStatus::Zombie),
+            ProcessState::Zombie
+        );
     }
 
     #[test]
     fn map_status_stop() {
-        assert_eq!(map_process_status(ProcessStatus::Stop), ProcessState::Stopped);
+        assert_eq!(
+            map_process_status(ProcessStatus::Stop),
+            ProcessState::Stopped
+        );
     }
 
     #[test]

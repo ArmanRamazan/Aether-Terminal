@@ -41,6 +41,8 @@ dependencies = [
  "sysinfo",
  "thiserror",
  "tokio",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]
