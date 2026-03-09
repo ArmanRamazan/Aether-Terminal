@@ -47,6 +47,16 @@ impl BrailleCanvas {
         }
     }
 
+    /// Width in terminal cells.
+    pub fn cell_width(&self) -> usize {
+        self.cell_width
+    }
+
+    /// Height in terminal cells.
+    pub fn cell_height(&self) -> usize {
+        self.cell_height
+    }
+
     /// Pixel-space width (terminal columns × 2).
     pub fn pixel_width(&self) -> usize {
         self.cell_width * 2
