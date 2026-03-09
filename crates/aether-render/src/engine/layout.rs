@@ -89,6 +89,15 @@ impl ForceLayout {
         self.k = compute_k(self.positions.len());
     }
 
+    /// Writes layout positions back into each ProcessNode's `position_3d` field.
+    pub fn update_graph_positions(&self, graph: &mut WorldGraph) {
+        for (&pid, &pos) in &self.positions {
+            graph.update_process(pid, |node| {
+                node.position_3d = pos;
+            });
+        }
+    }
+
     /// Runs `step()` for the given number of iterations.
     pub fn converge(&mut self, graph: &WorldGraph, iterations: usize) {
         for _ in 0..iterations {
@@ -295,6 +304,47 @@ mod tests {
         assert!(layout.get_position(1).is_some(), "pid 1 should remain");
         assert!(layout.get_position(2).is_none(), "pid 2 should be removed");
         assert!(layout.get_position(3).is_some(), "pid 3 should be added");
+    }
+
+    #[test]
+    fn test_update_graph_positions_writes_back() {
+        let mut graph = WorldGraph::new();
+        graph.add_process(make_process(1, 0));
+        graph.add_process(make_process(2, 1));
+
+        let mut layout = ForceLayout::new();
+        layout.initial_placement(&[1, 2]);
+        layout.converge(&graph, 10);
+
+        layout.update_graph_positions(&mut graph);
+
+        let p1 = graph.find_by_pid(1).expect("pid 1 exists");
+        let p2 = graph.find_by_pid(2).expect("pid 2 exists");
+
+        assert_eq!(p1.position_3d, layout.get_position(1).expect("layout has pid 1"));
+        assert_eq!(p2.position_3d, layout.get_position(2).expect("layout has pid 2"));
+    }
+
+    #[test]
+    fn test_new_process_placed_near_parent() {
+        let mut graph = WorldGraph::new();
+        graph.add_process(make_process(1, 0));
+
+        let mut layout = ForceLayout::new();
+        layout.initial_placement(&[1]);
+
+        // Add child process.
+        graph.add_process(make_process(10, 1));
+        layout.sync_with_graph(&graph);
+
+        let parent_pos = layout.get_position(1).expect("parent");
+        let child_pos = layout.get_position(10).expect("child");
+
+        assert!(
+            parent_pos.distance(child_pos) < 0.5,
+            "child should be placed near parent: dist = {}",
+            parent_pos.distance(child_pos)
+        );
     }
 
     #[test]
