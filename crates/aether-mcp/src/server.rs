@@ -1,13 +1,33 @@
-//! MCP server with stdio and SSE transport support.
+//! MCP server with JSON-RPC 2.0 method dispatch.
+//!
+//! Implements `rmcp::ServerHandler` to expose system data as MCP tools.
 
+use std::future::Future;
 use std::sync::{Arc, Mutex, RwLock};
 
+use rmcp::{
+    ErrorData as RmcpError,
+    handler::server::ServerHandler,
+    model::{
+        CallToolRequestParams, CallToolResult, Content, Implementation, ListToolsResult,
+        ServerCapabilities, ServerInfo, Tool,
+    },
+    service::RequestContext,
+    RoleServer,
+};
+use serde_json::json;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use aether_core::{AgentAction, ArbiterQueue, WorldGraph};
 
 use crate::McpError;
+
+/// Tool name constants.
+const TOOL_GET_SYSTEM_TOPOLOGY: &str = "get_system_topology";
+const TOOL_INSPECT_PROCESS: &str = "inspect_process";
+const TOOL_LIST_ANOMALIES: &str = "list_anomalies";
+const TOOL_EXECUTE_ACTION: &str = "execute_action";
 
 /// MCP server exposing system data as tools for AI agents.
 #[allow(dead_code)]
@@ -52,5 +72,182 @@ impl McpServer {
         cancel.cancelled().await;
         tracing::info!("MCP SSE server shutting down");
         Ok(())
+    }
+}
+
+impl ServerHandler for McpServer {
+    fn get_info(&self) -> ServerInfo {
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_server_info(Implementation::new("aether-terminal", "0.1.0"))
+    }
+
+    fn list_tools(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<ListToolsResult, RmcpError>> + Send + '_ {
+        std::future::ready(Ok(ListToolsResult {
+            tools: tool_definitions(),
+            ..Default::default()
+        }))
+    }
+
+    fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<CallToolResult, RmcpError>> + Send + '_ {
+        std::future::ready(dispatch_tool(self, request))
+    }
+}
+
+/// Build the list of tool definitions exposed by this server.
+fn tool_definitions() -> Vec<Tool> {
+    vec![
+        Tool::new(
+            TOOL_GET_SYSTEM_TOPOLOGY,
+            "Get full system topology as a process graph with connections and summary stats",
+            empty_schema(),
+        ),
+        Tool::new(
+            TOOL_INSPECT_PROCESS,
+            "Inspect a specific process by PID, returning details, connections, and health",
+            pid_schema(),
+        ),
+        Tool::new(
+            TOOL_LIST_ANOMALIES,
+            "List anomalous processes: low HP, high CPU, zombies",
+            empty_schema(),
+        ),
+        Tool::new(
+            TOOL_EXECUTE_ACTION,
+            "Submit an action for human approval via the Arbiter queue",
+            action_schema(),
+        ),
+    ]
+}
+
+/// Dispatch a tool call to the appropriate handler stub.
+fn dispatch_tool(
+    _server: &McpServer,
+    request: CallToolRequestParams,
+) -> Result<CallToolResult, RmcpError> {
+    match request.name.as_ref() {
+        TOOL_GET_SYSTEM_TOPOLOGY => Ok(stub_result(TOOL_GET_SYSTEM_TOPOLOGY)),
+        TOOL_INSPECT_PROCESS => Ok(stub_result(TOOL_INSPECT_PROCESS)),
+        TOOL_LIST_ANOMALIES => Ok(stub_result(TOOL_LIST_ANOMALIES)),
+        TOOL_EXECUTE_ACTION => Ok(stub_result(TOOL_EXECUTE_ACTION)),
+        other => Err(RmcpError::new(
+            rmcp::model::ErrorCode::METHOD_NOT_FOUND,
+            format!("unknown tool: {other}"),
+            None,
+        )),
+    }
+}
+
+/// Placeholder result for unimplemented tools.
+fn stub_result(tool_name: &str) -> CallToolResult {
+    CallToolResult::success(vec![Content::text(
+        json!({"status": "stub", "tool": tool_name}).to_string(),
+    )])
+}
+
+/// Empty JSON Schema (no parameters).
+fn empty_schema() -> serde_json::Map<String, serde_json::Value> {
+    serde_json::Map::from_iter([("type".to_owned(), json!("object"))])
+}
+
+/// JSON Schema requiring a `pid` parameter.
+fn pid_schema() -> serde_json::Map<String, serde_json::Value> {
+    serde_json::Map::from_iter([
+        ("type".to_owned(), json!("object")),
+        (
+            "properties".to_owned(),
+            json!({"pid": {"type": "integer", "description": "Process ID"}}),
+        ),
+        ("required".to_owned(), json!(["pid"])),
+    ])
+}
+
+/// JSON Schema for execute_action: action type + optional pid.
+fn action_schema() -> serde_json::Map<String, serde_json::Value> {
+    serde_json::Map::from_iter([
+        ("type".to_owned(), json!("object")),
+        (
+            "properties".to_owned(),
+            json!({
+                "action": {
+                    "type": "string",
+                    "enum": ["kill", "restart", "inspect"],
+                    "description": "Action to execute"
+                },
+                "pid": {
+                    "type": "integer",
+                    "description": "Target process ID"
+                }
+            }),
+        ),
+        ("required".to_owned(), json!(["action"])),
+    ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mock_server() -> McpServer {
+        let world = Arc::new(RwLock::new(WorldGraph::new()));
+        let arbiter = Arc::new(Mutex::new(ArbiterQueue::default()));
+        let (action_tx, _rx) = mpsc::channel(16);
+        McpServer::new(world, arbiter, action_tx)
+    }
+
+    fn make_call(name: &'static str) -> CallToolRequestParams {
+        let mut params = CallToolRequestParams::default();
+        params.name = name.into();
+        params
+    }
+
+    #[test]
+    fn test_new_creates_server() {
+        let server = mock_server();
+        let info = server.get_info();
+        assert_eq!(info.server_info.name, "aether-terminal");
+        assert_eq!(info.server_info.version, "0.1.0");
+        assert!(info.capabilities.tools.is_some(), "tools capability enabled");
+    }
+
+    #[test]
+    fn test_tool_list_includes_all_four_tools() {
+        let tools = tool_definitions();
+        let names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
+        assert_eq!(names.len(), 4);
+        assert!(names.contains(&"get_system_topology"));
+        assert!(names.contains(&"inspect_process"));
+        assert!(names.contains(&"list_anomalies"));
+        assert!(names.contains(&"execute_action"));
+    }
+
+    #[test]
+    fn test_dispatch_unknown_tool_returns_error() {
+        let server = mock_server();
+        let result = dispatch_tool(&server, make_call("nonexistent"));
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.code, rmcp::model::ErrorCode::METHOD_NOT_FOUND);
+    }
+
+    #[test]
+    fn test_dispatch_known_tool_returns_stub() {
+        let server = mock_server();
+        let result = dispatch_tool(&server, make_call("get_system_topology"))
+            .expect("should succeed");
+        assert!(!result.content.is_empty());
+        let text = match &result.content[0].raw {
+            rmcp::model::RawContent::Text(t) => &t.text,
+            _ => panic!("expected text content"),
+        };
+        assert!(text.contains("get_system_topology"));
+        assert!(text.contains("stub"));
     }
 }
