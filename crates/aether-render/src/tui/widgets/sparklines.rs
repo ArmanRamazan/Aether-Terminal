@@ -47,10 +47,11 @@ impl SystemSparklines {
     /// Computes average CPU across all processes, total RAM (in MB), and
     /// total network bytes/sec from edges.
     pub(crate) fn update(&mut self, world: &WorldGraph) {
-        let (cpu_sum, ram_sum, count) = world.processes().fold(
-            (0.0_f32, 0_u64, 0_u32),
-            |(cpu, ram, n), p| (cpu + p.cpu_percent, ram + p.mem_bytes, n + 1),
-        );
+        let (cpu_sum, ram_sum, count) = world
+            .processes()
+            .fold((0.0_f32, 0_u64, 0_u32), |(cpu, ram, n), p| {
+                (cpu + p.cpu_percent, ram + p.mem_bytes, n + 1)
+            });
 
         let avg_cpu = if count > 0 {
             (cpu_sum / count as f32) as u64

@@ -29,9 +29,7 @@ pub(crate) fn render_tab_bar(area: Rect, buf: &mut Buffer, active: Tab) {
             if i >= available {
                 break;
             }
-            buf[(x + i as u16, area.y)]
-                .set_char(ch)
-                .set_style(style);
+            buf[(x + i as u16, area.y)].set_char(ch).set_style(style);
         }
         x += label.len() as u16 + 1; // +1 for spacing
     }
@@ -94,7 +92,9 @@ mod tests {
         render_tab_bar(area, &mut buf, Tab::World3D);
 
         // The active tab label should appear in the buffer.
-        let content: String = (0..80).map(|x| buf[(x, 0)].symbol().chars().next().unwrap_or(' ')).collect();
+        let content: String = (0..80)
+            .map(|x| buf[(x, 0)].symbol().chars().next().unwrap_or(' '))
+            .collect();
         assert!(content.contains("World 3D [F2]"));
 
         // Active tab cell should have cyan foreground.
@@ -110,7 +110,9 @@ mod tests {
 
         render_tab_bar(area, &mut buf, Tab::Overview);
 
-        let content: String = (0..80).map(|x| buf[(x, 0)].symbol().chars().next().unwrap_or(' ')).collect();
+        let content: String = (0..80)
+            .map(|x| buf[(x, 0)].symbol().chars().next().unwrap_or(' '))
+            .collect();
         // Network tab should be present but not highlighted.
         let net_start = content.find("Network [F3]").expect("tab label present");
         let cell = &buf[(net_start as u16, 0)];
@@ -125,7 +127,9 @@ mod tests {
 
         render_status_bar(area, &mut buf, &world);
 
-        let content: String = (0..100).map(|x| buf[(x, 0)].symbol().chars().next().unwrap_or(' ')).collect();
+        let content: String = (0..100)
+            .map(|x| buf[(x, 0)].symbol().chars().next().unwrap_or(' '))
+            .collect();
         assert!(content.contains("Processes: 0"));
         assert!(content.contains("CPU: 0%"));
     }
@@ -164,7 +168,9 @@ mod tests {
 
         render_status_bar(area, &mut buf, &world);
 
-        let content: String = (0..100).map(|x| buf[(x, 0)].symbol().chars().next().unwrap_or(' ')).collect();
+        let content: String = (0..100)
+            .map(|x| buf[(x, 0)].symbol().chars().next().unwrap_or(' '))
+            .collect();
         assert!(content.contains("Processes: 2"));
         assert!(content.contains("CPU: 40%")); // avg of 50 and 30
         assert!(content.contains("RAM: 2.0GB"));

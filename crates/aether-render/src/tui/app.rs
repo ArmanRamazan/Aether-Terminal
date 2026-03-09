@@ -44,7 +44,6 @@ impl Tab {
             Tab::Arbiter => "Arbiter [F4]",
         }
     }
-
 }
 
 /// Main TUI application state and controller.
@@ -122,9 +121,7 @@ impl App {
         // Sort-mode: next key selects the sort column.
         if self.sort_pending {
             self.sort_pending = false;
-            if self.current_tab == Tab::Overview
-                && self.overview.handle_sort_key(key.code)
-            {
+            if self.current_tab == Tab::Overview && self.overview.handle_sort_key(key.code) {
                 return;
             }
         }
@@ -142,12 +139,15 @@ impl App {
                 self.sort_pending = true;
             }
             _ if self.current_tab == Tab::Overview => {
-                let count = self
-                    .world
-                    .read()
-                    .map(|w| w.process_count())
-                    .unwrap_or(0);
-                self.overview.handle_key(key.code, count);
+                if let Ok(world) = self.world.read() {
+                    let count = world.process_count();
+                    let sorted_pids = super::overview::collect_sorted_pids(
+                        &world,
+                        self.overview.sort_column(),
+                        self.overview.sort_ascending(),
+                    );
+                    self.overview.handle_key(key.code, count, &sorted_pids);
+                }
             }
             _ => {}
         }
