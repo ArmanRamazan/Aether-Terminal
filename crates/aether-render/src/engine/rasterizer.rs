@@ -1,7 +1,5 @@
 //! Rasterization primitives: z-buffer, Bresenham line, and circle drawing.
 
-#![allow(dead_code)] // Items used by future scene renderer.
-
 use ratatui::style::Color;
 
 use crate::braille::BrailleCanvas;
@@ -12,6 +10,7 @@ use crate::engine::projection::ScreenPoint;
 /// Resolution matches Braille subpixels: `term_width * 2` × `term_height * 4`.
 pub(crate) struct ZBuffer {
     width: usize,
+    #[allow(dead_code)] // Kept for symmetry; may be used by future bounds checks.
     height: usize,
     buffer: Vec<f32>,
 }
@@ -117,6 +116,7 @@ pub(crate) fn draw_line(
 ///
 /// Coordinates are in screen space; converted to Braille subpixels internally.
 /// All pixels use the center's depth for z-buffer testing.
+#[allow(dead_code)] // Available for wireframe rendering mode.
 pub(crate) fn draw_circle(
     canvas: &mut BrailleCanvas,
     zbuf: &mut ZBuffer,
@@ -171,6 +171,7 @@ pub(crate) fn draw_circle(
 ///
 /// For each row in the circle's bounding box, computes the horizontal span
 /// from the circle equation and fills all pixels. Z-buffer tested per pixel.
+#[allow(dead_code)] // Used by scene renderer for unshaded circles; shaded version is inline.
 pub(crate) fn draw_filled_circle(
     canvas: &mut BrailleCanvas,
     zbuf: &mut ZBuffer,
