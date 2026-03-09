@@ -23,6 +23,11 @@ impl PulseEffect {
         self.time += dt;
     }
 
+    /// Current accumulated time in seconds.
+    pub fn time(&self) -> f32 {
+        self.time
+    }
+
     /// Compute pulsed radius for a node given its base radius and CPU load.
     ///
     /// - Amplitude: 0–30% of base radius, proportional to `cpu_percent`.
