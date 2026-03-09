@@ -5,6 +5,7 @@ use glam::Vec3;
 use ratatui::style::Color;
 
 use aether_core::graph::WorldGraph;
+use aether_core::models::ProcessState;
 
 use crate::braille::BrailleCanvas;
 use crate::effects::PulseEffect;
@@ -23,6 +24,33 @@ const MIN_RADIUS: f32 = 1.0;
 
 /// Maximum node radius in Braille pixels.
 const MAX_RADIUS: f32 = 5.0;
+
+/// HP threshold below which a node is considered critical (20%).
+const CRITICAL_HP_THRESHOLD: f32 = 20.0;
+
+/// Extra radius in Braille pixels for the bloom outer circle on critical nodes.
+const BLOOM_RADIUS_OFFSET: f32 = 3.0;
+
+/// Zombie process flicker period in seconds (visible/invisible toggle).
+const ZOMBIE_FLICKER_PERIOD: f32 = 0.5;
+
+/// Average two colors channel-by-channel.
+fn blend_colors(c1: Color, c2: Color) -> Color {
+    match (c1, c2) {
+        (Color::Rgb(r1, g1, b1), Color::Rgb(r2, g2, b2)) => {
+            Color::Rgb((r1 / 2) + (r2 / 2), (g1 / 2) + (g2 / 2), (b1 / 2) + (b2 / 2))
+        }
+        _ => c1,
+    }
+}
+
+/// Dim a color by halving each RGB channel (simulated lower alpha for bloom).
+fn dim_color(color: Color) -> Color {
+    match color {
+        Color::Rgb(r, g, b) => Color::Rgb(r / 2, g / 2, b / 2),
+        other => other,
+    }
+}
 
 /// Orchestrates the full 3D render pipeline for a process graph.
 ///
@@ -124,6 +152,8 @@ impl SceneRenderer {
     }
 
     /// Rasterize all edges as lines between projected node positions.
+    ///
+    /// Edge color is the blend of source and destination node HP colors.
     fn render_edges(
         &mut self,
         graph: &WorldGraph,
@@ -139,17 +169,17 @@ impl SceneRenderer {
             let Some(p1) = self.project_node(dst_pid, view, proj, screen_w, screen_h) else {
                 continue;
             };
-            draw_line(
-                &mut self.canvas,
-                &mut self.zbuffer,
-                p0,
-                p1,
-                Palette::NEON_BLUE,
-            );
+            let src_hp = graph.find_by_pid(src_pid).map_or(50.0, |n| n.hp);
+            let dst_hp = graph.find_by_pid(dst_pid).map_or(50.0, |n| n.hp);
+            let edge_color = blend_colors(color_for_hp(src_hp), color_for_hp(dst_hp));
+            draw_line(&mut self.canvas, &mut self.zbuffer, p0, p1, edge_color);
         }
     }
 
     /// Rasterize all nodes as shaded filled circles.
+    ///
+    /// Critical nodes (HP < 20%) get an outer bloom circle. Zombie processes
+    /// flicker on/off every 500ms.
     fn render_nodes(
         &mut self,
         graph: &WorldGraph,
@@ -161,6 +191,14 @@ impl SceneRenderer {
         let light = LIGHT_DIR.normalize();
 
         for node in graph.processes() {
+            // Zombie flicker: skip rendering every other 500ms period.
+            if node.state == ProcessState::Zombie {
+                let period_index = (self.pulse.time() / ZOMBIE_FLICKER_PERIOD) as u32;
+                if period_index % 2 == 1 {
+                    continue;
+                }
+            }
+
             let Some(screen_pt) = self.project_node(node.pid, view, proj, screen_w, screen_h)
             else {
                 continue;
@@ -169,6 +207,12 @@ impl SceneRenderer {
             let base_radius = depth_to_radius(screen_pt.depth);
             let radius = self.pulse.pulse_radius(base_radius, node.cpu_percent);
             let base_color = color_for_hp(node.hp);
+
+            // Critical bloom: outer circle with dimmed color.
+            if node.hp < CRITICAL_HP_THRESHOLD {
+                let bloom_color = dim_color(Palette::CRITICAL);
+                self.render_shaded_circle(screen_pt, radius + BLOOM_RADIUS_OFFSET, bloom_color, light);
+            }
 
             self.render_shaded_circle(screen_pt, radius, base_color, light);
         }
@@ -238,8 +282,22 @@ mod tests {
             name: format!("proc_{pid}"),
             cpu_percent: 0.0,
             mem_bytes: 0,
-            state: aether_core::models::ProcessState::Running,
+            state: ProcessState::Running,
             hp,
+            xp: 0,
+            position_3d: Vec3::ZERO,
+        }
+    }
+
+    fn make_zombie(pid: u32) -> ProcessNode {
+        ProcessNode {
+            pid,
+            ppid: 0,
+            name: format!("zombie_{pid}"),
+            cpu_percent: 0.0,
+            mem_bytes: 0,
+            state: ProcessState::Zombie,
+            hp: 10.0,
             xp: 0,
             position_3d: Vec3::ZERO,
         }
@@ -318,5 +376,69 @@ mod tests {
         let graph = WorldGraph::new();
         let lines = renderer.render(&graph, 0.0);
         assert!(lines.is_empty(), "zero-size canvas should return empty");
+    }
+
+    #[test]
+    fn test_blend_colors_averages_channels() {
+        let white = Color::Rgb(200, 100, 50);
+        let black = Color::Rgb(100, 50, 20);
+        let blended = blend_colors(white, black);
+        assert_eq!(blended, Color::Rgb(150, 75, 35));
+    }
+
+    #[test]
+    fn test_blend_colors_non_rgb_returns_first() {
+        let result = blend_colors(Color::Red, Color::Blue);
+        assert_eq!(result, Color::Red);
+    }
+
+    #[test]
+    fn test_dim_color_halves_channels() {
+        let color = Color::Rgb(200, 100, 50);
+        assert_eq!(dim_color(color), Color::Rgb(100, 50, 25));
+    }
+
+    #[test]
+    fn test_zombie_flicker_alternates_visibility() {
+        let mut renderer = SceneRenderer::new(40, 20);
+        let mut graph = WorldGraph::new();
+        graph.add_process(make_zombie(1));
+
+        renderer.layout.sync_with_graph(&graph);
+        let pos = renderer.layout.get_position(1).expect("node in layout");
+        renderer.camera_mut().center = pos;
+
+        // At t=0, zombie is visible (period_index=0, even).
+        let lines_visible = renderer.render(&graph, 0.0);
+        let has_content_v = lines_visible
+            .iter()
+            .any(|(line, _)| line.chars().any(|c| c != '\u{2800}'));
+
+        // Advance to t=0.6s → period_index=1 (odd), zombie hidden.
+        let lines_hidden = renderer.render(&graph, 0.6);
+        let has_content_h = lines_hidden
+            .iter()
+            .any(|(line, _)| line.chars().any(|c| c != '\u{2800}'));
+
+        assert!(has_content_v, "zombie should be visible at t=0");
+        assert!(!has_content_h, "zombie should be hidden at t=0.6s");
+    }
+
+    #[test]
+    fn test_critical_node_renders_with_bloom() {
+        let mut renderer = SceneRenderer::new(40, 20);
+        let mut graph = WorldGraph::new();
+        // HP=10 → critical, should trigger bloom.
+        graph.add_process(make_node(1, 10.0));
+
+        renderer.layout.sync_with_graph(&graph);
+        let pos = renderer.layout.get_position(1).expect("node in layout");
+        renderer.camera_mut().center = pos;
+
+        let lines = renderer.render(&graph, 0.0);
+        let has_content = lines
+            .iter()
+            .any(|(line, _)| line.chars().any(|c| c != '\u{2800}'));
+        assert!(has_content, "critical node with bloom should produce visible pixels");
     }
 }
