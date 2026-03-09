@@ -4,6 +4,7 @@
 //! that renders the process graph using Braille characters for 2x4 subpixel density.
 
 pub mod braille;
+pub mod effects;
 pub mod engine;
 pub mod palette;
 pub mod tui;

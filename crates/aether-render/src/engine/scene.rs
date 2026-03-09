@@ -7,6 +7,7 @@ use ratatui::style::Color;
 use aether_core::graph::WorldGraph;
 
 use crate::braille::BrailleCanvas;
+use crate::effects::PulseEffect;
 use crate::engine::camera::OrbitalCamera;
 use crate::engine::layout::ForceLayout;
 use crate::engine::projection::{project_point, ScreenPoint};
@@ -32,6 +33,7 @@ pub struct SceneRenderer {
     layout: ForceLayout,
     canvas: BrailleCanvas,
     zbuffer: ZBuffer,
+    pulse: PulseEffect,
 }
 
 impl SceneRenderer {
@@ -44,6 +46,7 @@ impl SceneRenderer {
             layout: ForceLayout::new(),
             canvas,
             zbuffer,
+            pulse: PulseEffect::new(),
         }
     }
 
@@ -55,12 +58,16 @@ impl SceneRenderer {
 
     /// Render the process graph to Braille lines with per-character colors.
     ///
+    /// `dt` is the elapsed time in seconds since the last frame, used to
+    /// drive time-based effects like node pulsation.
+    ///
     /// Performs a complete render pass: clear, layout sync, project, rasterize
     /// edges and nodes, apply shading, and convert to Braille output.
-    pub fn render(&mut self, graph: &WorldGraph) -> Vec<(String, Vec<Color>)> {
+    pub fn render(&mut self, graph: &WorldGraph, dt: f32) -> Vec<(String, Vec<Color>)> {
         self.canvas.clear();
         self.zbuffer.clear();
 
+        self.pulse.update(dt);
         self.layout.sync_with_graph(graph);
         self.layout.step(graph);
 
@@ -159,7 +166,8 @@ impl SceneRenderer {
                 continue;
             };
 
-            let radius = depth_to_radius(screen_pt.depth);
+            let base_radius = depth_to_radius(screen_pt.depth);
+            let radius = self.pulse.pulse_radius(base_radius, node.cpu_percent);
             let base_color = color_for_hp(node.hp);
 
             self.render_shaded_circle(screen_pt, radius, base_color, light);
@@ -241,7 +249,7 @@ mod tests {
     fn test_render_empty_graph_returns_empty() {
         let mut renderer = SceneRenderer::new(20, 10);
         let graph = WorldGraph::new();
-        let lines = renderer.render(&graph);
+        let lines = renderer.render(&graph, 0.0);
         // Empty graph should produce blank lines (all Braille blanks).
         for (line, _colors) in &lines {
             assert!(
@@ -265,7 +273,7 @@ mod tests {
             .expect("node should exist in layout");
         renderer.camera_mut().center = pos;
 
-        let lines = renderer.render(&graph);
+        let lines = renderer.render(&graph, 0.0);
         assert!(!lines.is_empty(), "render should produce output lines");
 
         let has_content = lines
@@ -308,7 +316,7 @@ mod tests {
     fn test_render_zero_size_returns_empty() {
         let mut renderer = SceneRenderer::new(0, 0);
         let graph = WorldGraph::new();
-        let lines = renderer.render(&graph);
+        let lines = renderer.render(&graph, 0.0);
         assert!(lines.is_empty(), "zero-size canvas should return empty");
     }
 }
