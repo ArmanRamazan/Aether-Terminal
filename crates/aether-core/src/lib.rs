@@ -2,3 +2,5 @@
 //!
 //! All other aether crates depend on this crate. It defines the shared vocabulary:
 //! process models, the world graph, system events, and hexagonal port traits.
+
+pub mod models;
