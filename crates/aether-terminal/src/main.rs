@@ -1,21 +1,41 @@
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, RwLock};
 
+use clap::Parser;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use aether_core::events::SystemEvent;
+use aether_core::WorldGraph;
 use aether_ingestion::pipeline::IngestionPipeline;
 use aether_ingestion::sysinfo_probe::SysinfoProbe;
+use aether_render::tui::app::App;
+
+#[derive(Parser)]
+#[command(name = "aether", version, about = "Cinematic 3D TUI system monitor")]
+struct Cli {
+    /// Logging level (trace, debug, info, warn, error)
+    #[arg(long, default_value = "info")]
+    log_level: String,
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt::init();
+    let cli = Cli::parse();
+
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_new(&cli.log_level)
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
+
+    let world = Arc::new(RwLock::new(WorldGraph::new()));
 
     let probe = Arc::new(SysinfoProbe::new());
-    let (event_tx, mut event_rx) = mpsc::channel::<SystemEvent>(256);
+    let (event_tx, event_rx) = mpsc::channel::<SystemEvent>(256);
     let cancel = CancellationToken::new();
 
+    // Spawn ingestion pipeline
     let pipeline = IngestionPipeline::new(probe, event_tx);
     let pipeline_cancel = cancel.child_token();
     tokio::spawn(async move {
@@ -24,56 +44,49 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    tracing::info!("Aether Terminal started, collecting metrics…");
-
-    tokio::select! {
-        _ = async {
-            while let Some(event) = event_rx.recv().await {
-                if let SystemEvent::MetricsUpdate { snapshot } = event {
-                    print!("\x1B[2J\x1B[H");
-
-                    let mut procs = snapshot.processes;
-                    procs.sort_by(|a, b| b.cpu_percent.partial_cmp(&a.cpu_percent).unwrap_or(std::cmp::Ordering::Equal));
-
-                    println!("Aether Terminal v0.1.0 — Live Process Data");
-                    println!("Processes: {}", procs.len());
-                    println!();
-
-                    for p in procs.iter().take(10) {
-                        println!(
-                            "[PID {:>6}] {:<20} CPU: {:>5.1}%  MEM: {}  HP: {}",
-                            p.pid,
-                            p.name,
-                            p.cpu_percent,
-                            format_mem(p.mem_bytes),
-                            p.hp,
-                        );
+    // Spawn graph updater: SystemEvent → WorldGraph
+    let updater_world = Arc::clone(&world);
+    let updater_cancel = cancel.child_token();
+    tokio::spawn(async move {
+        let mut event_rx = event_rx;
+        loop {
+            tokio::select! {
+                event = event_rx.recv() => {
+                    match event {
+                        Some(SystemEvent::MetricsUpdate { snapshot }) => {
+                            if let Ok(mut graph) = updater_world.write() {
+                                graph.apply_snapshot(&snapshot);
+                            }
+                        }
+                        Some(_) => {}
+                        None => break,
                     }
                 }
+                _ = updater_cancel.cancelled() => break,
             }
-        } => {}
-        _ = tokio::time::sleep(Duration::from_secs(5)) => {
-            tracing::info!("timeout reached, shutting down");
-            cancel.cancel();
         }
-    }
+    });
 
-    Ok(())
-}
+    // Initialize terminal
+    crossterm::terminal::enable_raw_mode()?;
+    let mut stdout = std::io::stdout();
+    crossterm::execute!(stdout, crossterm::terminal::EnterAlternateScreen)?;
+    let backend = ratatui::backend::CrosstermBackend::new(stdout);
+    let mut terminal = ratatui::Terminal::new(backend)?;
 
-/// Format bytes into a human-readable string.
-fn format_mem(bytes: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = 1024 * KB;
-    const GB: u64 = 1024 * MB;
+    // Run TUI app
+    let mut app = App::new(Arc::clone(&world));
+    let result = app.run(&mut terminal).await;
 
-    if bytes < KB {
-        format!("{bytes} B")
-    } else if bytes < MB {
-        format!("{} KB", bytes / KB)
-    } else if bytes < GB {
-        format!("{} MB", bytes / MB)
-    } else {
-        format!("{:.1} GB", bytes as f64 / GB as f64)
-    }
+    // Cleanup: always restore terminal
+    crossterm::terminal::disable_raw_mode()?;
+    crossterm::execute!(
+        terminal.backend_mut(),
+        crossterm::terminal::LeaveAlternateScreen
+    )?;
+    terminal.show_cursor()?;
+
+    cancel.cancel();
+
+    result.map_err(Into::into)
 }
