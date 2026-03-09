@@ -114,6 +114,7 @@ impl App {
                 self.sparkline_tick = 0;
                 if let Ok(world) = self.world.read() {
                     self.sparklines.update(&world);
+                    self.network.update(&world);
                 }
             }
 
