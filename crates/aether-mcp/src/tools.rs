@@ -1,12 +1,13 @@
 //! MCP tool implementations that read from WorldGraph.
 
-use std::sync::RwLock;
+use std::sync::{Mutex, RwLock};
 
 use serde_json::{json, Value};
 
-use aether_core::WorldGraph;
-
 use aether_core::models::ProcessState;
+use aether_core::{AgentAction, WorldGraph};
+
+use crate::arbiter::ArbiterQueue;
 
 /// Maximum number of processes returned to prevent AI token overflow.
 const MAX_PROCESSES: usize = 50;
@@ -224,6 +225,32 @@ fn build_recommendations(proc: &aether_core::models::ProcessNode) -> Vec<&'stati
         recs.push("High memory usage — check for memory leaks");
     }
     recs
+}
+
+/// Parse action string and enqueue in ArbiterQueue for human approval.
+///
+/// Returns JSON with `status: "pending_approval"` and the assigned action ID.
+pub(crate) fn execute_action(
+    queue: &Mutex<ArbiterQueue>,
+    action: &str,
+    pid: u32,
+) -> Result<Value, String> {
+    let agent_action = match action {
+        "kill" => AgentAction::KillProcess { pid },
+        "restart" => AgentAction::RestartService {
+            name: format!("pid-{pid}"),
+        },
+        "inspect" => AgentAction::Inspect { pid },
+        other => return Err(format!("unknown action: {other}")),
+    };
+
+    let mut arbiter = queue.lock().expect("ArbiterQueue lock poisoned");
+    let action_id = arbiter.enqueue(agent_action, pid, "mcp-agent");
+
+    Ok(json!({
+        "status": "pending_approval",
+        "action_id": action_id,
+    }))
 }
 
 #[cfg(test)]
@@ -596,5 +623,37 @@ mod tests {
         assert_eq!(anomalies[0]["pid"], 1);
         assert_eq!(anomalies[1]["severity"], "warning");
         assert_eq!(anomalies[1]["pid"], 2);
+    }
+
+    // --- execute_action tests ---
+
+    #[test]
+    fn test_execute_action_returns_pending_approval() {
+        let queue = Mutex::new(ArbiterQueue::default());
+        let result = execute_action(&queue, "kill", 42).expect("should succeed");
+        assert_eq!(result["status"], "pending_approval");
+        assert!(result["action_id"].is_string());
+
+        let arbiter = queue.lock().unwrap();
+        assert_eq!(arbiter.pending().len(), 1);
+        assert_eq!(arbiter.pending()[0].pid, 42);
+    }
+
+    #[test]
+    fn test_execute_action_unknown_action_returns_error() {
+        let queue = Mutex::new(ArbiterQueue::default());
+        let result = execute_action(&queue, "explode", 1);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("unknown action"));
+    }
+
+    #[test]
+    fn test_execute_action_all_valid_actions() {
+        let queue = Mutex::new(ArbiterQueue::default());
+        for action in &["kill", "restart", "inspect"] {
+            let result = execute_action(&queue, action, 1).expect("should succeed");
+            assert_eq!(result["status"], "pending_approval");
+        }
+        assert_eq!(queue.lock().unwrap().pending().len(), 3);
     }
 }

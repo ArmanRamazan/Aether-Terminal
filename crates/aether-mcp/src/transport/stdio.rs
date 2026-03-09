@@ -56,7 +56,9 @@ mod tests {
     use tokio::sync::mpsc;
     use tokio_util::sync::CancellationToken;
 
-    use aether_core::{AgentAction, ArbiterQueue, WorldGraph};
+    use aether_core::{AgentAction, WorldGraph};
+
+    use crate::arbiter::ArbiterQueue;
 
     use crate::server::McpServer;
 

@@ -193,7 +193,9 @@ mod tests {
     use tokio_util::sync::CancellationToken;
     use tower::ServiceExt;
 
-    use aether_core::{AgentAction, ArbiterQueue, WorldGraph};
+    use aether_core::{AgentAction, WorldGraph};
+
+    use crate::arbiter::ArbiterQueue;
 
     use crate::server::McpServer;
 

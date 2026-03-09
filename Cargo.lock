@@ -61,6 +61,7 @@ dependencies = [
  "tokio-util",
  "tower",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
