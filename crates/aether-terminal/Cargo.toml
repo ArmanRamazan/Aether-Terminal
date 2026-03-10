@@ -3,6 +3,9 @@ name = "aether-terminal"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+ebpf = ["aether-ebpf/ebpf"]
+
 [dependencies]
 aether-core = { path = "../aether-core" }
 aether-ingestion = { path = "../aether-ingestion" }
