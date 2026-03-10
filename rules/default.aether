@@ -1,0 +1,29 @@
+// Default monitoring rules for Aether Terminal.
+
+rule high_cpu {
+    when process.cpu > 90%
+    then alert "CPU usage exceeds 90%" severity critical
+}
+
+rule memory_leak {
+    when process.mem_growth > 5% for 60s
+    then alert "sustained memory growth detected" severity warning
+}
+
+rule runaway_threads {
+    when process.threads > 500
+    then alert "excessive thread count" severity warning
+         log "process exceeded 500 threads"
+}
+
+rule zombie_process {
+    when process.cpu == 0 and process.mem > 50%
+    then alert "zombie: no CPU but high memory" severity info
+         kill
+}
+
+rule overload {
+    when process.cpu > 95% or process.mem > 95%
+    then alert "system overload" severity critical
+         log "resource limit reached"
+}
