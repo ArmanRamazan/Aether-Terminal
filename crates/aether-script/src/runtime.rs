@@ -72,6 +72,13 @@ pub struct CompiledRuleSet {
     _jit: JitCompiler,
 }
 
+// SAFETY: CompiledRuleSet is safe to send/share across threads because:
+// - CompiledRule func_ptrs point to immutable JIT code owned by `_jit`
+// - DurationTracker is only accessed through &mut self (exclusive access)
+// - JITModule's code memory is immutable after finalization
+unsafe impl Send for CompiledRuleSet {}
+unsafe impl Sync for CompiledRuleSet {}
+
 impl CompiledRuleSet {
     /// Compile a set of rules into native code.
     pub fn compile(rules: &[Rule]) -> Result<Self, ScriptError> {

@@ -112,6 +112,12 @@ pub struct CompiledRule {
     func_ptr: *const u8,
 }
 
+// SAFETY: CompiledRule's func_ptr points to JIT-compiled code in memory owned by
+// JitCompiler. The function pointer itself is safe to send/share across threads —
+// the code it points to is immutable once compiled.
+unsafe impl Send for CompiledRule {}
+unsafe impl Sync for CompiledRule {}
+
 impl CompiledRule {
     /// Call the compiled rule against a process state.
     ///

@@ -18,4 +18,11 @@ pub enum ScriptError {
     /// Cranelift IR generation or verification failed.
     #[error("compile error: {0}")]
     Compile(String),
+
+    /// File I/O error during hot-reload.
+    #[error("io error: {path}: {source}")]
+    Io {
+        path: String,
+        source: std::io::Error,
+    },
 }
