@@ -1,6 +1,8 @@
 //! Scene render pipeline: orchestrates camera, layout, canvas, z-buffer,
 //! and rasterizer into a complete 3D-to-Braille rendering pass.
 
+use std::collections::HashSet;
+
 use glam::Vec3;
 use ratatui::style::Color;
 
@@ -30,6 +32,15 @@ const CRITICAL_HP_THRESHOLD: f32 = 20.0;
 
 /// Extra radius in Braille pixels for the bloom outer circle on critical nodes.
 const BLOOM_RADIUS_OFFSET: f32 = 3.0;
+
+/// Base extra radius for prediction outline ring.
+const PREDICTION_OUTLINE_BASE: f32 = 2.0;
+
+/// Amplitude of prediction outline pulse.
+const PREDICTION_OUTLINE_AMPLITUDE: f32 = 1.5;
+
+/// Prediction outline pulse frequency in Hz.
+const PREDICTION_PULSE_HZ: f32 = 2.0;
 
 /// Zombie process flicker period in seconds (visible/invisible toggle).
 const ZOMBIE_FLICKER_PERIOD: f32 = 0.5;
@@ -97,10 +108,17 @@ impl SceneRenderer {
     ///
     /// `dt` is the elapsed time in seconds since the last frame, used to
     /// drive time-based effects like node pulsation.
+    /// `predicted_pids` contains PIDs with active anomaly predictions, rendered
+    /// with a pulsing orange outline.
     ///
     /// Performs a complete render pass: clear, layout sync, project, rasterize
     /// edges and nodes, apply shading, and convert to Braille output.
-    pub fn render(&mut self, graph: &WorldGraph, dt: f32) -> Vec<(String, Vec<Color>)> {
+    pub fn render(
+        &mut self,
+        graph: &WorldGraph,
+        dt: f32,
+        predicted_pids: &HashSet<u32>,
+    ) -> Vec<(String, Vec<Color>)> {
         self.canvas.clear();
         self.zbuffer.clear();
 
@@ -128,7 +146,7 @@ impl SceneRenderer {
         let proj = self.camera.projection_matrix(aspect);
 
         self.render_edges(graph, &view, &proj, screen_w, screen_h);
-        self.render_nodes(graph, &view, &proj, screen_w, screen_h);
+        self.render_nodes(graph, &view, &proj, screen_w, screen_h, predicted_pids);
         self.render_dying_nodes(&view, &proj, screen_w, screen_h);
 
         self.canvas.to_lines()
@@ -229,7 +247,7 @@ impl SceneRenderer {
     /// Rasterize all nodes as shaded filled circles.
     ///
     /// Critical nodes (HP < 20%) get an outer bloom circle. Zombie processes
-    /// flicker on/off every 500ms.
+    /// flicker on/off every 500ms. Predicted nodes get a pulsing orange outline.
     fn render_nodes(
         &mut self,
         graph: &WorldGraph,
@@ -237,6 +255,7 @@ impl SceneRenderer {
         proj: &glam::Mat4,
         screen_w: u32,
         screen_h: u32,
+        predicted_pids: &HashSet<u32>,
     ) {
         let light = LIGHT_DIR.normalize();
 
@@ -257,6 +276,21 @@ impl SceneRenderer {
             let base_radius = depth_to_radius(screen_pt.depth);
             let radius = self.pulse.pulse_radius(base_radius, node.cpu_percent);
             let base_color = color_for_hp(node.hp);
+
+            // Prediction outline: pulsing orange ring at 2Hz.
+            if predicted_pids.contains(&node.pid) {
+                let pulse = (self.pulse.time() * PREDICTION_PULSE_HZ * std::f32::consts::TAU)
+                    .sin();
+                let outline_offset =
+                    PREDICTION_OUTLINE_BASE + PREDICTION_OUTLINE_AMPLITUDE * pulse;
+                let outline_color = dim_color(Palette::PREDICTION);
+                self.render_shaded_circle(
+                    screen_pt,
+                    radius + outline_offset,
+                    outline_color,
+                    light,
+                );
+            }
 
             // Critical bloom: outer circle with dimmed color.
             if node.hp < CRITICAL_HP_THRESHOLD {
@@ -481,7 +515,7 @@ mod tests {
     fn test_render_empty_graph_returns_empty() {
         let mut renderer = SceneRenderer::new(20, 10);
         let graph = WorldGraph::new();
-        let lines = renderer.render(&graph, 0.0);
+        let lines = renderer.render(&graph, 0.0, &HashSet::new());
         // Empty graph should produce blank lines (all Braille blanks).
         for (line, _colors) in &lines {
             assert!(
@@ -505,7 +539,7 @@ mod tests {
             .expect("node should exist in layout");
         renderer.camera_mut().center = pos;
 
-        let lines = renderer.render(&graph, 0.0);
+        let lines = renderer.render(&graph, 0.0, &HashSet::new());
         assert!(!lines.is_empty(), "render should produce output lines");
 
         let has_content = lines
@@ -548,7 +582,7 @@ mod tests {
     fn test_render_zero_size_returns_empty() {
         let mut renderer = SceneRenderer::new(0, 0);
         let graph = WorldGraph::new();
-        let lines = renderer.render(&graph, 0.0);
+        let lines = renderer.render(&graph, 0.0, &HashSet::new());
         assert!(lines.is_empty(), "zero-size canvas should return empty");
     }
 
@@ -583,13 +617,13 @@ mod tests {
         renderer.camera_mut().center = pos;
 
         // At t=0, zombie is visible (period_index=0, even).
-        let lines_visible = renderer.render(&graph, 0.0);
+        let lines_visible = renderer.render(&graph, 0.0, &HashSet::new());
         let has_content_v = lines_visible
             .iter()
             .any(|(line, _)| line.chars().any(|c| c != '\u{2800}'));
 
         // Advance to t=0.6s → period_index=1 (odd), zombie hidden.
-        let lines_hidden = renderer.render(&graph, 0.6);
+        let lines_hidden = renderer.render(&graph, 0.6, &HashSet::new());
         let has_content_h = lines_hidden
             .iter()
             .any(|(line, _)| line.chars().any(|c| c != '\u{2800}'));
@@ -609,13 +643,56 @@ mod tests {
         let pos = renderer.layout.get_position(1).expect("node in layout");
         renderer.camera_mut().center = pos;
 
-        let lines = renderer.render(&graph, 0.0);
+        let lines = renderer.render(&graph, 0.0, &HashSet::new());
         let has_content = lines
             .iter()
             .any(|(line, _)| line.chars().any(|c| c != '\u{2800}'));
         assert!(
             has_content,
             "critical node with bloom should produce visible pixels"
+        );
+    }
+
+    #[test]
+    fn test_predicted_node_renders_with_outline() {
+        let mut renderer = SceneRenderer::new(40, 20);
+        let mut graph = WorldGraph::new();
+        graph.add_process(make_node(1, 80.0));
+
+        renderer.layout.sync_with_graph(&graph);
+        let pos = renderer.layout.get_position(1).expect("node in layout");
+        renderer.camera_mut().center = pos;
+
+        let predicted = HashSet::from([1]);
+        let lines = renderer.render(&graph, 0.0, &predicted);
+        let has_content = lines
+            .iter()
+            .any(|(line, _)| line.chars().any(|c| c != '\u{2800}'));
+        assert!(
+            has_content,
+            "predicted node with outline should produce visible pixels"
+        );
+    }
+
+    #[test]
+    fn test_prediction_outline_pulses_at_2hz() {
+        // Verify the outline radius changes between two time samples
+        // that are a quarter-period apart (0.125s for 2Hz).
+        let pulse_at = |time: f32| -> f32 {
+            let pulse = (time * PREDICTION_PULSE_HZ * std::f32::consts::TAU).sin();
+            PREDICTION_OUTLINE_BASE + PREDICTION_OUTLINE_AMPLITUDE * pulse
+        };
+        let r0 = pulse_at(0.0);
+        let r_quarter = pulse_at(0.125); // quarter period of 2Hz
+        assert!(
+            (r0 - r_quarter).abs() > 0.1,
+            "outline radius should differ at quarter period: r0={r0}, r_quarter={r_quarter}"
+        );
+        // Full period should return to same value.
+        let r_full = pulse_at(0.5);
+        assert!(
+            (r0 - r_full).abs() < 0.01,
+            "outline radius should repeat at full period: r0={r0}, r_full={r_full}"
         );
     }
 }

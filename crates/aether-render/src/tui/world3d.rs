@@ -4,6 +4,8 @@
 //! Braille characters with per-cell colors. Supports camera rotation,
 //! zoom, auto-rotate, node label overlays, and node selection/interaction.
 
+use std::collections::HashSet;
+
 use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -63,7 +65,13 @@ impl World3DTab {
     }
 
     /// Render the 3D viewport into the given area.
-    pub(crate) fn render(&mut self, area: Rect, buf: &mut Buffer, world: &WorldGraph) {
+    pub(crate) fn render(
+        &mut self,
+        area: Rect,
+        buf: &mut Buffer,
+        world: &WorldGraph,
+        predicted_pids: &HashSet<u32>,
+    ) {
         if area.width < 2 || area.height < 2 {
             return;
         }
@@ -83,7 +91,7 @@ impl World3DTab {
         }
 
         // Assume ~60fps frame time for pulsation effect.
-        let lines = self.scene.render(world, 1.0 / 60.0);
+        let lines = self.scene.render(world, 1.0 / 60.0, predicted_pids);
 
         // Draw Braille lines into the ratatui buffer.
         for (row_idx, (line, colors)) in lines.iter().enumerate() {
@@ -491,7 +499,7 @@ mod tests {
         let graph = WorldGraph::new();
         let area = Rect::new(0, 0, 40, 20);
         let mut buf = Buffer::empty(area);
-        tab.render(area, &mut buf, &graph);
+        tab.render(area, &mut buf, &graph, &HashSet::new());
     }
 
     #[test]
@@ -501,7 +509,7 @@ mod tests {
         graph.add_process(make_node(1));
         let area = Rect::new(0, 0, 40, 20);
         let mut buf = Buffer::empty(area);
-        tab.render(area, &mut buf, &graph);
+        tab.render(area, &mut buf, &graph, &HashSet::new());
     }
 
     #[test]
@@ -511,13 +519,13 @@ mod tests {
 
         let area1 = Rect::new(0, 0, 40, 20);
         let mut buf = Buffer::empty(area1);
-        tab.render(area1, &mut buf, &graph);
+        tab.render(area1, &mut buf, &graph, &HashSet::new());
         assert_eq!(tab.last_width, 40);
         assert_eq!(tab.last_height, 20);
 
         let area2 = Rect::new(0, 0, 60, 30);
         let mut buf2 = Buffer::empty(area2);
-        tab.render(area2, &mut buf2, &graph);
+        tab.render(area2, &mut buf2, &graph, &HashSet::new());
         assert_eq!(tab.last_width, 60);
         assert_eq!(tab.last_height, 30);
     }
@@ -528,7 +536,7 @@ mod tests {
         let graph = WorldGraph::new();
         let area = Rect::new(0, 0, 1, 1);
         let mut buf = Buffer::empty(area);
-        tab.render(area, &mut buf, &graph);
+        tab.render(area, &mut buf, &graph, &HashSet::new());
     }
 
     #[test]
@@ -623,6 +631,6 @@ mod tests {
         tab.selected_pid = Some(1);
         let area = Rect::new(0, 0, 40, 20);
         let mut buf = Buffer::empty(area);
-        tab.render(area, &mut buf, &graph);
+        tab.render(area, &mut buf, &graph, &HashSet::new());
     }
 }

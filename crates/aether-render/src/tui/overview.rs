@@ -4,16 +4,19 @@
 //! color-coded rows based on CPU load. Supports keyboard-driven sorting,
 //! scrolling, row selection, and a detail panel (Enter/Esc).
 
+use std::collections::HashSet;
+
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Gauge, Paragraph, Row, Table, Widget, Wrap};
+use ratatui::widgets::{Block, Borders, Cell, Gauge, Paragraph, Row, Table, Widget, Wrap};
 
 use aether_core::models::ProcessState;
 use aether_core::WorldGraph;
 
 use crate::palette::{self, Palette};
+use crate::PredictionDisplay;
 
 /// Column by which the process table can be sorted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -126,26 +129,55 @@ impl OverviewTab {
     }
 
     /// Render the process table (and detail panel if open) into `buf`.
-    pub(crate) fn render(&self, area: Rect, buf: &mut Buffer, world: &WorldGraph) {
+    pub(crate) fn render(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        world: &WorldGraph,
+        predictions: &[PredictionDisplay],
+    ) {
+        // Split off a predictions panel at the bottom when predictions exist.
+        let (main_area, predictions_area) = if predictions.is_empty() {
+            (area, None)
+        } else {
+            let pred_height = (predictions.len() as u16 + 2).min(8);
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Min(0), Constraint::Length(pred_height)])
+                .split(area);
+            (chunks[0], Some(chunks[1]))
+        };
+
         let (table_area, detail_area) = if self.detail_pid.is_some() {
             let chunks = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
-                .split(area);
+                .split(main_area);
             (chunks[0], Some(chunks[1]))
         } else {
-            (area, None)
+            (main_area, None)
         };
 
-        self.render_table(table_area, buf, world);
+        self.render_table(table_area, buf, world, predictions);
 
         if let (Some(pid), Some(panel_area)) = (self.detail_pid, detail_area) {
             render_detail_panel(panel_area, buf, world, pid);
         }
+
+        if let Some(pred_area) = predictions_area {
+            render_predictions_panel(pred_area, buf, predictions);
+        }
     }
 
     /// Render the process table into the given area.
-    fn render_table(&self, area: Rect, buf: &mut Buffer, world: &WorldGraph) {
+    fn render_table(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        world: &WorldGraph,
+        predictions: &[PredictionDisplay],
+    ) {
+        let predicted_pids: HashSet<u32> = predictions.iter().map(|p| p.pid).collect();
         let mut rows = collect_sorted_rows(world, self.sort_column, self.sort_ascending);
 
         // Apply scroll offset.
@@ -160,6 +192,7 @@ impl OverviewTab {
                 let global_idx = offset + i;
                 let cpu: f32 = cols[2].trim_end_matches('%').parse().unwrap_or(0.0);
                 let fg = palette::color_for_load(cpu);
+                let pid: u32 = cols[0].parse().unwrap_or(0);
 
                 let style = if self.selected_row == Some(global_idx) {
                     Style::default()
@@ -170,7 +203,17 @@ impl OverviewTab {
                     Style::default().fg(fg)
                 };
 
-                Row::new(cols.iter().map(|c| c.as_str()).collect::<Vec<_>>()).style(style)
+                let mut cells: Vec<Cell> =
+                    cols.iter().map(|c| Cell::from(c.as_str())).collect();
+                if predicted_pids.contains(&pid) {
+                    cells.push(
+                        Cell::from("⚠").style(Style::default().fg(Palette::PREDICTION)),
+                    );
+                } else {
+                    cells.push(Cell::from(""));
+                }
+
+                Row::new(cells).style(style)
             })
             .collect();
 
@@ -191,22 +234,24 @@ impl OverviewTab {
         };
 
         let header = Row::new(vec![
-            format!("PID{}", sort_indicator(SortColumn::Pid)),
-            format!("Name{}", sort_indicator(SortColumn::Name)),
-            format!("CPU%{}", sort_indicator(SortColumn::Cpu)),
-            format!("MEM{}", sort_indicator(SortColumn::Mem)),
-            format!("State{}", sort_indicator(SortColumn::State)),
-            format!("HP{}", sort_indicator(SortColumn::Hp)),
+            Cell::from(format!("PID{}", sort_indicator(SortColumn::Pid))),
+            Cell::from(format!("Name{}", sort_indicator(SortColumn::Name))),
+            Cell::from(format!("CPU%{}", sort_indicator(SortColumn::Cpu))),
+            Cell::from(format!("MEM{}", sort_indicator(SortColumn::Mem))),
+            Cell::from(format!("State{}", sort_indicator(SortColumn::State))),
+            Cell::from(format!("HP{}", sort_indicator(SortColumn::Hp))),
+            Cell::from("Pred").style(Style::default().fg(Palette::PREDICTION)),
         ])
         .style(header_style);
 
         let widths = [
-            Constraint::Percentage(10),
-            Constraint::Percentage(30),
+            Constraint::Percentage(9),
+            Constraint::Percentage(26),
+            Constraint::Percentage(11),
+            Constraint::Percentage(16),
+            Constraint::Percentage(13),
+            Constraint::Percentage(13),
             Constraint::Percentage(12),
-            Constraint::Percentage(18),
-            Constraint::Percentage(15),
-            Constraint::Percentage(15),
         ];
 
         let title = format!("Overview [F1] — {} processes", total);
@@ -514,6 +559,63 @@ fn format_state(state: ProcessState) -> String {
     }
 }
 
+/// Render the predictions panel showing anomalies sorted by ETA.
+fn render_predictions_panel(area: Rect, buf: &mut Buffer, predictions: &[PredictionDisplay]) {
+    let mut sorted: Vec<&PredictionDisplay> = predictions.iter().collect();
+    sorted.sort_by(|a, b| {
+        a.eta_seconds
+            .partial_cmp(&b.eta_seconds)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let lines: Vec<Line> = sorted
+        .iter()
+        .take(area.height.saturating_sub(2) as usize) // fit within borders
+        .map(|p| {
+            Line::from(vec![
+                Span::styled("  ⚠ ", Style::default().fg(Palette::PREDICTION)),
+                Span::styled(
+                    format!("{:<16}", p.process_name),
+                    Style::default().fg(Palette::DATA),
+                ),
+                Span::styled(
+                    format!("{:<14}", p.anomaly_label),
+                    Style::default().fg(Palette::WARNING),
+                ),
+                Span::styled(
+                    format!("{:>3.0}%  ", p.confidence * 100.0),
+                    Style::default().fg(Palette::PREDICTION),
+                ),
+                Span::styled(
+                    format!("ETA: {}", format_eta(p.eta_seconds)),
+                    Style::default().fg(Palette::NEON_BLUE),
+                ),
+            ])
+        })
+        .collect();
+
+    let title = format!("Predictions — {} anomalies", predictions.len());
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(Line::from(Span::styled(
+            title,
+            Style::default().fg(Palette::PREDICTION),
+        )))
+        .border_style(Style::default().fg(Palette::PREDICTION));
+
+    let paragraph = Paragraph::new(lines).block(block);
+    Widget::render(paragraph, area, buf);
+}
+
+/// Format ETA seconds into a human-readable string.
+fn format_eta(seconds: f32) -> String {
+    if seconds < 60.0 {
+        format!("{:.0}s", seconds)
+    } else {
+        format!("{:.0}m", seconds / 60.0)
+    }
+}
+
 /// Parse CPU percentage from a formatted string like "12.3%".
 fn parse_cpu(s: &str) -> f32 {
     s.trim_end_matches('%').parse().unwrap_or(0.0)
@@ -702,5 +804,70 @@ mod tests {
     fn test_default_detail_pid_is_none() {
         let tab = OverviewTab::default();
         assert_eq!(tab.detail_pid, None);
+    }
+
+    #[test]
+    fn test_format_eta_seconds() {
+        assert_eq!(format_eta(30.0), "30s");
+        assert_eq!(format_eta(59.9), "60s");
+    }
+
+    #[test]
+    fn test_format_eta_minutes() {
+        assert_eq!(format_eta(60.0), "1m");
+        assert_eq!(format_eta(120.0), "2m");
+    }
+
+    fn make_prediction(pid: u32, name: &str, eta: f32) -> PredictionDisplay {
+        PredictionDisplay {
+            pid,
+            process_name: name.to_string(),
+            anomaly_label: "OOM".to_string(),
+            confidence: 0.85,
+            eta_seconds: eta,
+        }
+    }
+
+    #[test]
+    fn test_render_with_predictions_no_panic() {
+        let tab = OverviewTab::default();
+        let mut world = WorldGraph::new();
+        world.add_process(make_process(1, "proc_a", 50.0, 1024, 80.0));
+
+        let predictions = vec![make_prediction(1, "proc_a", 30.0)];
+
+        let area = Rect::new(0, 0, 80, 24);
+        let mut buf = Buffer::empty(area);
+        tab.render(area, &mut buf, &world, &predictions);
+    }
+
+    #[test]
+    fn test_render_without_predictions_no_panic() {
+        let tab = OverviewTab::default();
+        let mut world = WorldGraph::new();
+        world.add_process(make_process(1, "proc_a", 50.0, 1024, 80.0));
+
+        let area = Rect::new(0, 0, 80, 24);
+        let mut buf = Buffer::empty(area);
+        tab.render(area, &mut buf, &world, &[]);
+    }
+
+    #[test]
+    fn test_render_predictions_panel_sorts_by_eta() {
+        let predictions = vec![
+            make_prediction(2, "slow", 120.0),
+            make_prediction(1, "fast", 10.0),
+            make_prediction(3, "mid", 60.0),
+        ];
+        let area = Rect::new(0, 0, 80, 6);
+        let mut buf = Buffer::empty(area);
+        render_predictions_panel(area, &mut buf, &predictions);
+
+        // First data row (row 1, after top border) should show "fast" (lowest eta).
+        let row1: String = (0..80).map(|x| buf[(x, 1u16)].symbol().to_string()).collect();
+        assert!(
+            row1.contains("fast"),
+            "first prediction row should be sorted by eta (lowest first), got: '{row1}'"
+        );
     }
 }

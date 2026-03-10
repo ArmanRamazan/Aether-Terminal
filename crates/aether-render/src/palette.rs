@@ -38,6 +38,9 @@ impl Palette {
 
     /// Neon Purple for XP / gamification accents — `#BF00FF`.
     pub const XP_PURPLE: Color = Color::Rgb(191, 0, 255);
+
+    /// Prediction Orange for anomaly indicators — `#FF6600`.
+    pub const PREDICTION: Color = Color::Rgb(255, 102, 0);
 }
 
 /// Returns a color that represents the given CPU/memory load percentage.
