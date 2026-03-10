@@ -5,9 +5,14 @@ edition = "2021"
 
 [dependencies]
 aether-core = { path = "../aether-core" }
+arc-swap = "1"
 logos = "0.15"
 cranelift-codegen = "0.129"
 cranelift-frontend = "0.129"
 cranelift-jit = "0.129"
 cranelift-module = "0.129"
+notify = "7"
 thiserror = "2"
+tokio = { version = "1", features = ["sync", "time", "macros", "rt"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+tracing = "0.1"

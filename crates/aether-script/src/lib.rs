@@ -6,4 +6,5 @@
 pub mod ast;
 pub mod codegen;
 pub mod error;
+pub mod hot_reload;
 pub mod runtime;
