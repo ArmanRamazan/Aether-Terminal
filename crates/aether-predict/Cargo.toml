@@ -3,10 +3,15 @@ name = "aether-predict"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+predict = ["tract-onnx"]
+
 [dependencies]
 aether-core = { path = "../aether-core" }
 tokio = { version = "1", features = ["full"] }
 thiserror = "2"
+tract-onnx = { version = "0.21", optional = true }
 
 [dev-dependencies]
 glam = "0.29"
