@@ -9,31 +9,69 @@ Aether-Terminal transforms system observability into a spatial experience. Proce
 
 ## Features
 
-- **3D Visualization** -- Software rasterizer projecting process graphs into Braille subpixels (2x4 per cell). Orbital camera, Phong shading, z-buffer depth testing
-- **eBPF Telemetry** -- Kernel-level event capture: syscalls, TCP connect/close, fork/exec/exit. Ring buffer with zero-copy reads. 100K+ events/sec throughput
-- **Predictive AI** -- On-device ONNX inference engine. Time-series anomaly detection predicts OOM, CPU spikes, and resource exhaustion before they occur
-- **JIT Rule Engine** -- Custom DSL compiled to native code via Cranelift. Write reactive rules like `when process.cpu > 90% for 30s -> alert "thrashing"`. Hot-reload without restart
-- **Real-time Monitoring** -- CPU, memory, network per process. Dual-tick pipeline: 10Hz metrics, 1Hz topology
-- **MCP Integration** -- Built-in MCP server (stdio + SSE). Connect Claude, Gemini, or any MCP-compatible AI agent
-- **Arbiter Mode** -- AI proposes actions, you approve/deny from the terminal. Full audit trail
-- **RPG Gamification** -- Processes have HP (drops on memory leaks, CPU spikes). Earn XP for uptime. Rank up from Novice to Aether Lord
-- **Cyberpunk Aesthetic** -- Neon palette, pulsating nodes, dissolve animations, data flow trails
+| Feature | Status | Description |
+|---------|--------|-------------|
+| Real-time Monitoring | Implemented | CPU, memory, network per process. Dual-tick pipeline: 10Hz metrics, 1Hz topology |
+| 3D Visualization | Implemented | Software rasterizer projecting process graphs into Braille subpixels (2x4 per cell). Orbital camera, Phong shading, z-buffer |
+| TUI Dashboard | Implemented | 4-tab interface: Overview, 3D World, Network, Arbiter. Sparklines, process tables, help overlay |
+| MCP Integration | Implemented | Built-in MCP server (stdio + SSE). Connect Claude, Gemini, or any MCP-compatible AI agent |
+| Arbiter Mode | Implemented | AI proposes actions, you approve/deny from the terminal. Full audit trail |
+| RPG Gamification | Implemented | Processes have HP (drops on memory leaks, CPU spikes). Earn XP for uptime. Rank up from Novice to Aether Lord |
+| Theme System | Implemented | TOML-based color themes. Ships with `cyberpunk` and `matrix` presets |
+| Startup Animation | Implemented | Cinematic boot sequence with phased reveals |
+| Death Animation | Implemented | Dissolve effect when processes terminate |
+| eBPF Telemetry | Planned (MS6) | Kernel-level event capture: syscalls, TCP connect/close, fork/exec/exit. Ring buffer with zero-copy reads |
+| JIT Rule Engine | Planned (MS7) | Custom DSL compiled to native code via Cranelift. Hot-reload without restart |
+| Predictive AI | Planned (MS8) | On-device ONNX inference. Time-series anomaly detection predicts OOM, CPU spikes, and resource exhaustion |
 
 ## Architecture
 
 ```
-aether-terminal (bin)        -- CLI entry point, orchestration
-aether-core (lib)            -- Types, traits, WorldGraph (petgraph)
-aether-ebpf (lib)            -- eBPF programs, ring buffer, kernel telemetry
-aether-ingestion (lib)       -- System metrics (sysinfo fallback, eBPF bridge)
-aether-predict (lib)         -- ONNX inference, time-series models, anomaly prediction
-aether-script (lib)          -- DSL lexer/parser, AST, Cranelift JIT compiler
-aether-render (lib)          -- TUI (ratatui) + 3D engine (glam, Braille)
-aether-mcp (lib)             -- MCP server (stdio + SSE/HTTP)
-aether-gamification (lib)    -- HP, XP, achievements, SQLite persistence
+                         +-------------------+
+                         | aether-terminal   |  CLI entry point
+                         | (bin)             |  orchestrates all crates
+                         +--------+----------+
+                                  |
+                    +-------------+-------------+
+                    |                           |
+              +-----v------+             +------v-----+
+              | aether-core |<-----------+ all crates |
+              | (lib)       |  depend on | depend on  |
+              +-----+------+  core only | core only  |
+                    |                    +------------+
+        +-----------+-----------+
+        |           |           |
+  +-----v---+ +----v----+ +----v--------+
+  | ingestion| | render  | | mcp         |
+  | sysinfo  | | TUI+3D  | | stdio + SSE |
+  +----------+ +---------+ +-------------+
+        |           |           |
+  +-----v---+ +----v----+ +----v--------+
+  | ebpf    | | gamifi- | | predict     |
+  | (Linux) | | cation  | | (ONNX)      |
+  +----------+ +---------+ +-------------+
+                    |
+              +-----v------+
+              | script      |
+              | DSL + JIT   |
+              +-----------+
 ```
 
-Hexagonal architecture: all crates depend on `aether-core`, never on each other. The binary crate wires them together via channels and shared state.
+Hexagonal architecture: all crates depend on `aether-core`, never on each other. The binary crate wires them together via tokio channels and `Arc<RwLock<T>>` shared state.
+
+### Crate Responsibilities
+
+| Crate | Role |
+|-------|------|
+| `aether-terminal` | CLI entry point, wires all crates together |
+| `aether-core` | Domain types, traits (ports), WorldGraph, events |
+| `aether-ingestion` | System metrics via sysinfo, eBPF bridge, dual-tick pipeline |
+| `aether-render` | TUI (ratatui) + 3D software rasterizer (glam, Braille) |
+| `aether-mcp` | MCP server (stdio + SSE), Arbiter queue |
+| `aether-gamification` | HP, XP, achievements, SQLite persistence |
+| `aether-ebpf` | eBPF loader (aya), ring buffer, kernel probes |
+| `aether-script` | DSL lexer (logos), recursive descent parser, Cranelift JIT |
+| `aether-predict` | ONNX inference (tract), feature extraction, anomaly models |
 
 ## Tech Stack
 
@@ -55,23 +93,17 @@ Hexagonal architecture: all crates depend on `aether-core`, never on each other.
 ## Quick Start
 
 ```bash
-# Build (all features)
+# Build
 cargo build --workspace
 
-# Run (with sysinfo fallback, no root required)
+# Run (sysinfo fallback, no root required)
 cargo run -p aether-terminal
-
-# Run with eBPF (Linux only, requires root/CAP_BPF)
-sudo cargo run -p aether-terminal -- --ebpf
 
 # With MCP SSE server (for AI agents)
 cargo run -p aether-terminal -- --mcp-sse 3000
 
 # MCP stdio mode (for Claude Desktop)
 cargo run -p aether-terminal -- --mcp-stdio
-
-# Load custom rules
-cargo run -p aether-terminal -- --rules rules/default.aether
 ```
 
 ## Usage
@@ -80,17 +112,33 @@ cargo run -p aether-terminal -- --rules rules/default.aether
 aether [OPTIONS]
 
 Options:
-  --ebpf                Enable eBPF telemetry (Linux, requires CAP_BPF)
-  --rules <PATH>        Load .aether rule files (JIT-compiled DSL)
-  --predict             Enable predictive anomaly detection
-  --mcp-stdio           Start in MCP stdio transport mode
-  --mcp-sse <PORT>      Start MCP SSE server (default: 3000)
-  --theme <NAME>        Color theme: cyberpunk, matrix (default: cyberpunk)
+  --log-level <LEVEL>   Logging level: trace, debug, info, warn, error (default: info)
+  --mcp-stdio           Start in MCP stdio transport mode (no TUI)
+  --mcp-sse [PORT]      Start MCP SSE server alongside TUI (default: 3000)
   --no-3d               Disable 3D rendering, use 2D tables
   --no-game             Disable gamification layer
-  --log-level <LEVEL>   Logging level (default: info)
+  --theme <NAME>        Color theme name or path to TOML file (default: cyberpunk)
+  --rules <PATH>        Load .aether rule files (JIT-compiled DSL) [planned]
+  --predict             Enable predictive anomaly detection [planned]
+  --ebpf                Enable eBPF telemetry (Linux, requires CAP_BPF) [planned]
   -h, --help            Print help
   -V, --version         Print version
+```
+
+### Examples
+
+```bash
+# Disable 3D rendering for low-resource environments
+cargo run -p aether-terminal -- --no-3d
+
+# Use matrix theme without gamification
+cargo run -p aether-terminal -- --theme matrix --no-game
+
+# Full stack: SSE server + custom theme + debug logging
+cargo run -p aether-terminal -- --mcp-sse 8080 --theme cyberpunk --log-level debug
+
+# Future: eBPF + predictive AI + custom rules
+sudo cargo run -p aether-terminal -- --ebpf --predict --rules rules/default.aether
 ```
 
 ### Keyboard Shortcuts
@@ -143,17 +191,6 @@ rule zombie_reaper {
 }
 ```
 
-## Color Palette
-
-| State | Color | Hex |
-|-------|-------|-----|
-| Background | Deep Space | `#050A0E` |
-| Healthy | Electric Cyan | `#00F0FF` |
-| Warning | Neon Yellow | `#FCEE09` |
-| Critical | Cherry Red | `#FF003C` |
-| Predicted | Neon Orange | `#FF6600` |
-| XP/Rank | Neon Purple | `#BF00FF` |
-
 ## Project Structure
 
 ```
@@ -171,23 +208,16 @@ aether-terminal/
 |   +-- aether-mcp/             (lib: MCP server + transports)
 |   +-- aether-gamification/    (lib: HP, XP, SQLite)
 +-- bpf/                        (eBPF C programs compiled to BPF bytecode)
-|   +-- process_monitor.bpf.c
-|   +-- net_monitor.bpf.c
-|   +-- syscall_monitor.bpf.c
 +-- models/                     (pre-trained ONNX models)
-|   +-- anomaly_detector.onnx
-|   +-- cpu_forecast.onnx
 +-- rules/                      (Aether DSL rule files)
-|   +-- default.aether
-|   +-- docker.aether
++-- assets/
+|   +-- themes/                 (TOML color themes)
 +-- docs/
 |   +-- architecture.md
 |   +-- decisions/              (ADRs)
 |   +-- plans/                  (design + implementation plans)
 +-- tools/
-|   +-- orchestrator/           (automated sprint pipeline)
-+-- assets/
-    +-- themes/                 (TOML color themes)
+    +-- orchestrator/           (automated sprint pipeline)
 ```
 
 ## Development
@@ -204,26 +234,6 @@ cargo clippy --workspace -- -D warnings
 
 # Format
 cargo fmt --check
-
-# Test eBPF programs (Linux, requires root)
-sudo cargo test -p aether-ebpf
-
-# Test JIT compiler
-cargo test -p aether-script
-
-# Test ML inference
-cargo test -p aether-predict
-```
-
-### Automated Sprints
-
-The project includes an AI-powered sprint orchestrator for automated development:
-
-```bash
-cd tools/orchestrator
-python main.py tasks/<sprint>.yaml --dry-run   # preview
-python main.py tasks/<sprint>.yaml             # execute
-python main.py --status                        # check progress
 ```
 
 ## Roadmap
@@ -231,19 +241,17 @@ python main.py --status                        # check progress
 - [x] Product design and architecture
 - [x] CLAUDE.md system for AI agents
 - [x] Orchestrator v3 (lean sprint pipeline)
-- [ ] MS1: Core types + data ingestion
-- [ ] MS2: TUI shell with tabs and sparklines
-- [ ] MS3: 3D software rasterizer
-- [ ] MS4: MCP server + Arbiter Mode
-- [ ] MS5: Gamification, animations, themes
+- [x] MS1: Core types + data ingestion
+- [x] MS2: TUI shell with tabs and sparklines
+- [x] MS3: 3D software rasterizer
+- [x] MS4: MCP server + Arbiter Mode
+- [x] MS5: Gamification, animations, themes
 - [ ] MS6: eBPF telemetry engine
 - [ ] MS7: JIT-compiled rule DSL
 - [ ] MS8: Predictive AI engine
 - [ ] Global leaderboard
 
 ## Technical Complexity
-
-This project combines several deep systems-programming challenges:
 
 | Subsystem | Complexity Domain |
 |-----------|------------------|

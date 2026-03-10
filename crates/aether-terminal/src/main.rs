@@ -13,7 +13,11 @@ use aether_mcp::McpServer;
 use aether_render::tui::app::App;
 
 #[derive(Parser)]
-#[command(name = "aether", version, about = "Cinematic 3D TUI system monitor")]
+#[command(
+    name = "aether",
+    version = env!("CARGO_PKG_VERSION"),
+    about = "Cinematic 3D TUI system monitor"
+)]
 struct Cli {
     /// Logging level (trace, debug, info, warn, error)
     #[arg(long, default_value = "info")]
@@ -26,6 +30,30 @@ struct Cli {
     /// Run MCP SSE server alongside TUI on the given port
     #[arg(long, value_name = "PORT", default_missing_value = "3000", num_args = 0..=1)]
     mcp_sse: Option<u16>,
+
+    /// Disable 3D rendering, use 2D tables
+    #[arg(long)]
+    no_3d: bool,
+
+    /// Disable gamification layer
+    #[arg(long)]
+    no_game: bool,
+
+    /// Color theme name or path to TOML file
+    #[arg(long, default_value = "cyberpunk")]
+    theme: String,
+
+    /// Load .aether rule files (JIT-compiled DSL)
+    #[arg(long, value_name = "PATH")]
+    rules: Option<std::path::PathBuf>,
+
+    /// Enable predictive anomaly detection
+    #[arg(long)]
+    predict: bool,
+
+    /// Enable eBPF telemetry (Linux only, requires CAP_BPF)
+    #[arg(long)]
+    ebpf: bool,
 }
 
 #[tokio::main]
