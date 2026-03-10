@@ -1,0 +1,10 @@
+# Matrix — green-on-black terminal aesthetic.
+
+[colors]
+bg        = "#000000"
+healthy   = "#00FF41"
+neon_blue = "#008F11"
+warning   = "#CCFF00"
+critical  = "#FF0000"
+data      = "#00FF41"
+xp_purple = "#39FF14"
