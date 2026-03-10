@@ -61,6 +61,7 @@ name = "aether-mcp"
 version = "0.1.0"
 dependencies = [
  "aether-core",
+ "aether-predict",
  "axum",
  "glam",
  "http-body-util",

@@ -20,6 +20,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use aether_core::{AgentAction, WorldGraph};
+use aether_predict::models::PredictedAnomaly;
 
 use crate::arbiter::ArbiterQueue;
 
@@ -30,6 +31,7 @@ const TOOL_GET_SYSTEM_TOPOLOGY: &str = "get_system_topology";
 const TOOL_INSPECT_PROCESS: &str = "inspect_process";
 const TOOL_LIST_ANOMALIES: &str = "list_anomalies";
 const TOOL_EXECUTE_ACTION: &str = "execute_action";
+const TOOL_PREDICT_ANOMALIES: &str = "predict_anomalies";
 
 /// MCP server exposing system data as tools for AI agents.
 #[allow(dead_code)]
@@ -37,6 +39,7 @@ pub struct McpServer {
     world: Arc<RwLock<WorldGraph>>,
     arbiter: Arc<Mutex<ArbiterQueue>>,
     action_tx: mpsc::Sender<AgentAction>,
+    predictions: Arc<Mutex<Vec<PredictedAnomaly>>>,
 }
 
 impl McpServer {
@@ -45,11 +48,13 @@ impl McpServer {
         world: Arc<RwLock<WorldGraph>>,
         arbiter: Arc<Mutex<ArbiterQueue>>,
         action_tx: mpsc::Sender<AgentAction>,
+        predictions: Arc<Mutex<Vec<PredictedAnomaly>>>,
     ) -> Self {
         Self {
             world,
             arbiter,
             action_tx,
+            predictions,
         }
     }
 
@@ -123,6 +128,11 @@ pub(crate) fn tool_definitions() -> Vec<Tool> {
             "Submit an action for human approval via the Arbiter queue",
             action_schema(),
         ),
+        Tool::new(
+            TOOL_PREDICT_ANOMALIES,
+            "Get AI-predicted anomalies with confidence scores and ETAs",
+            empty_schema(),
+        ),
     ]
 }
 
@@ -189,6 +199,12 @@ pub(crate) fn dispatch_tool(
                 Err(msg) => Ok(CallToolResult::error(vec![Content::text(msg)])),
             }
         }
+        TOOL_PREDICT_ANOMALIES => {
+            let result = crate::tools::predict_anomalies(&server.predictions);
+            Ok(CallToolResult::success(vec![Content::text(
+                result.to_string(),
+            )]))
+        }
         other => Err(RmcpError::new(
             rmcp::model::ErrorCode::METHOD_NOT_FOUND,
             format!("unknown tool: {other}"),
@@ -244,7 +260,8 @@ mod tests {
         let world = Arc::new(RwLock::new(WorldGraph::new()));
         let arbiter = Arc::new(Mutex::new(ArbiterQueue::default()));
         let (action_tx, _rx) = mpsc::channel(16);
-        McpServer::new(world, arbiter, action_tx)
+        let predictions = Arc::new(Mutex::new(Vec::new()));
+        McpServer::new(world, arbiter, action_tx, predictions)
     }
 
     fn make_call(name: &'static str) -> CallToolRequestParams {
@@ -263,14 +280,15 @@ mod tests {
     }
 
     #[test]
-    fn test_tool_list_includes_all_four_tools() {
+    fn test_tool_list_includes_all_tools() {
         let tools = tool_definitions();
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
-        assert_eq!(names.len(), 4);
+        assert_eq!(names.len(), 5);
         assert!(names.contains(&"get_system_topology"));
         assert!(names.contains(&"inspect_process"));
         assert!(names.contains(&"list_anomalies"));
         assert!(names.contains(&"execute_action"));
+        assert!(names.contains(&"predict_anomalies"));
     }
 
     #[test]

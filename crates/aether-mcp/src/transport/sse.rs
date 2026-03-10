@@ -203,7 +203,8 @@ mod tests {
         let world = Arc::new(RwLock::new(WorldGraph::new()));
         let arbiter = Arc::new(Mutex::new(ArbiterQueue::default()));
         let (action_tx, _rx) = mpsc::channel::<AgentAction>(16);
-        let server = McpServer::new(Arc::clone(&world), arbiter, action_tx);
+        let predictions = Arc::new(Mutex::new(Vec::new()));
+        let server = McpServer::new(Arc::clone(&world), arbiter, action_tx, predictions);
         let cancel = CancellationToken::new();
         super::Arc::new(super::SseState {
             server,
@@ -272,7 +273,7 @@ mod tests {
         let tools = json["result"]["tools"]
             .as_array()
             .expect("tools array");
-        assert_eq!(tools.len(), 4, "expected 4 tools");
+        assert_eq!(tools.len(), 5, "expected 5 tools");
     }
 
     #[tokio::test]

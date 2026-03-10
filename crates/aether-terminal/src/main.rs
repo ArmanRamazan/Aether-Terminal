@@ -11,8 +11,11 @@ use aether_ingestion::pipeline::IngestionPipeline;
 use aether_ingestion::sysinfo_probe::SysinfoProbe;
 use aether_mcp::arbiter::ArbiterQueue;
 use aether_mcp::McpServer;
+use aether_predict::engine::{PredictConfig, PredictEngine};
+use aether_predict::models::PredictedAnomaly;
 use aether_render::tui::app::App;
 use aether_render::tui::rules::RulesDisplayState;
+use aether_render::PredictionDisplay;
 use aether_script::engine::ScriptEngine;
 use aether_script::hot_reload::HotReloader;
 use aether_script::runtime::{CompiledRuleSet, RuleAction};
@@ -55,6 +58,10 @@ struct Cli {
     /// Enable predictive anomaly detection
     #[arg(long)]
     predict: bool,
+
+    /// Path to directory containing ONNX model files
+    #[arg(long, value_name = "PATH")]
+    model_path: Option<std::path::PathBuf>,
 
     /// Enable eBPF telemetry (Linux only, requires CAP_BPF)
     #[arg(long)]
@@ -197,6 +204,53 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    // Shared predictions state (populated by PredictEngine, read by MCP + render)
+    let predictions: Arc<Mutex<Vec<PredictedAnomaly>>> = Arc::new(Mutex::new(Vec::new()));
+
+    // Spawn prediction engine if --predict flag is set
+    if cli.predict {
+        let mut config = PredictConfig::default();
+        if let Some(ref path) = cli.model_path {
+            config.model_path = path.clone();
+        }
+
+        let (pred_tx, mut pred_rx) = tokio::sync::mpsc::channel::<PredictedAnomaly>(64);
+        let mut engine = PredictEngine::new(config, pred_tx);
+        let predict_world = Arc::clone(&world);
+        let predict_cancel = cancel.child_token();
+        tokio::spawn(async move {
+            engine.run(predict_world, predict_cancel).await;
+        });
+
+        // Spawn prediction collector: drains predictions into shared state
+        let collector_predictions = Arc::clone(&predictions);
+        let collector_cancel = cancel.child_token();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = collector_cancel.cancelled() => break,
+                    prediction = pred_rx.recv() => {
+                        match prediction {
+                            Some(p) => {
+                                if let Ok(mut preds) = collector_predictions.lock() {
+                                    // Keep only latest predictions, cap at 50
+                                    preds.push(p);
+                                    if preds.len() > 50 {
+                                        let excess = preds.len() - 50;
+                                        preds.drain(..excess);
+                                    }
+                                }
+                            }
+                            None => break,
+                        }
+                    }
+                }
+            }
+        });
+
+        tracing::info!("prediction engine enabled");
+    }
+
     // Mode handling
     if cli.mcp_stdio {
         // Stdio MCP mode: no TUI, no crossterm
@@ -205,6 +259,7 @@ async fn main() -> anyhow::Result<()> {
             Arc::clone(&world),
             Arc::clone(&arbiter),
             action_tx,
+            Arc::clone(&predictions),
         );
         let result = mcp.run_stdio(cancel.child_token()).await;
         cancel.cancel();
@@ -218,6 +273,7 @@ async fn main() -> anyhow::Result<()> {
             Arc::clone(&world),
             Arc::clone(&arbiter),
             action_tx,
+            Arc::clone(&predictions),
         );
         let sse_cancel = cancel.child_token();
         tokio::spawn(async move {
@@ -239,6 +295,40 @@ async fn main() -> anyhow::Result<()> {
     if cli.rules.is_some() {
         app.set_rules_display_state(Arc::clone(&rules_display));
     }
+
+    // Feed predictions into the TUI app on a timer
+    if cli.predict {
+        let render_predictions = Arc::clone(&predictions);
+        let render_cancel = cancel.child_token();
+        let app_predictions = Arc::new(Mutex::new(Vec::<PredictionDisplay>::new()));
+        let app_predictions_writer = Arc::clone(&app_predictions);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+            loop {
+                tokio::select! {
+                    _ = render_cancel.cancelled() => break,
+                    _ = interval.tick() => {
+                        if let Ok(preds) = render_predictions.lock() {
+                            let displays: Vec<PredictionDisplay> = preds.iter().map(|p| {
+                                PredictionDisplay {
+                                    pid: p.pid,
+                                    process_name: p.process_name.clone(),
+                                    anomaly_label: format!("{:?}", p.anomaly_type),
+                                    confidence: p.confidence,
+                                    eta_seconds: p.eta_seconds,
+                                }
+                            }).collect();
+                            if let Ok(mut ap) = app_predictions_writer.lock() {
+                                *ap = displays;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        app.set_predictions_source(app_predictions);
+    }
+
     let result = app.run(&mut terminal).await;
 
     // Cleanup: always restore terminal

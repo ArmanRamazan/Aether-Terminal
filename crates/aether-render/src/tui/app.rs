@@ -1,7 +1,7 @@
 //! TUI application struct and main event loop.
 
 use std::collections::HashSet;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyEvent};
@@ -98,6 +98,8 @@ pub struct App {
     startup: StartupAnimation,
     /// Active anomaly predictions for visualization.
     predictions: Vec<PredictionDisplay>,
+    /// External source of predictions, polled each tick.
+    predictions_source: Option<Arc<Mutex<Vec<PredictionDisplay>>>>,
 }
 
 impl App {
@@ -120,12 +122,18 @@ impl App {
             help: HelpOverlay::default(),
             startup: StartupAnimation::new(),
             predictions: Vec::new(),
+            predictions_source: None,
         }
     }
 
     /// Replace the current predictions for visualization.
     pub fn set_predictions(&mut self, predictions: Vec<PredictionDisplay>) {
         self.predictions = predictions;
+    }
+
+    /// Set an external predictions source to poll each frame.
+    pub fn set_predictions_source(&mut self, source: Arc<Mutex<Vec<PredictionDisplay>>>) {
+        self.predictions_source = Some(source);
     }
 
     /// Run the main event loop until the user quits.
@@ -167,6 +175,12 @@ impl App {
                 if let Ok(world) = self.world.read() {
                     self.sparklines.update(&world);
                     self.network.update(&world);
+                }
+                // Poll predictions from external source
+                if let Some(ref source) = self.predictions_source {
+                    if let Ok(preds) = source.lock() {
+                        self.predictions = preds.clone();
+                    }
                 }
             }
 
