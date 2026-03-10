@@ -12,18 +12,35 @@
 
 ## Milestone Map
 
+> **Progress** (updated 2026-03-10): MS1-MS4 complete, MS5 partial, MS6-MS8 pending.
+
 ```
-MS1: Foundation (core + ingestion)     ████░░░░░░░░░░░░░░░░ 12%
-MS2: TUI Shell (render basics)         ██████░░░░░░░░░░░░░░ 25%
-MS3: 3D Engine (rasterizer)            ██████████░░░░░░░░░░ 38%
-MS4: AI Bridge (MCP)                   ████████████░░░░░░░░ 50%
-MS5: Gamification & Polish             ██████████████░░░░░░ 62%
-MS6: eBPF Telemetry Engine             ████████████████░░░░ 75%
-MS7: JIT-Compiled Rule DSL             ██████████████████░░ 88%
-MS8: Predictive AI Engine              ████████████████████ 100%
+MS1: Foundation (core + ingestion)     ████████████████████ DONE
+MS2: TUI Shell (render basics)         ████████████████████ DONE
+MS3: 3D Engine (rasterizer)            ████████████████████ DONE
+MS4: AI Bridge (MCP)                   ████████████████████ DONE
+MS5: Gamification & Polish             ██████████████░░░░░░ 70% (HP/XP/persistence done, polish pending)
+MS6: eBPF Telemetry Engine             ░░░░░░░░░░░░░░░░░░░░ TODO
+MS7: JIT-Compiled Rule DSL             ░░░░░░░░░░░░░░░░░░░░ TODO
+MS8: Predictive AI Engine              ░░░░░░░░░░░░░░░░░░░░ TODO
 ```
 
 Each milestone has checkpoints that produce a working binary. You can demo at any checkpoint.
+
+### Sprint YAML Status
+
+Completed sprints (in `tools/orchestrator/tasks/done/`):
+- MS1: ms1-workspace-setup, ms1-ingestion, ms1-ingestion-sysinfo
+- MS2: ms2-tui-framework, ms2-overview-tab, ms2-vim-navigation, ms2-network-tab
+- MS3: ms3-3d-math, ms3-rasterizer, ms3-graph-layout, ms3-scene-renderer, ms3-visual-effects
+- MS4: ms4-mcp-server, ms4-mcp-tools, ms4-arbiter
+- MS5: ms5-hp-xp, ms5-persistence
+
+Remaining sprints (in `tools/orchestrator/tasks/`):
+- MS5: ms5-polish
+- MS6: ms6-ebpf-foundation, ms6-ebpf-integration
+- MS7: ms7-lexer-parser, ms7-type-checker, ms7-cranelift-jit, ms7-hot-reload
+- MS8: ms8-features, ms8-inference, ms8-predict-integration
 
 ---
 
