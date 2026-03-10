@@ -17,6 +17,7 @@ use super::help::HelpOverlay;
 use super::input::{InputAction, InputHandler, InputMode};
 use super::network::NetworkTab;
 use super::overview::OverviewTab;
+use super::rules::{RulesKeyResult, RulesTab};
 use super::widgets::sparklines::SystemSparklines;
 use super::world3d::{KeyResult, World3DTab};
 
@@ -32,11 +33,19 @@ pub enum Tab {
     Network,
     /// F4: AI action approval panel.
     Arbiter,
+    /// F5: JIT rule engine monitor.
+    Rules,
 }
 
 impl Tab {
     /// All tabs in display order.
-    pub(crate) const ALL: [Tab; 4] = [Tab::Overview, Tab::World3D, Tab::Network, Tab::Arbiter];
+    pub(crate) const ALL: [Tab; 5] = [
+        Tab::Overview,
+        Tab::World3D,
+        Tab::Network,
+        Tab::Arbiter,
+        Tab::Rules,
+    ];
 
     /// Human-readable label for the tab bar.
     pub fn label(self) -> &'static str {
@@ -45,6 +54,7 @@ impl Tab {
             Tab::World3D => "World 3D [F2]",
             Tab::Network => "Network [F3]",
             Tab::Arbiter => "Arbiter [F4]",
+            Tab::Rules => "Rules [F5]",
         }
     }
 }
@@ -70,6 +80,8 @@ pub struct App {
     network: NetworkTab,
     /// State for the Arbiter (F4) tab.
     arbiter: ArbiterTab,
+    /// State for the Rules (F5) tab.
+    rules: RulesTab,
     /// When `true`, next key press selects a sort column.
     sort_pending: bool,
     /// Rolling sparkline history for the Overview tab.
@@ -96,6 +108,7 @@ impl App {
             world3d: World3DTab::default(),
             network: NetworkTab::default(),
             arbiter: ArbiterTab::default(),
+            rules: RulesTab::default(),
             sort_pending: false,
             sparklines: SystemSparklines::default(),
             sparkline_tick: 0,
@@ -186,6 +199,15 @@ impl App {
                 }
                 KeyResult::NotConsumed => {}
             }
+        }
+
+        // Rules tab-specific keys (j/k) are intercepted before the global
+        // InputHandler to avoid conflicts.
+        if self.current_tab == Tab::Rules
+            && self.input.mode() == InputMode::Normal
+            && self.rules.handle_key(key.code) == RulesKeyResult::Consumed
+        {
+            return;
         }
 
         // Arbiter tab-specific keys (Y/N/I, j/k) are intercepted before
@@ -385,7 +407,19 @@ impl App {
                 let buf = frame.buffer_mut();
                 self.arbiter.render(area, buf);
             }
+            Tab::Rules => {
+                let buf = frame.buffer_mut();
+                self.rules.render(area, buf);
+            }
         }
+    }
+
+    /// Set the shared rules display state for the Rules tab.
+    pub fn set_rules_display_state(
+        &mut self,
+        state: std::sync::Arc<std::sync::Mutex<super::rules::RulesDisplayState>>,
+    ) {
+        self.rules.set_display_state(state);
     }
 }
 
@@ -446,6 +480,9 @@ mod tests {
 
         app.handle_key(KeyEvent::new(KeyCode::F(4), KeyModifiers::NONE));
         assert_eq!(app.current_tab, Tab::Arbiter);
+
+        app.handle_key(KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE));
+        assert_eq!(app.current_tab, Tab::Rules);
 
         app.handle_key(KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE));
         assert_eq!(app.current_tab, Tab::Overview);

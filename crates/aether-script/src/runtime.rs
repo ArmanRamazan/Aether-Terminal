@@ -145,6 +145,11 @@ impl CompiledRuleSet {
         actions
     }
 
+    /// Names of all compiled rules.
+    pub fn rule_names(&self) -> Vec<String> {
+        self.rules.iter().map(|(r, _)| r.name.clone()).collect()
+    }
+
     /// Evaluate rules using an external duration tracker.
     ///
     /// Same as [`evaluate`](Self::evaluate) but uses the provided tracker instead

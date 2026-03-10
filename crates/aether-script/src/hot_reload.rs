@@ -35,6 +35,11 @@ impl HotReloader {
         }
     }
 
+    /// Shared handle to the compiled ruleset (for ScriptEngine and display).
+    pub fn rules(&self) -> Arc<ArcSwap<CompiledRuleSet>> {
+        Arc::clone(&self.rules)
+    }
+
     /// Get the currently active compiled ruleset.
     pub fn current_rules(&self) -> Guard<Arc<CompiledRuleSet>> {
         self.rules.load()

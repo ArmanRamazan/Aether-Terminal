@@ -124,6 +124,7 @@ dependencies = [
  "aether-render",
  "aether-script",
  "anyhow",
+ "arc-swap",
  "clap",
  "crossterm",
  "ratatui",

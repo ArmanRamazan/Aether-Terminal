@@ -12,6 +12,10 @@ use aether_ingestion::sysinfo_probe::SysinfoProbe;
 use aether_mcp::arbiter::ArbiterQueue;
 use aether_mcp::McpServer;
 use aether_render::tui::app::App;
+use aether_render::tui::rules::RulesDisplayState;
+use aether_script::engine::ScriptEngine;
+use aether_script::hot_reload::HotReloader;
+use aether_script::runtime::{CompiledRuleSet, RuleAction};
 
 #[derive(Parser)]
 #[command(
@@ -106,7 +110,20 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    // Spawn graph updater: SystemEvent → WorldGraph
+    // Rules engine setup (before graph updater so we can share the event stream)
+    let rules_display = Arc::new(Mutex::new(RulesDisplayState::default()));
+    let engine_event_tx = if let Some(ref rules_path) = cli.rules {
+        Some(init_rules_engine(
+            rules_path,
+            &cancel,
+            Arc::clone(&arbiter),
+            Arc::clone(&rules_display),
+        )?)
+    } else {
+        None
+    };
+
+    // Spawn graph updater: SystemEvent → WorldGraph (+ forward to engine if active)
     let updater_world = Arc::clone(&world);
     let updater_cancel = cancel.child_token();
     tokio::spawn(async move {
@@ -116,6 +133,12 @@ async fn main() -> anyhow::Result<()> {
                 event = event_rx.recv() => {
                     match event {
                         Some(SystemEvent::MetricsUpdate { snapshot }) => {
+                            // Forward to engine before consuming snapshot
+                            if let Some(ref tx) = engine_event_tx {
+                                let _ = tx.try_send(SystemEvent::MetricsUpdate {
+                                    snapshot: snapshot.clone(),
+                                });
+                            }
                             if let Ok(mut graph) = updater_world.write() {
                                 graph.apply_snapshot(&snapshot);
                             }
@@ -213,6 +236,9 @@ async fn main() -> anyhow::Result<()> {
 
     // Run TUI app
     let mut app = App::new(Arc::clone(&world));
+    if cli.rules.is_some() {
+        app.set_rules_display_state(Arc::clone(&rules_display));
+    }
     let result = app.run(&mut terminal).await;
 
     // Cleanup: always restore terminal
@@ -226,6 +252,88 @@ async fn main() -> anyhow::Result<()> {
     cancel.cancel();
 
     result.map_err(Into::into)
+}
+
+/// Initialize the JIT rule engine. Returns the event sender that the graph
+/// updater should use to forward `MetricsUpdate` events to the engine.
+fn init_rules_engine(
+    rules_path: &std::path::Path,
+    cancel: &CancellationToken,
+    arbiter: Arc<Mutex<ArbiterQueue>>,
+    display: Arc<Mutex<RulesDisplayState>>,
+) -> anyhow::Result<mpsc::Sender<SystemEvent>> {
+    // Load rule file (parsing is a TODO — compile empty set if parser unavailable)
+    let _content = std::fs::read_to_string(rules_path)?;
+    // TODO: connect lexer → parser → type-checker pipeline
+    // For now, compile an empty ruleset so the infrastructure works end-to-end.
+    let rules: Vec<aether_script::ast::Rule> = Vec::new();
+    tracing::warn!("rule parser not yet connected — loaded 0 rules from {}", rules_path.display());
+    let compiled = CompiledRuleSet::compile(&rules)?;
+
+    // Populate initial display state
+    let names = compiled.rule_names();
+    if let Ok(mut ds) = display.lock() {
+        ds.rule_names.clone_from(&names);
+        ds.match_counts = vec![0; names.len()];
+    }
+
+    // Create hot-reloader (owns Arc<ArcSwap<CompiledRuleSet>>)
+    let reloader = HotReloader::new(compiled, vec![rules_path.to_path_buf()]);
+    let shared_rules = reloader.rules();
+
+    // Spawn hot-reload watcher
+    let reload_cancel = cancel.child_token();
+    tokio::spawn(async move {
+        reloader.watch(reload_cancel).await;
+    });
+
+    // Create ScriptEngine with action channel
+    let (rule_action_tx, mut rule_action_rx) = mpsc::channel::<RuleAction>(128);
+    let mut engine = ScriptEngine::new(shared_rules, rule_action_tx);
+
+    // Engine event channel (graph updater forwards MetricsUpdate here)
+    let (engine_event_tx, engine_event_rx) = mpsc::channel::<SystemEvent>(256);
+
+    // Spawn engine task
+    let engine_cancel = cancel.child_token();
+    tokio::spawn(async move {
+        engine.run(engine_event_rx, engine_cancel).await;
+    });
+
+    // Spawn action forwarder: RuleAction → display state update + arbiter queue
+    let forwarder_cancel = cancel.child_token();
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                _ = forwarder_cancel.cancelled() => break,
+                Some(action) = rule_action_rx.recv() => {
+                    // Update display state
+                    if let Ok(mut ds) = display.lock() {
+                        ds.total_actions += 1;
+                        if let Some(idx) = ds.rule_names.iter().position(|n| n == &action.rule_name) {
+                            if let Some(count) = ds.match_counts.get_mut(idx) {
+                                *count += 1;
+                            }
+                        }
+                    }
+
+                    // Submit to arbiter as CustomScript action
+                    let agent_action = AgentAction::CustomScript {
+                        command: format!(
+                            "rule:{} action:{} pid:{} sev:{}",
+                            action.rule_name, action.action, action.target_pid, action.severity
+                        ),
+                    };
+                    if let Ok(mut q) = arbiter.lock() {
+                        q.submit("RuleEngine".into(), agent_action);
+                    }
+                }
+            }
+        }
+    });
+
+    tracing::info!("rules engine initialized from {}", rules_path.display());
+    Ok(engine_event_tx)
 }
 
 /// Execute an approved agent action.
