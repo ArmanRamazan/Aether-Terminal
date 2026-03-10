@@ -2,3 +2,12 @@
 //!
 //! Uses aya (pure-Rust BPF loader) to attach kernel probes and read events from
 //! ring buffers. Feature-gated behind `ebpf` — compiles as no-op without it.
+
+pub mod error;
+pub mod events;
+
+#[cfg(all(target_os = "linux", feature = "ebpf"))]
+pub mod loader;
+
+pub use error::EbpfError;
+pub use events::{ProcessExitEvent, ProcessForkEvent};

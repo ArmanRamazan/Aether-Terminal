@@ -3,7 +3,14 @@ name = "aether-ebpf"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+ebpf = ["dep:aya", "dep:aya-log"]
+
 [dependencies]
 aether-core = { path = "../aether-core" }
 tokio = { version = "1", features = ["full"] }
 thiserror = "2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+aya = { version = "0.13", optional = true }
+aya-log = { version = "0.2", optional = true }
