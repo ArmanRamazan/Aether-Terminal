@@ -589,7 +589,10 @@ mod tests {
         let mut tab = World3DTab::new();
         tab.selected_pid = Some(42);
 
-        assert_eq!(tab.handle_key(KeyCode::Char('i')), KeyResult::InspectNode(42));
+        assert_eq!(
+            tab.handle_key(KeyCode::Char('i')),
+            KeyResult::InspectNode(42)
+        );
     }
 
     #[test]

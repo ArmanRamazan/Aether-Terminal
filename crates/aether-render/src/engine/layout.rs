@@ -67,6 +67,11 @@ impl ForceLayout {
         self.positions.values().copied().collect()
     }
 
+    /// Returns all PIDs currently in the layout.
+    pub fn pids(&self) -> impl Iterator<Item = u32> + '_ {
+        self.positions.keys().copied()
+    }
+
     /// Synchronises layout state with the graph: adds new pids, removes dead ones.
     pub fn sync_with_graph(&mut self, graph: &WorldGraph) {
         let live_pids: Vec<u32> = graph.processes().map(|p| p.pid).collect();

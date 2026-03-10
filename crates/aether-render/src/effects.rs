@@ -2,6 +2,12 @@
 //!
 //! CPU-load-driven pulsation makes active processes "breathe" —
 //! their radius oscillates sinusoidally proportional to load.
+//! Death dissolve fades removed processes out over 500ms.
+
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
+
+use glam::Vec3;
 
 /// Sinusoidal pulsation effect driven by CPU load.
 ///
@@ -83,6 +89,69 @@ impl Default for FlowEffect {
     }
 }
 
+/// Per-node state for the death dissolve animation.
+pub(crate) struct DeathState {
+    start_time: Instant,
+    /// World-space position at the moment of death.
+    pub(crate) original_position: Vec3,
+    duration: Duration,
+}
+
+/// Dissolve animation for removed processes.
+///
+/// When a PID disappears from the graph, it is registered here and rendered
+/// with scattered pixel offsets and color fade for `duration` before being
+/// fully removed.
+pub(crate) struct DeathEffect {
+    dying_nodes: HashMap<u32, DeathState>,
+}
+
+impl DeathEffect {
+    /// Create an empty death effect with no dying nodes.
+    pub(crate) fn new() -> Self {
+        Self {
+            dying_nodes: HashMap::new(),
+        }
+    }
+
+    /// Register a process as dying at the given world position.
+    pub(crate) fn mark_dying(&mut self, pid: u32, position: Vec3) {
+        self.dying_nodes.entry(pid).or_insert(DeathState {
+            start_time: Instant::now(),
+            original_position: position,
+            duration: Duration::from_millis(500),
+        });
+    }
+
+    /// Remove completed animations. Call once per frame.
+    pub(crate) fn update(&mut self) {
+        let now = Instant::now();
+        self.dying_nodes
+            .retain(|_, state| now.duration_since(state.start_time) < state.duration);
+    }
+
+    /// Animation progress for a dying node: `0.0` (just died) to `1.0` (fully gone).
+    ///
+    /// Returns `None` if the pid is not dying.
+    pub(crate) fn is_dying(&self, pid: u32) -> Option<f32> {
+        let state = self.dying_nodes.get(&pid)?;
+        let elapsed = state.start_time.elapsed().as_secs_f32();
+        let total = state.duration.as_secs_f32();
+        Some((elapsed / total).min(1.0))
+    }
+
+    /// Iterate over all currently dying nodes.
+    pub(crate) fn dying_pids(&self) -> impl Iterator<Item = (u32, &DeathState)> {
+        self.dying_nodes.iter().map(|(&pid, state)| (pid, state))
+    }
+}
+
+impl Default for DeathEffect {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,11 +183,13 @@ mod tests {
         let amplitude = 0.3 * base; // 100% CPU → 30% amplitude
         assert!(
             min_r >= base - amplitude - 0.01,
-            "min radius {min_r} below expected {}", base - amplitude
+            "min radius {min_r} below expected {}",
+            base - amplitude
         );
         assert!(
             max_r <= base + amplitude + 0.01,
-            "max radius {max_r} above expected {}", base + amplitude
+            "max radius {max_r} above expected {}",
+            base + amplitude
         );
     }
 
@@ -167,7 +238,10 @@ mod tests {
         let mut effect = FlowEffect::new();
         effect.update(1.5);
         let pos = effect.flow_dot_position(5_000_000);
-        assert!((0.0..1.0).contains(&pos), "position {pos} should be in 0.0..1.0");
+        assert!(
+            (0.0..1.0).contains(&pos),
+            "position {pos} should be in 0.0..1.0"
+        );
     }
 
     #[test]
@@ -195,5 +269,67 @@ mod tests {
             (at_cap - above_cap).abs() < f32::EPSILON,
             "above-cap {above_cap} should equal at-cap {at_cap}"
         );
+    }
+
+    #[test]
+    fn test_death_mark_dying_returns_progress() {
+        let mut effect = DeathEffect::new();
+        effect.mark_dying(42, Vec3::ZERO);
+        let progress = effect.is_dying(42);
+        assert!(progress.is_some(), "marked pid should be dying");
+        let p = progress.expect("checked above");
+        assert!(p >= 0.0 && p <= 1.0, "progress {p} should be in 0.0..1.0");
+    }
+
+    #[test]
+    fn test_death_unknown_pid_returns_none() {
+        let effect = DeathEffect::new();
+        assert!(
+            effect.is_dying(999).is_none(),
+            "unknown pid should not be dying"
+        );
+    }
+
+    #[test]
+    fn test_death_mark_dying_idempotent() {
+        let mut effect = DeathEffect::new();
+        effect.mark_dying(1, Vec3::new(1.0, 2.0, 3.0));
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        // Second call should not reset the timer.
+        effect.mark_dying(1, Vec3::new(9.0, 9.0, 9.0));
+        let state = &effect.dying_nodes[&1];
+        assert!(
+            (state.original_position - Vec3::new(1.0, 2.0, 3.0)).length() < f32::EPSILON,
+            "second mark_dying should not overwrite original position"
+        );
+    }
+
+    #[test]
+    fn test_death_update_removes_expired() {
+        let mut effect = DeathEffect::new();
+        effect.dying_nodes.insert(
+            1,
+            DeathState {
+                start_time: Instant::now() - Duration::from_secs(1),
+                original_position: Vec3::ZERO,
+                duration: Duration::from_millis(500),
+            },
+        );
+        effect.update();
+        assert!(
+            effect.is_dying(1).is_none(),
+            "expired animation should be removed"
+        );
+    }
+
+    #[test]
+    fn test_death_dying_pids_iterates_all() {
+        let mut effect = DeathEffect::new();
+        effect.mark_dying(1, Vec3::X);
+        effect.mark_dying(2, Vec3::Y);
+        let pids: Vec<u32> = effect.dying_pids().map(|(pid, _)| pid).collect();
+        assert_eq!(pids.len(), 2, "should have 2 dying pids");
+        assert!(pids.contains(&1));
+        assert!(pids.contains(&2));
     }
 }

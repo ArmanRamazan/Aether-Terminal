@@ -8,7 +8,7 @@ use aether_core::graph::WorldGraph;
 use aether_core::models::ProcessState;
 
 use crate::braille::BrailleCanvas;
-use crate::effects::{FlowEffect, PulseEffect};
+use crate::effects::{DeathEffect, FlowEffect, PulseEffect};
 use crate::engine::camera::OrbitalCamera;
 use crate::engine::layout::ForceLayout;
 use crate::engine::projection::{project_point, ScreenPoint};
@@ -37,9 +37,11 @@ const ZOMBIE_FLICKER_PERIOD: f32 = 0.5;
 /// Average two colors channel-by-channel.
 fn blend_colors(c1: Color, c2: Color) -> Color {
     match (c1, c2) {
-        (Color::Rgb(r1, g1, b1), Color::Rgb(r2, g2, b2)) => {
-            Color::Rgb((r1 / 2) + (r2 / 2), (g1 / 2) + (g2 / 2), (b1 / 2) + (b2 / 2))
-        }
+        (Color::Rgb(r1, g1, b1), Color::Rgb(r2, g2, b2)) => Color::Rgb(
+            (r1 / 2) + (r2 / 2),
+            (g1 / 2) + (g2 / 2),
+            (b1 / 2) + (b2 / 2),
+        ),
         _ => c1,
     }
 }
@@ -66,6 +68,7 @@ pub struct SceneRenderer {
     zbuffer: ZBuffer,
     pulse: PulseEffect,
     flow: FlowEffect,
+    death: DeathEffect,
 }
 
 impl SceneRenderer {
@@ -80,6 +83,7 @@ impl SceneRenderer {
             zbuffer,
             pulse: PulseEffect::new(),
             flow: FlowEffect::new(),
+            death: DeathEffect::new(),
         }
     }
 
@@ -102,6 +106,11 @@ impl SceneRenderer {
 
         self.pulse.update(dt);
         self.flow.update(dt);
+
+        // Detect removed PIDs before layout sync erases them.
+        self.detect_deaths(graph);
+        self.death.update();
+
         self.layout.sync_with_graph(graph);
         self.layout.step(graph);
 
@@ -120,6 +129,7 @@ impl SceneRenderer {
 
         self.render_edges(graph, &view, &proj, screen_w, screen_h);
         self.render_nodes(graph, &view, &proj, screen_w, screen_h);
+        self.render_dying_nodes(&view, &proj, screen_w, screen_h);
 
         self.canvas.to_lines()
     }
@@ -251,10 +261,117 @@ impl SceneRenderer {
             // Critical bloom: outer circle with dimmed color.
             if node.hp < CRITICAL_HP_THRESHOLD {
                 let bloom_color = dim_color(Palette::CRITICAL);
-                self.render_shaded_circle(screen_pt, radius + BLOOM_RADIUS_OFFSET, bloom_color, light);
+                self.render_shaded_circle(
+                    screen_pt,
+                    radius + BLOOM_RADIUS_OFFSET,
+                    bloom_color,
+                    light,
+                );
             }
 
             self.render_shaded_circle(screen_pt, radius, base_color, light);
+        }
+    }
+
+    /// Detect PIDs present in the layout but absent from the graph, and mark them dying.
+    fn detect_deaths(&mut self, graph: &WorldGraph) {
+        let live_pids: std::collections::HashSet<u32> = graph.processes().map(|p| p.pid).collect();
+
+        let dead: Vec<(u32, Vec3)> = self
+            .layout
+            .pids()
+            .filter(|pid| !live_pids.contains(pid))
+            .filter_map(|pid| {
+                let pos = self.layout.get_position(pid)?;
+                Some((pid, pos))
+            })
+            .collect();
+
+        for (pid, pos) in dead {
+            self.death.mark_dying(pid, pos);
+        }
+    }
+
+    /// Render dying nodes as dissolving scattered circles that fade to background.
+    fn render_dying_nodes(
+        &mut self,
+        view: &glam::Mat4,
+        proj: &glam::Mat4,
+        screen_w: u32,
+        screen_h: u32,
+    ) {
+        let dying: Vec<(u32, Vec3, f32)> = self
+            .death
+            .dying_pids()
+            .filter_map(|(pid, state)| {
+                let progress = self.death.is_dying(pid)?;
+                Some((pid, state.original_position, progress))
+            })
+            .collect();
+
+        let light = LIGHT_DIR.normalize();
+
+        for (_pid, world_pos, progress) in dying {
+            let Some(screen_pt) = project_point(world_pos, view, proj, screen_w, screen_h) else {
+                continue;
+            };
+
+            let base_radius = depth_to_radius(screen_pt.depth);
+            // Shrink as the animation progresses.
+            let radius = base_radius * (1.0 - progress);
+            if radius < 0.5 {
+                continue;
+            }
+
+            let faded_color = lerp_color_to_bg(Palette::CRITICAL, progress);
+            self.render_scattered_circle(screen_pt, radius, faded_color, light, progress);
+        }
+    }
+
+    /// Draw a dissolving circle with pixel scatter proportional to `progress`.
+    fn render_scattered_circle(
+        &mut self,
+        center: ScreenPoint,
+        radius: f32,
+        base_color: Color,
+        light: Vec3,
+        progress: f32,
+    ) {
+        let cx = center.x * 2.0;
+        let cy = center.y * 4.0;
+        let depth = center.depth;
+
+        let pw = self.canvas.pixel_width() as i32;
+        let ph = self.canvas.pixel_height() as i32;
+        let r_i = radius as i32;
+        let r_sq = radius * radius;
+
+        let y_min = ((cy as i32) - r_i).max(0);
+        let y_max = ((cy as i32) + r_i).min(ph - 1);
+
+        for py in y_min..=y_max {
+            let dy = py as f32 - cy;
+            let dx_span = (r_sq - dy * dy).max(0.0).sqrt();
+            let x_min = ((cx as i32) - dx_span as i32).max(0);
+            let x_max = ((cx as i32) + dx_span as i32).min(pw - 1);
+
+            for px in x_min..=x_max {
+                // Scatter: skip pixels based on a pseudo-random hash and progress.
+                let hash =
+                    ((px as u32).wrapping_mul(2654435761)) ^ ((py as u32).wrapping_mul(2246822519));
+                let threshold = (progress * 255.0) as u32;
+                if (hash & 0xFF) < threshold {
+                    continue;
+                }
+
+                let ux = px as usize;
+                let uy = py as usize;
+                if self.zbuffer.test_and_set(ux, uy, depth) {
+                    let normal = sphere_normal(px as f32, py as f32, cx, cy, radius);
+                    let color = shade_point(normal, light, base_color);
+                    self.canvas.set_pixel_colored(ux, uy, color);
+                }
+            }
         }
     }
 
@@ -296,6 +413,23 @@ impl SceneRenderer {
                 }
             }
         }
+    }
+}
+
+/// Linearly interpolate a color toward the background palette color.
+///
+/// `t = 0.0` returns the original color, `t = 1.0` returns `Palette::BG`.
+fn lerp_color_to_bg(color: Color, t: f32) -> Color {
+    match (color, Palette::BG) {
+        (Color::Rgb(r1, g1, b1), Color::Rgb(r2, g2, b2)) => {
+            let lerp = |a: u8, b: u8| -> u8 {
+                let a = a as f32;
+                let b = b as f32;
+                (a + (b - a) * t).clamp(0.0, 255.0) as u8
+            };
+            Color::Rgb(lerp(r1, r2), lerp(g1, g2), lerp(b1, b2))
+        }
+        _ => color,
     }
 }
 
@@ -479,6 +613,9 @@ mod tests {
         let has_content = lines
             .iter()
             .any(|(line, _)| line.chars().any(|c| c != '\u{2800}'));
-        assert!(has_content, "critical node with bloom should produce visible pixels");
+        assert!(
+            has_content,
+            "critical node with bloom should produce visible pixels"
+        );
     }
 }
