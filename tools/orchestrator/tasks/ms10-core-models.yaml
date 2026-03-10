@@ -1,0 +1,121 @@
+phase: "ms10-core-models"
+description: "MVP Phase 1a: Core model extensions — HostId, TimeSeries, Diagnostic types"
+
+tasks:
+  - id: diagnostic-types
+    title: "Add HostId, TimeSeries, Diagnostic types to aether-core"
+    agent: rust-engineer
+    scope: core
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      EXISTING CODE:
+      - models.rs: ProcessNode (pid, ppid, name, cpu_percent f32, mem_bytes u64, state ProcessState,
+        hp f32, xp u32, position_3d Vec3), NetworkEdge, SystemSnapshot, ProcessState, Protocol, ConnectionState
+      - events.rs: SystemEvent, GameEvent, AgentAction enums
+      - error.rs: CoreError with Probe(String), Storage(String)
+      - lib.rs: pub mod models, graph, events, traits, error, arbiter + re-exports
+
+      Design doc: docs/plans/2026-03-10-mvp-evolution-design.md
+    prompt: |
+      Add MVP diagnostic types to aether-core/src/models.rs.
+
+      New types (add after existing types, DO NOT modify existing types):
+
+      - HostId(pub String) — #[derive(Debug, Clone, Hash, Eq, PartialEq, Serialize, Deserialize)]
+        - impl Default: "local".to_string()
+        - impl Display: just the inner string
+
+      - MetricSample { pub timestamp: Instant, pub value: f64 } — Debug, Clone
+
+      - TimeSeries { pub name: String, pub labels: BTreeMap<String, String>, pub samples: VecDeque<MetricSample>, pub capacity: usize }
+        - new(name, capacity) — empty samples, empty labels
+        - push(&mut self, value: f64) — adds MetricSample with Instant::now(), evicts if > capacity
+        - last() -> Option<&MetricSample>
+        - rate(&self, window: Duration) -> Option<f64> — (last - first) / elapsed in window
+        - avg(&self, window: Duration) -> f64 — average of samples in window
+        - min_max(&self, window: Duration) -> (f64, f64)
+        - len() -> usize
+        - is_empty() -> bool
+        - Default capacity: 3600
+
+      - DiagTarget enum: Process { pid: u32, name: String }, Host(HostId), Container { id: String, name: String }, Disk { mount: String }, Network { interface: String }
+        - #[derive(Debug, Clone, Serialize)], #[non_exhaustive]
+
+      - Severity enum: Info, Warning, Critical
+        - #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+
+      - DiagCategory enum: MemoryLeak, MemoryPressure, CpuSaturation, CpuSpike, DiskPressure,
+        DiskIoHeavy, FdExhaustion, ConnectionSurge, ZombieAccumulation, ThreadExplosion,
+        CrashLoop, ConfigMismatch, CapacityRisk, CorrelatedAnomaly
+        - #[derive(Debug, Clone, Serialize)], #[non_exhaustive]
+
+      - Evidence { pub metric: String, pub current: f64, pub threshold: f64, pub trend: Option<f64>, pub context: String }
+        - #[derive(Debug, Clone, Serialize)]
+
+      - RecommendedAction enum: ScaleUp { resource: String, from: String, to: String },
+        Restart { reason: String }, RaiseLimits { limit_name: String, from: String, to: String },
+        ReduceLoad { suggestion: String }, Investigate { what: String },
+        KillProcess { pid: u32, reason: String }, NoAction { reason: String }
+        - #[derive(Debug, Clone, Serialize)], #[non_exhaustive]
+
+      - Urgency enum: Immediate, Soon, Planning, Informational
+        - #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+
+      - Recommendation { pub action: RecommendedAction, pub reason: String, pub urgency: Urgency, pub auto_executable: bool }
+        - #[derive(Debug, Clone, Serialize)]
+
+      - Diagnostic { pub id: u64, pub host: HostId, pub target: DiagTarget, pub severity: Severity,
+        pub category: DiagCategory, pub summary: String, pub evidence: Vec<Evidence>,
+        pub recommendation: Recommendation, pub detected_at: Instant, pub resolved_at: Option<Instant> }
+        - #[derive(Debug, Clone)]
+
+      Update lib.rs: re-export new types (HostId, TimeSeries, Diagnostic, Severity, etc.)
+      Add `use std::collections::{BTreeMap, VecDeque};` and `use std::time::{Duration, Instant};`
+
+      Tests:
+      - test_timeseries_push_and_rate — push 10 samples 1s apart, check rate()
+      - test_timeseries_capacity_evicts_oldest — push 5 into capacity=3, verify len()=3
+      - test_timeseries_avg_window — 5 samples [10,20,30,40,50], avg ≈ 30
+      - test_diagnostic_severity_ordering — Critical > Warning > Info
+      - test_host_id_default_is_local
+
+      COMMIT: feat(core): add HostId, TimeSeries, Diagnostic types for MVP
+    test: "cargo test -p aether-core"
+    depends_on: []
+
+  - id: diagnostic-events
+    title: "Add DiagnosticEvent to events system"
+    agent: rust-engineer
+    scope: core
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+
+      EXISTING CODE:
+      - events.rs: SystemEvent (ProcessStarted/Exited/Updated, NetworkConnected/Disconnected,
+        SnapshotCompleted), GameEvent (ProcessHealthChanged, XpGained, AchievementUnlocked,
+        ActionExecuted), AgentAction (Kill, Renice, Suspend, Resume, Investigate)
+      - models.rs now has: Diagnostic, RecommendedAction (from diagnostic-types task)
+    prompt: |
+      Add DiagnosticEvent to aether-core/src/events.rs.
+
+      - DiagnosticEvent enum:
+        - DiagnosticsUpdated(Vec<Diagnostic>) — new batch from analyze engine
+        - DiagnosticResolved { id: u64 }
+        - DiagnosticDismissed { id: u64 }
+        - DiagnosticActionRequested { diagnostic_id: u64, action: RecommendedAction }
+      - #[derive(Debug, Clone)]
+
+      Update lib.rs re-exports.
+
+      Tests:
+      - test_diagnostic_event_updated_holds_diagnostics
+      - test_diagnostic_event_clone
+
+      COMMIT: feat(core): add DiagnosticEvent to event system
+    test: "cargo test -p aether-core"
+    depends_on: [diagnostic-types]

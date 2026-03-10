@@ -1,0 +1,228 @@
+phase: "ms10-rules-engine"
+description: "MVP Phase 1c: Rule engine, first 10 builtin rules, RecommendationGenerator, AnalyzeEngine"
+
+tasks:
+  - id: rule-types-engine
+    title: "Implement Rule types and RuleEngine"
+    agent: rust-engineer
+    scope: analyze
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+
+      EXISTING CODE:
+      - store.rs: MetricStore with get(host, pid, metric) -> Option<&TimeSeries>
+      - analyzers/trend.rs: TrendAnalyzer with slope()
+      - aether-core: Severity, DiagCategory, DiagTarget, HostId
+    prompt: |
+      Implement Rule types and RuleEngine.
+
+      File: crates/aether-analyze/src/rules/types.rs
+      - CompareOp enum: Gt, Gte, Lt, Lte, Eq — #[derive(Debug, Clone, Copy)]
+      - LimitSource enum: CgroupMemoryMax, CgroupCpuQuota, CgroupPidsMax, Ulimit(String),
+        DiskTotal, Custom(f64) — #[derive(Debug, Clone)]
+      - CounterType enum: ZombieProcesses, RestartCount, OpenFds, ThreadCount — Debug, Clone
+      - RuleCondition enum:
+        - Threshold { metric: &'static str, op: CompareOp, value: f64, sustained: Option<Duration> }
+        - RateOfChange { metric: &'static str, rate_per_sec: f64, sustained: Option<Duration> }
+        - CapacityPercent { metric: &'static str, limit_source: LimitSource, percent: f64 }
+        - Count { counter: CounterType, op: CompareOp, value: u64 }
+        - All(Vec<RuleCondition>)
+        - Any(Vec<RuleCondition>)
+      - Rule { pub id: &'static str, pub name: &'static str, pub category: DiagCategory,
+        pub default_severity: Severity, pub condition: RuleCondition, pub enabled: bool }
+      - RuleFinding { pub rule_id: &'static str, pub rule_name: &'static str, pub target: DiagTarget,
+        pub severity: Severity, pub category: DiagCategory, pub matched_values: Vec<(String, f64)> }
+      - ProcessLimits { pub cgroup_memory_max: Option<u64>, pub cgroup_cpu_quota: Option<u64>,
+        pub cgroup_pids_max: Option<u64>, pub ulimit_nofile: Option<u64>, pub disk_total: Option<u64> }
+        - impl Default
+
+      File: crates/aether-analyze/src/rules/engine.rs
+      - RuleEngine { rules: Vec<Rule>, sustained_state: HashMap<(String, u32), Instant> }
+        - new() -> Self (empty)
+        - load_builtin(&mut self) — placeholder, will be filled in builtin task
+        - add_rule(&mut self, rule: Rule)
+        - disable_rule(&mut self, id: &str) -> bool
+        - evaluate(&mut self, store: &MetricStore, host: &HostId, limits_map: &HashMap<u32, ProcessLimits>) -> Vec<RuleFinding>
+          - For each process in store.hosts/process_metrics:
+            - For each enabled rule: eval_condition(condition, store, host, pid, limits)
+            - Threshold: get metric value, compare with op, check sustained duration
+            - RateOfChange: compute slope via TrendAnalyzer, check against rate_per_sec
+            - CapacityPercent: get current value and limit from ProcessLimits, check percent
+            - All/Any: recursive
+            - If matches: create RuleFinding
+            - Sustained tracking: HashMap<(rule_id, pid), first_seen_instant>
+              - Condition true + no entry → insert now
+              - Condition true + entry exists + elapsed >= sustained → fire
+              - Condition false → remove entry
+
+      Create rules/mod.rs: pub mod types; pub mod engine;
+      Update lib.rs: pub mod rules;
+
+      Tests:
+      - test_threshold_matches_above — cpu > 95, value 96 → match
+      - test_threshold_no_match_below — cpu > 95, value 50 → no match
+      - test_sustained_only_fires_after_duration — threshold with sustained=2s, call twice with 3s gap
+      - test_sustained_resets_on_false — condition true then false → timer reset
+      - test_rate_of_change_matches — growing 2/s, threshold 1/s → match
+      - test_compound_all_both_true — All([A, B]) both true → match
+      - test_compound_any_one_true — Any([A, B]) one true → match
+      - test_disable_rule_skips — disabled rule never fires
+
+      COMMIT: feat(analyze): implement Rule types and RuleEngine
+    test: "cargo test -p aether-analyze"
+    depends_on: []
+
+  - id: builtin-rules-10
+    title: "Implement first 10 builtin diagnostic rules"
+    agent: rust-engineer
+    scope: analyze
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+
+      EXISTING CODE:
+      - rules/types.rs: Rule, RuleCondition, CompareOp, LimitSource, CounterType
+      - rules/engine.rs: RuleEngine with evaluate()
+    prompt: |
+      Implement 10 builtin rules in crates/aether-analyze/src/rules/builtin.rs.
+
+      pub fn builtin_rules() -> Vec<Rule> — returns all rules.
+
+      Rules:
+      1. mem_approaching_oom — CapacityPercent mem_bytes > 90% CgroupMemoryMax → Critical
+      2. mem_leak_suspected — RateOfChange mem_bytes > 1MB/min sustained 15min → Warning
+      3. cpu_saturated — Threshold cpu_percent > 95 sustained 2min → Critical
+      4. cpu_sustained_high — Threshold cpu_percent > 80 sustained 10min → Warning
+      5. disk_almost_full — CapacityPercent disk_usage_bytes > 90% DiskTotal → Critical
+      6. fd_approaching_limit — CapacityPercent open_fds > 80% Ulimit("nofile") → Warning
+      7. zombie_accumulation — Count ZombieProcesses > 5 → Warning
+      8. thread_explosion — Threshold thread_count > 1000 → Warning
+      9. crash_loop — All(uptime_seconds < 60 AND Count RestartCount > 3) → Critical
+      10. connections_growing — RateOfChange established_connections > 10/min sustained 5min → Info
+
+      Update rules/engine.rs load_builtin(): call builtin_rules() and add all.
+      Update rules/mod.rs: pub mod builtin;
+
+      Tests:
+      - test_builtin_count_is_10
+      - test_all_ids_unique — no duplicate rule IDs
+      - test_rules_cover_severities — at least 1 Critical, 1 Warning, 1 Info
+
+      COMMIT: feat(analyze): add first 10 builtin diagnostic rules
+    test: "cargo test -p aether-analyze"
+    depends_on: [rule-types-engine]
+
+  - id: recommendation-generator
+    title: "Implement RecommendationGenerator"
+    agent: rust-engineer
+    scope: analyze
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+
+      EXISTING CODE:
+      - rules/types.rs: RuleFinding with rule_id, target, severity, matched_values
+      - analyzers/trend.rs: TrendAnalyzer with slope(), time_to_threshold()
+      - analyzers/capacity.rs: CapacityAnalyzer with analyze(), format_bytes(), format_duration()
+      - aether-core: Diagnostic, Recommendation, RecommendedAction, Urgency, Evidence
+    prompt: |
+      Implement RecommendationGenerator.
+
+      File: crates/aether-analyze/src/recommendations/generator.rs
+      - RecommendationGenerator { next_id: AtomicU64 }
+        - new() -> Self — starts at 1
+        - generate(&self, finding: &RuleFinding, store: &MetricStore, trend: &TrendAnalyzer,
+          capacity: &CapacityAnalyzer, host: &HostId) -> Diagnostic
+          - Assign unique id via next_id.fetch_add(1, Ordering::Relaxed)
+          - Match on finding.rule_id to determine:
+            - Evidence: from matched_values + trend data from store
+            - RecommendedAction: per rule (ScaleUp for memory, Investigate for CPU, etc.)
+            - Urgency: Critical rules → Immediate, Warning → Soon, Info → Informational
+            - auto_executable: true for ScaleUp/KillProcess, false for Investigate
+          - Build summary: "{target_name}: {rule_name}" with key metric
+          - Rule-specific logic:
+            - mem_approaching_oom → ScaleUp { memory, current_limit, 2x_limit }, Immediate
+            - mem_leak_suspected → Investigate { memory growth pattern }, Soon
+            - cpu_saturated → ReduceLoad or Investigate, Immediate
+            - cpu_sustained_high → Investigate, Soon
+            - disk_almost_full → ReduceLoad { cleanup }, Immediate
+            - fd_approaching_limit → RaiseLimits { nofile }, Soon
+            - zombie_accumulation → KillProcess (parent), Planning
+            - thread_explosion → Investigate, Soon
+            - crash_loop → Investigate, Immediate
+            - connections_growing → NoAction, Informational
+
+      Create recommendations/mod.rs: pub mod generator;
+      Update lib.rs: pub mod recommendations;
+
+      Tests:
+      - test_generate_mem_oom_produces_scale_up
+      - test_generate_cpu_saturated_is_immediate
+      - test_generate_connections_growing_is_informational
+      - test_ids_are_unique — generate 3 diagnostics, all different ids
+      - test_evidence_contains_matched_values
+
+      COMMIT: feat(analyze): implement RecommendationGenerator
+    test: "cargo test -p aether-analyze"
+    depends_on: [builtin-rules-10]
+
+  - id: analyze-engine
+    title: "Implement AnalyzeEngine main async loop"
+    agent: rust-engineer
+    scope: analyze
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+
+      EXISTING CODE:
+      - store.rs: MetricStore with ingest_world_state()
+      - analyzers/trend.rs: TrendAnalyzer, analyzers/capacity.rs: CapacityAnalyzer
+      - rules/engine.rs: RuleEngine with evaluate() → Vec<RuleFinding>
+      - recommendations/generator.rs: RecommendationGenerator with generate() → Diagnostic
+      - aether-core: WorldGraph (Arc<RwLock<WorldGraph>>), Diagnostic, HostId, CancellationToken
+    prompt: |
+      Implement AnalyzeEngine in crates/aether-analyze/src/engine.rs.
+
+      - AnalyzeConfig { pub interval: Duration, pub history_capacity: usize, pub host: HostId }
+        - impl Default: 5s interval, 3600 capacity, "local" host
+
+      - AnalyzeStats { pub evaluations: u64, pub rules_fired: u64, pub active_critical: u32,
+        pub active_warning: u32, pub active_info: u32 }
+
+      - AnalyzeEngine:
+        Fields: store: MetricStore, rule_engine: RuleEngine, trend: TrendAnalyzer,
+          capacity: CapacityAnalyzer, generator: RecommendationGenerator,
+          config: AnalyzeConfig, active_diagnostics: Vec<Diagnostic>, stats: AnalyzeStats
+
+        - new(config: AnalyzeConfig) -> Self
+          - Initialize all components, rule_engine.load_builtin()
+
+        - pub async fn run(&mut self,
+            world: Arc<RwLock<WorldGraph>>,
+            diag_tx: mpsc::Sender<Vec<Diagnostic>>,
+            cancel: CancellationToken)
+          - Loop: tokio::select! { _ = cancel.cancelled() => break, _ = tokio::time::sleep(interval) => { ... } }
+          - Each tick:
+            1. let graph = world.read(); store.ingest_world_state(&config.host, &graph);
+            2. let findings = rule_engine.evaluate(&store, &config.host, &empty_limits);
+            3. let new_diags: Vec<Diagnostic> = findings.iter().map(|f| generator.generate(f, &store, &trend, &capacity, &config.host)).collect();
+            4. Resolve: remove from active_diagnostics any that are no longer in new_diags (by target+category match)
+            5. Merge: add new diagnostics, update existing
+            6. Update stats counters
+            7. diag_tx.send(active_diagnostics.clone()).await
+
+        - pub fn active_diagnostics(&self) -> &[Diagnostic]
+        - pub fn stats(&self) -> &AnalyzeStats
+
+      Update lib.rs: pub mod engine;
+
+      Tests:
+      - test_engine_produces_diagnostics — create WorldGraph with cpu=99% process, run one tick, verify diagnostic
+      - test_engine_resolves_cleared — inject high CPU then low CPU, verify diagnostic removed
+      - test_engine_stats_count — verify evaluations incremented
+      - test_engine_empty_world_no_crash
+
+      COMMIT: feat(analyze): implement AnalyzeEngine main async loop
+    test: "cargo test -p aether-analyze"
+    depends_on: [recommendation-generator]

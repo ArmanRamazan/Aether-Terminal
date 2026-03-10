@@ -1,0 +1,214 @@
+phase: "ms10-analyze-scaffold"
+description: "MVP Phase 1b: aether-analyze crate scaffold — MetricStore, TrendAnalyzer, CapacityAnalyzer"
+
+tasks:
+  - id: analyze-crate-init
+    title: "Initialize aether-analyze crate"
+    agent: rust-engineer
+    scope: analyze
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+
+      EXISTING CODE:
+      - 9-crate hexagonal workspace, all lib crates depend only on aether-core
+      - aether-core now has: HostId, TimeSeries, MetricSample, Diagnostic, Severity, DiagCategory,
+        Evidence, Recommendation, RecommendedAction, Urgency, DiagTarget
+      - Root Cargo.toml lists workspace members
+
+      NEW CRATE: aether-analyze — deterministic diagnostic engine.
+      Design: docs/plans/2026-03-10-mvp-evolution-design.md
+    prompt: |
+      Initialize aether-analyze crate.
+
+      File: crates/aether-analyze/Cargo.toml
+      - [package] name = "aether-analyze", version = "0.1.0", edition = "2021"
+      - [dependencies]: aether-core = { path = "../aether-core" }, tokio = { workspace features },
+        thiserror = "2", tracing = "0.1", serde = { version = "1", features = ["derive"] }
+
+      File: crates/aether-analyze/CLAUDE.md
+      - Purpose: Deterministic diagnostic engine with layered analysis
+      - Modules: collectors/ (procfs, cgroup, perf), analyzers/ (trend, capacity, correlation, anomaly),
+        rules/ (engine, builtin, types), recommendations/ (generator), store (MetricStore), engine (AnalyzeEngine)
+      - Key types: AnalyzeEngine, MetricStore, RuleEngine, TrendAnalyzer, CapacityAnalyzer
+      - All analysis is deterministic — no ML. Rules produce RuleFinding → generator produces Diagnostic.
+
+      File: crates/aether-analyze/src/error.rs
+      - AnalyzeError enum (thiserror):
+        - #[error("collector error: {0}")] Collector(String)
+        - #[error("analyzer error: {0}")] Analyzer(String)
+        - #[error("rule evaluation error: {0}")] Rule(String)
+        - #[error("I/O error: {0}")] Io(#[from] std::io::Error)
+
+      File: crates/aether-analyze/src/lib.rs
+      - pub mod error;
+
+      Update root Cargo.toml: add "crates/aether-analyze" to workspace members.
+      Update crates/aether-terminal/Cargo.toml: add aether-analyze = { path = "../aether-analyze" }.
+
+      Tests:
+      - test_analyze_error_display — verify error messages
+
+      COMMIT: feat(analyze): initialize aether-analyze crate
+    test: "cargo check -p aether-analyze"
+    depends_on: []
+
+  - id: metric-store
+    title: "Implement MetricStore for TimeSeries storage"
+    agent: rust-engineer
+    scope: analyze
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+
+      EXISTING CODE:
+      - aether-core: TimeSeries (name, labels, samples VecDeque<MetricSample>, capacity),
+        HostId, MetricSample { timestamp, value }
+      - aether-core/graph.rs: WorldGraph with processes() -> impl Iterator<Item = &ProcessNode>,
+        process_count(), find_by_pid()
+      - ProcessNode: pid u32, name String, cpu_percent f32, mem_bytes u64, state ProcessState, hp f32
+      - aether-analyze: error.rs with AnalyzeError
+    prompt: |
+      Implement MetricStore in crates/aether-analyze/src/store.rs.
+
+      - MetricKey { host: HostId, pid: Option<u32>, metric: String } — Hash, Eq, Clone
+      - MetricStore { series: HashMap<MetricKey, TimeSeries>, capacity: usize }
+        - new(capacity: usize) -> Self — default 3600
+        - ingest_world_state(&mut self, host: &HostId, world: &WorldGraph)
+          - For each process: push cpu_percent, mem_bytes into per-pid TimeSeries
+          - Host-level: push total_cpu (sum), total_memory (sum), process_count
+        - ingest_remote(&mut self, series: Vec<TimeSeries>)
+          - Parse labels (host, pid, __name__) to construct MetricKey, merge samples
+        - get(&self, host: &HostId, pid: Option<u32>, metric: &str) -> Option<&TimeSeries>
+        - process_metrics(&self, host: &HostId, pid: u32) -> Vec<(&str, &TimeSeries)>
+        - host_metrics(&self, host: &HostId) -> Vec<(&str, &TimeSeries)>
+        - hosts(&self) -> Vec<&HostId>
+        - cleanup_dead_processes(&mut self, host: &HostId, alive_pids: &HashSet<u32>)
+
+      Update lib.rs: pub mod store;
+
+      Tests:
+      - test_ingest_world_state_creates_series — build WorldGraph with 1 process, ingest, verify get() returns Some
+      - test_ingest_multiple_builds_history — ingest 5 times, check TimeSeries len=5
+      - test_get_nonexistent_returns_none
+      - test_cleanup_removes_dead — ingest pid 100, cleanup with empty set, verify None
+      - test_host_metrics_returns_aggregates
+
+      COMMIT: feat(analyze): implement MetricStore for TimeSeries storage
+    test: "cargo test -p aether-analyze"
+    depends_on: [analyze-crate-init]
+
+  - id: trend-analyzer
+    title: "Implement TrendAnalyzer with linear regression"
+    agent: rust-engineer
+    scope: analyze
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+
+      EXISTING CODE:
+      - aether-core: TimeSeries with samples VecDeque<MetricSample>, MetricSample { timestamp: Instant, value: f64 }
+      - TimeSeries methods: push(), last(), len(), is_empty()
+      - aether-analyze: store.rs with MetricStore
+    prompt: |
+      Implement TrendAnalyzer in crates/aether-analyze/src/analyzers/trend.rs.
+
+      Create analyzers/ directory with mod.rs.
+
+      File: crates/aether-analyze/src/analyzers/mod.rs
+      - pub mod trend;
+
+      File: crates/aether-analyze/src/analyzers/trend.rs
+
+      - TrendClass enum: Stable, Growing { rate: f64 }, Declining { rate: f64 },
+        Spike { magnitude: f64 }, Oscillating { period_secs: f64, amplitude: f64 }
+        - #[derive(Debug, Clone)]
+
+      - TrendAnalyzer (unit struct, stateless):
+        - slope(&self, series: &TimeSeries, window: Duration) -> f64
+          - Filter samples within window from now
+          - Least squares linear regression: Σ(xi-x̄)(yi-ȳ) / Σ(xi-x̄)²
+          - xi = seconds since first sample, yi = value
+          - Returns slope in value-units per second
+        - time_to_threshold(&self, series: &TimeSeries, threshold: f64) -> Option<Duration>
+          - current = last value, slope = self.slope(series, window=5min)
+          - If slope <= 0 or current >= threshold: return None
+          - Else: Duration::from_secs_f64((threshold - current) / slope)
+        - classify(&self, series: &TimeSeries, window: Duration) -> TrendClass
+          - Compute slope and r_squared
+          - |slope| < 0.001 * mean → Stable
+          - slope > 0 and r² > 0.5 → Growing { rate: slope }
+          - slope < 0 and r² > 0.5 → Declining { rate: slope.abs() }
+          - last_value > mean + 3*stddev → Spike
+          - else → Stable
+
+      - Helper function (pub(crate)):
+        linear_regression(points: &[(f64, f64)]) -> (f64, f64, f64)
+        - Returns (slope, intercept, r_squared)
+        - Standard least squares formula
+        - If <2 points: return (0.0, 0.0, 0.0)
+
+      Update lib.rs: pub mod analyzers;
+
+      Tests:
+      - test_slope_constant_series_is_zero — push 60 samples all value 50.0
+      - test_slope_linear_growth — push 0.0, 1.0, 2.0, ..., 59.0 at 1s intervals → slope ≈ 1.0
+      - test_time_to_threshold_growing — growing from 50, threshold 100 → ~50s
+      - test_time_to_threshold_declining_returns_none
+      - test_classify_stable — constant values → Stable
+      - test_classify_growing — linearly increasing → Growing
+      - test_linear_regression_perfect_line — points on y=2x+1 → slope=2, r²=1.0
+      - test_linear_regression_single_point — returns (0, 0, 0)
+
+      COMMIT: feat(analyze): implement TrendAnalyzer with linear regression
+    test: "cargo test -p aether-analyze"
+    depends_on: [metric-store]
+
+  - id: capacity-analyzer
+    title: "Implement CapacityAnalyzer for capacity planning"
+    agent: rust-engineer
+    scope: analyze
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+
+      EXISTING CODE:
+      - analyzers/trend.rs: TrendAnalyzer with slope(), time_to_threshold(), classify()
+      - TrendClass enum: Stable, Growing, Declining, Spike, Oscillating
+      - aether-core: TimeSeries
+    prompt: |
+      Implement CapacityAnalyzer in crates/aether-analyze/src/analyzers/capacity.rs.
+
+      - CapacityReport { pub usage_percent: f64, pub headroom: f64, pub trend: TrendClass,
+        pub time_to_exhaustion: Option<Duration>, pub recommended_limit: Option<f64> }
+        - #[derive(Debug, Clone)]
+
+      - CapacityAnalyzer (unit struct):
+        - analyze(&self, current: f64, limit: f64, trend: &TrendAnalyzer, series: &TimeSeries) -> CapacityReport
+          - usage_percent = if limit > 0.0 { current / limit * 100.0 } else { 0.0 }
+          - headroom = (limit - current).max(0.0)
+          - trend_class = trend.classify(series, Duration::from_secs(300))
+          - time_to_exhaustion = trend.time_to_threshold(series, limit)
+          - recommended_limit = if usage > 80% { Some(round_up_nice(limit * 2.0)) } else { None }
+
+      - pub(crate) fn format_bytes(bytes: f64) -> String
+        - >= 1GB: "{:.1} GB", >= 1MB: "{:.1} MB", >= 1KB: "{:.1} KB", else: "{:.0} B"
+
+      - pub(crate) fn format_duration(dur: Duration) -> String
+        - >= 1h: "~{} hours", >= 1min: "~{} minutes", else: "~{} seconds"
+
+      - fn round_up_nice(value: f64) -> f64 — round to nearest power of 2 or 1.5x
+
+      Update analyzers/mod.rs: pub mod capacity;
+
+      Tests:
+      - test_analyze_healthy_usage — 50% usage, stable trend → no exhaustion, no recommendation
+      - test_analyze_critical_usage — 93% usage, growing → time_to_exhaustion Some, recommended_limit Some
+      - test_format_bytes_mb — 503316480.0 → "480.0 MB"
+      - test_format_bytes_gb — 1073741824.0 → "1.0 GB"
+      - test_format_duration_minutes — 780s → "~13 minutes"
+      - test_zero_limit_no_panic — limit=0, current=100 → usage=0, no crash
+
+      COMMIT: feat(analyze): implement CapacityAnalyzer with capacity planning
+    test: "cargo test -p aether-analyze"
+    depends_on: [trend-analyzer]

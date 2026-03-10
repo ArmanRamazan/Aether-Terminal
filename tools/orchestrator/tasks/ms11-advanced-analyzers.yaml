@@ -1,0 +1,177 @@
+phase: "ms11-advanced-analyzers"
+description: "MVP Phase 2b: Correlation, anomaly analyzers, 30+ rules, full diagnostics UI"
+
+tasks:
+  - id: correlation-analyzer
+    title: "Implement CorrelationAnalyzer with Pearson coefficient"
+    agent: rust-engineer
+    scope: analyze
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+
+      EXISTING CODE:
+      - analyzers/trend.rs: TrendAnalyzer, analyzers/capacity.rs: CapacityAnalyzer
+      - aether-core: TimeSeries with samples VecDeque<MetricSample>
+    prompt: |
+      Implement CorrelationAnalyzer.
+
+      File: crates/aether-analyze/src/analyzers/correlation.rs
+      - Correlation { pub metric_a: String, pub metric_b: String, pub coefficient: f64, pub interpretation: String }
+      - CorrelationAnalyzer (unit struct):
+        - correlate(&self, a: &TimeSeries, b: &TimeSeries, window: Duration) -> f64
+          - Align samples by nearest timestamp
+          - Pearson: r = Σ(xi-x̄)(yi-ȳ) / sqrt(Σ(xi-x̄)² * Σ(yi-ȳ)²)
+          - If <2 aligned points → 0.0
+        - find_correlated(&self, target: &TimeSeries, candidates: &[&TimeSeries], threshold: f64) -> Vec<Correlation>
+          - Filter pairs where |r| > threshold
+        - interpret(r: f64) -> &'static str
+          - |r| > 0.9: "very strongly", > 0.7: "strongly", > 0.5: "moderately", else "weakly"
+
+      Update analyzers/mod.rs: pub mod correlation;
+
+      Tests:
+      - test_perfect_positive — identical series → r ≈ 1.0
+      - test_perfect_negative — inverse → r ≈ -1.0
+      - test_uncorrelated — unrelated → |r| < 0.3
+      - test_find_correlated_filters
+      - test_empty_series_zero
+
+      COMMIT: feat(analyze): implement CorrelationAnalyzer with Pearson coefficient
+    test: "cargo test -p aether-analyze"
+    depends_on: []
+
+  - id: anomaly-detector
+    title: "Implement deterministic AnomalyDetector"
+    agent: rust-engineer
+    scope: analyze
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+
+      EXISTING CODE:
+      - aether-core: TimeSeries, MetricSample
+      - analyzers/: trend.rs, capacity.rs, correlation.rs
+    prompt: |
+      Implement AnomalyDetector.
+
+      File: crates/aether-analyze/src/analyzers/anomaly.rs
+      - ChangePoint { pub index: usize, pub magnitude: f64 }
+      - AnomalyDetector (unit struct):
+        - z_score(&self, series: &TimeSeries, window: Duration) -> f64
+          - (last_value - mean) / stddev. If stddev ≈ 0 → 0.0
+        - is_outlier_zscore(&self, series: &TimeSeries, threshold: f64) -> bool
+          - |z_score| > threshold
+        - is_outlier_iqr(&self, series: &TimeSeries) -> bool
+          - Sort values, compute Q1 (25th), Q3 (75th), IQR = Q3-Q1
+          - Last value > Q3 + 1.5*IQR or < Q1 - 1.5*IQR
+        - change_points(&self, series: &TimeSeries, sensitivity: f64) -> Vec<ChangePoint>
+          - Sliding window (size=10): compare mean of left window vs right window
+          - If |diff| > sensitivity * global_stddev → ChangePoint
+        - stddev(&self, series: &TimeSeries, window: Duration) -> f64
+        - percentile(&self, series: &TimeSeries, p: f64) -> f64
+          - p in 0.0..=1.0, linear interpolation
+
+      Update analyzers/mod.rs: pub mod anomaly;
+
+      Tests:
+      - test_z_score_normal — value near mean → z ≈ 0
+      - test_z_score_outlier — 5 stddev above → z ≈ 5
+      - test_iqr_detects_outlier
+      - test_iqr_normal_not_outlier
+      - test_change_point_level_shift — [50..50, 100..100] → detects change
+      - test_change_point_stable_no_detection
+      - test_percentile_median — [1..100] 50th ≈ 50
+
+      COMMIT: feat(analyze): implement deterministic AnomalyDetector
+    test: "cargo test -p aether-analyze"
+    depends_on: []
+
+  - id: builtin-rules-30
+    title: "Expand to 30+ builtin diagnostic rules"
+    agent: rust-engineer
+    scope: analyze
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+
+      EXISTING CODE:
+      - rules/builtin.rs: 10 rules (mem_approaching_oom, mem_leak_suspected, cpu_saturated,
+        cpu_sustained_high, disk_almost_full, fd_approaching_limit, zombie_accumulation,
+        thread_explosion, crash_loop, connections_growing)
+      - rules/types.rs: Rule, RuleCondition with Threshold, RateOfChange, CapacityPercent, Count, All, Any
+      - collectors/cgroup.rs: CgroupCollector provides CgroupLimits
+    prompt: |
+      Add 20+ more rules to builtin_rules().
+
+      File: crates/aether-analyze/src/rules/builtin.rs (extend)
+
+      New rules (add to existing vec):
+      11. mem_swap_growing — RateOfChange swap_bytes > 10MB/min sustained 5min → Warning
+      12. mem_rss_doubled — Threshold mem_growth_ratio > 2.0 → Warning
+      13. cpu_cgroup_throttled — RateOfChange cpu_throttled_count > 0 sustained 1min → Warning
+      14. cpu_context_switches — Threshold nonvoluntary_ctxt_switches > 10000/s → Info
+      15. disk_heavy_write — Threshold disk_write_bytes_per_sec > 100MB/s sustained 5min → Warning
+      16. disk_heavy_read — Threshold disk_read_bytes_per_sec > 100MB/s sustained 5min → Info
+      17. disk_inode_exhaustion — CapacityPercent inode_usage > 90% DiskTotal → Critical
+      18. net_tcp_retransmits — Threshold tcp_retransmit_rate > 5.0 → Warning
+      19. net_established_high — Threshold established_connections > 10000 → Warning
+      20. proc_state_d_stuck — Threshold d_state_seconds > 30 → Warning
+      21. system_load_extreme — Threshold load_avg_1m > 4x cores → Critical
+      22. system_memory_pressure — CapacityPercent host_mem_used > 90% → Critical
+      23. system_oom_kills — Count OomKills > 0 → Critical
+      24. config_cpu_underprovisioned — CapacityPercent cpu_usage > 90% CgroupCpuQuota → Warning
+      25. config_memory_tight — Threshold cgroup_memory_headroom_bytes < 52428800 (50MB) → Warning
+      26. config_pids_approaching — CapacityPercent pids_current > 80% CgroupPidsMax → Warning
+      27. io_wait_high — Threshold io_wait_percent > 30 sustained 2min → Warning
+      28. net_listen_backlog — Threshold listen_queue_full > 0 → Warning
+      29. proc_uptime_short — Threshold uptime_seconds < 10 AND Any restart indicators → Info
+      30. correlated_anomaly — placeholder rule for correlation-triggered alerts → Info
+
+      Tests:
+      - test_builtin_count_gte_30
+      - test_all_categories_covered — at least 1 rule per major DiagCategory
+      - test_no_duplicate_ids
+      - test_all_have_nonempty_names
+
+      COMMIT: feat(analyze): expand to 30+ builtin diagnostic rules
+    test: "cargo test -p aether-analyze"
+    depends_on: [correlation-analyzer, anomaly-detector]
+
+  - id: engine-collectors-integration
+    title: "Integrate collectors into AnalyzeEngine"
+    agent: rust-engineer
+    scope: analyze
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+
+      EXISTING CODE:
+      - engine.rs: AnalyzeEngine with run() loop (ingest → evaluate → generate → send)
+      - collectors/procfs.rs: ProcfsCollector with process_profile(), host_profile()
+      - collectors/cgroup.rs: CgroupCollector with limits() → CgroupLimits → ProcessLimits
+      - rules/engine.rs: evaluate() now accepts HashMap<u32, ProcessLimits>
+    prompt: |
+      Extend AnalyzeEngine with collectors.
+
+      File: crates/aether-analyze/src/engine.rs (modify)
+      - Add fields: procfs: ProcfsCollector, cgroup: CgroupCollector
+      - Add to AnalyzeConfig: pub enable_profiling: bool (default true), pub top_n_profiled: usize (default 10)
+      - In run() loop, after ingesting metrics:
+        1. Collect host profile → feed host-level metrics (loadavg, meminfo, disk) into store
+        2. Get top N processes by CPU (from store)
+        3. For top N: collect process_profile + cgroup limits
+        4. Build HashMap<u32, ProcessLimits> from cgroup data
+        5. Pass limits to rule_engine.evaluate()
+        6. Attach ProcessProfile to diagnostics where available (store in side map)
+      - Graceful: if any collector fails → log warning, continue with partial data
+      - Store profiles: HashMap<u32, ProcessProfile> refreshed each tick
+
+      Tests:
+      - test_engine_with_collectors — verify collectors called (mock or real /proc)
+      - test_engine_without_collectors_fallback — collectors return errors → engine still works
+      - test_top_n_limits_profiling
+
+      COMMIT: feat(analyze): integrate collectors into AnalyzeEngine
+    test: "cargo test -p aether-analyze"
+    depends_on: [builtin-rules-30]

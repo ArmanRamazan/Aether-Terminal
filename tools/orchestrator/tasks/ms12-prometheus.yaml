@@ -1,0 +1,189 @@
+phase: "ms12-prometheus"
+description: "MVP Phase 3: aether-metrics crate — Prometheus exporter and PromQL consumer"
+
+tasks:
+  - id: metrics-crate-init
+    title: "Initialize aether-metrics crate with MetricRegistry"
+    agent: rust-engineer
+    scope: metrics
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+
+      EXISTING CODE:
+      - 11-crate workspace (core, ingestion, ebpf, analyze, web, predict, script, render, mcp, gamification, terminal)
+      - aether-mcp already uses axum for SSE transport
+      - aether-web uses axum for web server
+      - aether-core: WorldGraph, Diagnostic, HostId
+
+      NEW CRATE: aether-metrics — Prometheus /metrics endpoint + PromQL consumer.
+    prompt: |
+      Initialize aether-metrics crate.
+
+      File: crates/aether-metrics/Cargo.toml
+      - Dependencies: aether-core, axum, tokio, thiserror, tracing, serde, serde_json, reqwest (features: json)
+
+      File: crates/aether-metrics/CLAUDE.md
+
+      File: crates/aether-metrics/src/error.rs
+      - MetricsError: Server(String), Export(String), Query(String), Http(String)
+
+      File: crates/aether-metrics/src/exporter/registry.rs
+      - MetricType enum: Counter, Gauge, Histogram
+      - MetricDesc { pub name: String, pub help: String, pub metric_type: MetricType }
+      - LabelSet = BTreeMap<String, String>
+      - MetricFamily { pub desc: MetricDesc, pub samples: Vec<(LabelSet, f64)> }
+      - MetricRegistry:
+        - register(&mut self, desc: MetricDesc)
+        - set_gauge(&mut self, name: &str, labels: LabelSet, value: f64)
+        - inc_counter(&mut self, name: &str, labels: LabelSet, delta: f64)
+        - snapshot(&self) -> Vec<MetricFamily>
+
+      File: crates/aether-metrics/src/exporter/encode.rs
+      - pub fn encode_openmetrics(families: &[MetricFamily]) -> String
+        - Prometheus text exposition format:
+          # HELP name help_text
+          # TYPE name type
+          name{label="value"} value
+
+      File: crates/aether-metrics/src/exporter/mod.rs — pub mod registry; pub mod encode;
+      File: crates/aether-metrics/src/lib.rs — pub mod error; pub mod exporter;
+
+      Update workspace.
+
+      Tests:
+      - test_gauge_set_and_snapshot — set gauge, verify in snapshot
+      - test_counter_increments — inc twice, verify sum
+      - test_encode_valid_format — encode snapshot, verify contains # TYPE and metric line
+      - test_labels_sorted — labels appear alphabetically
+
+      COMMIT: feat(metrics): initialize aether-metrics with MetricRegistry and encoder
+    test: "cargo test -p aether-metrics"
+    depends_on: []
+
+  - id: metrics-exporter-server
+    title: "Implement /metrics HTTP endpoint"
+    agent: rust-engineer
+    scope: metrics
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+
+      EXISTING CODE:
+      - exporter/registry.rs: MetricRegistry with set_gauge(), snapshot()
+      - exporter/encode.rs: encode_openmetrics() → String
+      - aether-core: WorldGraph, Diagnostic
+    prompt: |
+      Implement Prometheus /metrics endpoint.
+
+      File: crates/aether-metrics/src/exporter/server.rs
+      - MetricsExporter { registry: Arc<RwLock<MetricRegistry>> }
+        - new() -> Self — creates registry, registers default metric descriptions
+        - register_defaults(&self):
+          - aether_process_cpu_percent (gauge)
+          - aether_process_memory_bytes (gauge)
+          - aether_process_hp (gauge)
+          - aether_host_cpu_percent (gauge)
+          - aether_host_memory_used_bytes (gauge)
+          - aether_host_load_avg_1m (gauge)
+          - aether_diagnostics_active (gauge)
+          - aether_analyze_evaluations_total (counter)
+        - update_from_world(&self, world: &WorldGraph, diagnostics: &[Diagnostic])
+          - Read world processes → set per-process gauges with labels {pid, name}
+          - Count diagnostics by severity → set aether_diagnostics_active{severity}
+        - pub async fn serve(self, port: u16, cancel: CancellationToken)
+          - axum Router:
+            GET /metrics → read registry snapshot → encode → text/plain response
+            GET /health → 200 { status: "ok" }
+          - Bind 0.0.0.0:port, graceful shutdown
+
+      Update exporter/mod.rs: pub mod server;
+
+      Tests:
+      - test_update_populates_gauges — create world, update, verify snapshot has entries
+      - test_metrics_endpoint_content_type — axum test: verify text/plain header
+      - test_health_returns_ok
+
+      COMMIT: feat(metrics): implement /metrics HTTP endpoint for Prometheus
+    test: "cargo test -p aether-metrics"
+    depends_on: [metrics-crate-init]
+
+  - id: promql-consumer
+    title: "Implement PromQL consumer client"
+    agent: rust-engineer
+    scope: metrics
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+
+      EXISTING CODE:
+      - aether-core: TimeSeries, HostId, MetricSample
+      - aether-metrics: exporter working
+    prompt: |
+      Implement Prometheus consumer.
+
+      File: crates/aether-metrics/src/consumer/types.rs
+      - PromResponse { pub status: String, pub data: PromData } — Deserialize
+      - PromData { pub result_type: String, pub result: Vec<PromResult> } — Deserialize
+      - PromResult { pub metric: HashMap<String, String>, pub value: Option<(f64, String)>,
+        pub values: Option<Vec<(f64, String)>> } — Deserialize
+
+      File: crates/aether-metrics/src/consumer/query.rs
+      - QueryBuilder:
+        - metric(name: &str) -> Self
+        - label(key: &str, value: &str) -> Self
+        - rate(interval: &str) -> Self — wraps in rate(...[interval])
+        - avg_over_time(interval: &str) -> Self
+        - build(&self) -> String
+
+      File: crates/aether-metrics/src/consumer/client.rs
+      - PrometheusConsumer { endpoint: Url, client: reqwest::Client, poll_interval: Duration }
+        - new(endpoint: &str, poll_interval: Duration) -> Result<Self>
+        - query(&self, promql: &str) -> Result<Vec<TimeSeries>>
+          - GET {endpoint}/api/v1/query?query={promql}
+          - Parse PromResponse → convert to Vec<TimeSeries>
+        - cluster_cpu(&self) -> Result<Vec<TimeSeries>> — preset query
+        - cluster_memory(&self) -> Result<Vec<TimeSeries>> — preset query
+        - pub async fn run(&self, tx: mpsc::Sender<Vec<TimeSeries>>, cancel: CancellationToken)
+          - Poll loop on interval, send batches
+
+      File: crates/aether-metrics/src/consumer/mod.rs
+      Update lib.rs: pub mod consumer;
+
+      Tests:
+      - test_query_builder_simple — "cpu_usage"
+      - test_query_builder_labels — "up{job=\"node\"}"
+      - test_query_builder_rate — "rate(cpu[5m])"
+      - test_prom_response_deserialize — parse sample JSON fixture
+
+      COMMIT: feat(metrics): implement PromQL consumer client
+    test: "cargo test -p aether-metrics"
+    depends_on: [metrics-exporter-server]
+
+  - id: prometheus-main-wire
+    title: "Wire Prometheus exporter and consumer into main"
+    agent: rust-engineer
+    scope: terminal
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+
+      EXISTING CODE:
+      - main.rs: Cli with all existing flags + --no-analyze, --analyze-interval, --web
+      - aether-metrics: MetricsExporter::serve(), PrometheusConsumer::run()
+      - AnalyzeEngine accepts optional prometheus_rx channel
+    prompt: |
+      Wire Prometheus into main.
+
+      File: crates/aether-terminal/src/main.rs (modify)
+      - Add CLI flags:
+        - metrics: Option<Option<u16>> — --metrics [PORT], default 9090
+        - prometheus: Option<String> — --prometheus <URL>
+        - prometheus_interval: Option<u64> — --prometheus-interval <SEC>
+      - Wire:
+        - If --metrics: create MetricsExporter, spawn serve() task, spawn periodic update from WorldGraph
+        - If --prometheus: create PrometheusConsumer, spawn run() task, connect tx to AnalyzeEngine
+
+      COMMIT: feat(terminal): wire Prometheus exporter and consumer
+    test: "cargo run -p aether-terminal -- --help"
+    depends_on: [promql-consumer]

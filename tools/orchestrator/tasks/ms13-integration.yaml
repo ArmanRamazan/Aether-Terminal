@@ -1,0 +1,177 @@
+phase: "ms13-integration"
+description: "MVP Phase 4: Arbiter wiring, MCP diagnostics tool, gamification, script integration, polish"
+
+tasks:
+  - id: diag-arbiter-wire
+    title: "Connect diagnostic recommendations to Arbiter"
+    agent: rust-engineer
+    scope: terminal
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+
+      EXISTING CODE:
+      - tui/diagnostics.rs: DiagnosticsTab with DiagnosticAction::Execute(id)
+      - aether-core/arbiter.rs: ArbiterQueue with add_action(AgentAction)
+      - aether-core/events.rs: AgentAction enum (Kill, Renice, Suspend, Resume, Investigate)
+      - aether-core/models.rs: RecommendedAction enum, Diagnostic
+      - main.rs: Arbiter executor processes approved actions every 500ms
+    prompt: |
+      Connect diagnostics to Arbiter.
+
+      File: crates/aether-render/src/tui/diagnostics.rs (modify)
+      - When DiagnosticAction::Execute: convert Recommendation to AgentAction
+        - RecommendedAction::KillProcess { pid } → AgentAction::Kill { pid }
+        - RecommendedAction::Restart → AgentAction::Kill { pid } (restart = kill + auto-restart by supervisor)
+        - RecommendedAction::ScaleUp/RaiseLimits/Investigate → AgentAction::Investigate with metadata
+      - Send converted action to arbiter_tx channel
+
+      File: crates/aether-terminal/src/main.rs (modify)
+      - Pass arbiter_tx to App/DiagnosticsTab so it can submit actions
+      - Arbiter tab shows diagnostic-originated actions with "[diag]" prefix in display
+
+      COMMIT: feat(terminal): connect diagnostic recommendations to Arbiter queue
+    test: "cargo check -p aether-terminal"
+    depends_on: []
+
+  - id: mcp-diagnostics-tool
+    title: "Add get_diagnostics MCP tool"
+    agent: rust-engineer
+    scope: mcp
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+
+      EXISTING CODE:
+      - tools.rs: 5 MCP tools (get_system_topology, inspect_process, list_anomalies, execute_action, predict_anomalies)
+      - server.rs: McpServer dispatches tools by name
+      - Tools read from Arc<RwLock<WorldGraph>> and Arc<Mutex<Vec<...>>> shared state
+      - Diagnostics stored in Arc<Mutex<Vec<Diagnostic>>> in main.rs
+    prompt: |
+      Add get_diagnostics MCP tool.
+
+      File: crates/aether-mcp/src/tools.rs (modify)
+      - New tool: get_diagnostics
+        - Input params (optional): host (string), severity (string), category (string)
+        - Read from shared Arc<Mutex<Vec<Diagnostic>>>
+        - Filter by params if provided
+        - Response JSON:
+          {
+            "diagnostics": [{ "id", "host", "target", "severity", "category", "summary", "evidence", "recommendation" }],
+            "stats": { "critical": N, "warning": N, "info": N, "total": N }
+          }
+        - Serialize Diagnostic fields (skip Instant, use elapsed string)
+
+      File: crates/aether-mcp/src/server.rs (modify)
+      - Add "get_diagnostics" to tool dispatch match
+      - Add diagnostics shared state to McpServer fields
+
+      File: crates/aether-terminal/src/main.rs (modify)
+      - Pass diagnostics Arc<Mutex<Vec<Diagnostic>>> to McpServer
+
+      COMMIT: feat(mcp): add get_diagnostics tool for AI agent access
+    test: "cargo check -p aether-mcp"
+    depends_on: []
+
+  - id: gamification-diagnostics
+    title: "Add XP rewards for resolved diagnostics"
+    agent: rust-engineer
+    scope: gamification
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+
+      EXISTING CODE:
+      - xp.rs: XpTracker with add_xp(pid, amount), rank system
+      - achievements.rs: AchievementTracker with check(), achievement definitions
+      - aether-core: Severity, Diagnostic, DiagnosticEvent::DiagnosticResolved
+    prompt: |
+      Add diagnostic gamification.
+
+      File: crates/aether-gamification/src/xp.rs (modify)
+      - Add method: pub fn reward_diagnostic_resolved(&mut self, severity: Severity)
+        - Critical resolved: +50 XP (to system/operator)
+        - Warning resolved: +20 XP
+        - Info resolved: +5 XP
+
+      File: crates/aether-gamification/src/achievements.rs (modify)
+      - Add new achievements:
+        - "First Responder" — resolve first diagnostic
+        - "Firefighter" — resolve 10 Critical diagnostics
+        - "Stability Master" — run 1 hour with 0 active Critical diagnostics
+      - Track diagnostic_resolved_count: u32, critical_resolved_count: u32
+      - Track time_without_critical: Duration
+
+      Tests:
+      - test_reward_critical_gives_50_xp
+      - test_reward_warning_gives_20_xp
+      - test_first_responder_achievement_unlocks
+
+      COMMIT: feat(gamification): add XP rewards and achievements for resolved diagnostics
+    test: "cargo test -p aether-gamification"
+    depends_on: []
+
+  - id: script-analyze-bridge
+    title: "Connect JIT script rules to analyze engine"
+    agent: rust-engineer
+    scope: terminal
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+
+      EXISTING CODE:
+      - aether-script: ScriptEngine evaluates JIT-compiled .aether rules → RuleAction
+      - aether-analyze: RuleEngine evaluates builtin rules → RuleFinding → Diagnostic
+      - main.rs: both engines spawned as separate tokio tasks
+    prompt: |
+      Bridge script rules to diagnostic engine.
+
+      File: crates/aether-terminal/src/main.rs (modify)
+      - When both --rules and analyze are active:
+        - Create bridge channel: mpsc for ScriptEngine RuleActions → AnalyzeEngine
+        - ScriptEngine sends RuleActions to bridge
+        - AnalyzeEngine receives and converts to additional RuleFindings
+        - User .aether rules produce Diagnostics alongside builtin rules
+
+      This is a lightweight integration — just channel wiring in main.rs.
+      No changes to aether-script or aether-analyze internal APIs.
+
+      COMMIT: feat(terminal): bridge JIT script rules to diagnostic engine
+    test: "cargo check -p aether-terminal"
+    depends_on: [diag-arbiter-wire]
+
+  - id: fix-integration-gaps
+    title: "Fix remaining integration gaps from PoC audit"
+    agent: rust-engineer
+    scope: terminal
+    type: fix
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+
+      Known gaps from PoC audit:
+      1. aether-script: init_rules_engine() creates empty ruleset — parser not called on loaded files
+      2. aether-predict: not wired as optional analyzer (ML predictions could feed Diagnostics)
+      3. Help tab: outdated keybindings, missing F6 Diagnostics, missing diagnostic legend
+      4. Verify all flags work together: --analyze + --predict + --rules + --ebpf + --metrics + --web
+    prompt: |
+      Fix integration gaps.
+
+      File: crates/aether-terminal/src/main.rs (modify)
+      - Fix init_rules_engine(): call lexer → parser → type_check → compile on loaded .aether files
+        - Currently creates empty CompiledRuleSet. Change to:
+          let source = std::fs::read_to_string(&rules_path)?;
+          let tokens = aether_script::lexer::tokenize(&source);
+          let ast = aether_script::parser::parse(tokens)?;
+          let typed = aether_script::types::type_check(ast)?;
+          let compiled = aether_script::codegen::compile(typed)?;
+
+      File: crates/aether-render/src/tui/help.rs (modify)
+      - Add F6: Diagnostics to keybinding list
+      - Add diagnostic severity legend (■ Critical, ■ Warning, ● Info with colors)
+      - Update tab count in header
+
+      Verify: cargo check --workspace && cargo test --workspace
+
+      COMMIT: fix(terminal): resolve integration gaps — parser wiring, help tab, flag compat
+    test: "cargo test --workspace"
+    depends_on: [script-analyze-bridge]

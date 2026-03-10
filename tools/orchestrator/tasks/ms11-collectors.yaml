@@ -1,0 +1,108 @@
+phase: "ms11-collectors"
+description: "MVP Phase 2a: Deep data collectors — procfs, cgroup, perf profiling"
+
+tasks:
+  - id: procfs-collector
+    title: "Implement ProcfsCollector for deep process profiling"
+    agent: rust-engineer
+    scope: analyze
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+
+      EXISTING CODE:
+      - aether-analyze: engine.rs (AnalyzeEngine), store.rs (MetricStore), analyzers/, rules/
+      - aether-core: HostId
+      - Running on Linux (WSL2) — /proc filesystem available
+
+      Collectors read deep process data from /proc that sysinfo doesn't provide.
+    prompt: |
+      Implement ProcfsCollector.
+
+      File: crates/aether-analyze/src/collectors/mod.rs
+      - ProcessProfile { pub status: ProcStatus, pub memory: MemoryMap, pub fds: FdInfo,
+        pub io: Option<IoStats>, pub kernel_stack: Vec<StackFrame> }
+      - HostProfile { pub loadavg: (f64, f64, f64), pub meminfo: HostMemInfo, pub disks: Vec<DiskInfo> }
+      - ProcStatus { pub state: char, pub threads: u32, pub vm_rss_kb: u64, pub vm_size_kb: u64,
+        pub voluntary_ctxt_switches: u64, pub nonvoluntary_ctxt_switches: u64 }
+      - MemoryMap { pub rss: u64, pub pss: u64, pub shared_clean: u64, pub shared_dirty: u64,
+        pub private_clean: u64, pub private_dirty: u64, pub swap: u64 }
+      - FdInfo { pub count: u32, pub soft_limit: u64 }
+      - IoStats { pub read_bytes: u64, pub write_bytes: u64 }
+      - StackFrame { pub symbol: String, pub address: u64 }
+      - HostMemInfo { pub total: u64, pub available: u64, pub used: u64, pub swap_total: u64, pub swap_used: u64 }
+      - DiskInfo { pub mount: String, pub total: u64, pub used: u64, pub available: u64 }
+
+      File: crates/aether-analyze/src/collectors/procfs.rs
+      - ProcfsCollector (unit struct)
+        - process_profile(&self, pid: u32) -> Result<ProcessProfile, AnalyzeError>
+          - Read /proc/{pid}/status → parse ProcStatus (grep for State:, Threads:, VmRSS:, VmSize:, etc.)
+          - Read /proc/{pid}/smaps_rollup → parse MemoryMap (if exists, else zeros)
+          - Count entries in /proc/{pid}/fd/ → FdInfo.count
+          - Read /proc/{pid}/limits → parse "Max open files" soft limit
+          - Read /proc/{pid}/io → parse read_bytes, write_bytes (may fail without permission → None)
+          - Read /proc/{pid}/stack → parse StackFrame lines (may be empty without CAP_SYS_PTRACE)
+        - host_profile(&self) -> Result<HostProfile, AnalyzeError>
+          - Read /proc/loadavg → parse 3 floats
+          - Read /proc/meminfo → parse MemTotal, MemAvailable, SwapTotal, SwapFree
+          - Read /proc/mounts + statvfs → DiskInfo per mount (filter real filesystems)
+        - Each read function: graceful failure → AnalyzeError::Collector, don't panic
+
+      Update lib.rs: pub mod collectors;
+
+      Tests:
+      - test_procfs_self_status — read /proc/self/status, verify state='R' or 'S', threads >= 1
+      - test_procfs_self_fds — count /proc/self/fd, verify > 0
+      - test_procfs_host_loadavg — verify 3 non-negative floats
+      - test_procfs_host_meminfo — verify total > 0, available <= total
+      - test_procfs_nonexistent_pid — pid 99999999 → error
+
+      COMMIT: feat(analyze): implement ProcfsCollector for deep process profiling
+    test: "cargo test -p aether-analyze"
+    depends_on: []
+
+  - id: cgroup-collector
+    title: "Implement CgroupCollector for container limit detection"
+    agent: rust-engineer
+    scope: analyze
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+
+      EXISTING CODE:
+      - collectors/mod.rs: ProcessProfile, FdInfo, etc.
+      - rules/types.rs: ProcessLimits { cgroup_memory_max, cgroup_cpu_quota, cgroup_pids_max, ulimit_nofile, disk_total }
+    prompt: |
+      Implement CgroupCollector.
+
+      File: crates/aether-analyze/src/collectors/cgroup.rs
+      - CgroupLimits { pub memory_max: Option<u64>, pub memory_current: u64,
+        pub cpu_quota: Option<u64>, pub cpu_period: Option<u64>,
+        pub pids_max: Option<u64>, pub pids_current: u64 }
+      - CgroupVersion enum: V1, V2
+      - CgroupCollector (unit struct)
+        - detect_version(&self, pid: u32) -> Result<CgroupVersion>
+          - Read /proc/{pid}/cgroup
+          - If single line "0::/" → V2, else V1
+        - cgroup_path(&self, pid: u32) -> Result<Option<PathBuf>>
+          - V2: /sys/fs/cgroup + path from /proc/{pid}/cgroup
+          - V1: /sys/fs/cgroup/memory + path
+        - limits(&self, pid: u32) -> Result<Option<CgroupLimits>>
+          - If no cgroup path found → None (bare metal)
+          - V2: read memory.max (parse "max" as None), memory.current, cpu.max ("quota period"), pids.max, pids.current
+          - V1: read memory.limit_in_bytes, memory.usage_in_bytes, cpuacct values
+          - Graceful: if file missing → field = None
+        - to_process_limits(&self, cg: &CgroupLimits, fd_info: &FdInfo) -> ProcessLimits
+          - Maps CgroupLimits + FdInfo into ProcessLimits for RuleEngine
+
+      Update collectors/mod.rs: pub mod cgroup;
+
+      Tests:
+      - test_detect_cgroup_version_self — read /proc/self/cgroup, returns V1 or V2
+      - test_cgroup_path_self — verify non-error (path may be None on bare metal)
+      - test_limits_self — call limits(self pid), verify no panic
+      - test_to_process_limits_mapping — CgroupLimits with memory_max=512MB → ProcessLimits.cgroup_memory_max = Some(512MB)
+
+      COMMIT: feat(analyze): implement CgroupCollector for container limit detection
+    test: "cargo test -p aether-analyze"
+    depends_on: [procfs-collector]

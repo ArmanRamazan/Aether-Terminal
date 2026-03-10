@@ -1,0 +1,266 @@
+phase: "ms13-web-diagnostics"
+description: "Web UI extensions: Diagnostics page, host selector, Prometheus charts, diagnostic detail"
+
+tasks:
+  - id: web-diagnostics-api
+    title: "Add diagnostics REST API and WebSocket fields"
+    agent: rust-engineer
+    scope: web
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+
+      EXISTING CODE:
+      - aether-web/api.rs: REST endpoints for processes, connections, stats, arbiter
+      - aether-web/ws.rs: WebSocket pushes WorldUpdate every 500ms
+      - aether-web/state.rs: SharedState { world, arbiter }
+      - aether-core: Diagnostic { id, host, target, severity, category, summary, evidence, recommendation }
+      - main.rs: diagnostics stored in Arc<Mutex<Vec<Diagnostic>>>
+
+      CONTEXT:
+      - After MS10-MS12, the diagnostic engine produces Vec<Diagnostic>
+      - Diagnostics need to be accessible via REST API and included in WebSocket updates
+      - SharedState needs diagnostics reference
+    prompt: |
+      Add diagnostics to web API.
+
+      File: crates/aether-web/src/state.rs (modify)
+      - Add to SharedState: diagnostics: Arc<Mutex<Vec<Diagnostic>>>
+
+      File: crates/aether-web/src/api.rs (modify)
+      - DiagnosticResponse struct (Serialize):
+        id, host, target_type, target_name, severity, category, summary,
+        evidence (Vec of { metric, current, threshold, context }),
+        recommendation: { action, reason, urgency }
+      - DiagnosticStatsResponse: { critical: u32, warning: u32, info: u32, total: u32 }
+      - GET /api/diagnostics → Vec<DiagnosticResponse> (optional ?severity=critical&host=X filters)
+      - GET /api/diagnostics/:id → single diagnostic detail
+      - GET /api/diagnostics/stats → DiagnosticStatsResponse
+      - POST /api/diagnostics/:id/dismiss → remove diagnostic
+      - POST /api/diagnostics/:id/execute → send to Arbiter queue
+
+      File: crates/aether-web/src/ws.rs (modify)
+      - Add to WorldUpdate:
+        diagnostics: Vec<DiagnosticResponse>
+        diagnostic_stats: DiagnosticStatsResponse
+
+      Update main.rs: pass diagnostics Arc to SharedState.
+
+      Tests:
+      - test_diagnostics_endpoint_returns_array
+      - test_diagnostics_stats_counts
+      - test_diagnostics_filter_by_severity
+      - test_world_update_includes_diagnostics
+
+      COMMIT: feat(web): add diagnostics REST API and WebSocket fields
+    test: "cargo test -p aether-web"
+    depends_on: []
+
+  - id: web-diagnostics-page
+    title: "Implement Diagnostics page in React frontend"
+    agent: rust-engineer
+    scope: web
+    type: feat
+    context: |
+      EXISTING CODE (from ms9-web-frontend):
+      - src/stores/worldStore.ts: zustand store with processes, connections, stats
+      - src/hooks/useWorldState.ts: WebSocket hook
+      - src/components/Layout.tsx: sidebar nav + top bar
+      - src/types/index.ts: TypeScript interfaces
+      - WebSocket now includes diagnostics[] and diagnostic_stats in WorldUpdate
+
+      Diagnostics page = web equivalent of TUI DiagnosticsTab (F6).
+    prompt: |
+      Implement Diagnostics page.
+
+      File: src/types/index.ts (modify)
+      - Add interfaces:
+        Evidence { metric: string, current: number, threshold: number, context: string, trend?: string }
+        Recommendation { action: string, reason: string, urgency: string }
+        Diagnostic { id: number, host: string, target_type: string, target_name: string,
+          severity: 'critical' | 'warning' | 'info', category: string, summary: string,
+          evidence: Evidence[], recommendation: Recommendation }
+        DiagnosticStats { critical: number, warning: number, info: number, total: number }
+      - Add to WorldUpdate: diagnostics: Diagnostic[], diagnostic_stats: DiagnosticStats
+
+      File: src/stores/worldStore.ts (modify)
+      - Add: diagnostics: Diagnostic[], diagnosticStats: DiagnosticStats
+      - Update setWorldState to include diagnostics from WebSocket
+
+      File: src/pages/DiagnosticsPage.tsx
+      - Split layout: diagnostic list (left 55%) + detail panel (right 45%)
+      - Top bar: severity summary badges — "■ N Critical  ■ N Warning  ● N Info" with colors
+      - Filter buttons: All, Critical, Warning, Info (toggle)
+      - Search input: filter by summary text or target name
+      - If no diagnostic selected: "Select a diagnostic to view details"
+
+      File: src/components/DiagnosticList.tsx
+      - Table rows for each diagnostic:
+        - Severity icon: ■ (critical/warning) or ● (info) with color
+          - Critical: #ff3c3c, Warning: #ffc832, Info: #64c8ff
+        - Target name (process name or host)
+        - Summary text (truncated to fit)
+        - Category badge
+      - Click row → select diagnostic
+      - Sort by severity (Critical first) by default
+      - Animate new diagnostics appearing (fade-in)
+
+      File: src/components/DiagnosticDetail.tsx
+      - Shown when diagnostic selected
+      - Header: severity badge + summary
+      - Target section: type + name
+      - Category badge
+      - Evidence section: each evidence item as card
+        - Metric name, current value (highlighted), threshold, context
+        - If trend: show arrow icon (↑ growing, → stable, ↓ declining)
+        - Mini progress bar: current relative to threshold
+      - Recommendation box (highlighted):
+        - Action (bold), reason, urgency badge
+      - Action buttons:
+        - "Execute" (green) → POST /api/diagnostics/:id/execute
+        - "Dismiss" (grey) → POST /api/diagnostics/:id/dismiss
+
+      Update App.tsx: add /diagnostics route.
+      Update Layout.tsx: add "Diagnostics" nav link with severity indicator dot.
+
+      COMMIT: feat(web): implement Diagnostics page with list and detail panel
+    test: "cd crates/aether-web/frontend && npm run build"
+    depends_on: [web-diagnostics-api]
+
+  - id: web-overview-diag-indicators
+    title: "Add diagnostic indicators to Overview process table"
+    agent: rust-engineer
+    scope: web
+    type: feat
+    context: |
+      EXISTING CODE:
+      - src/pages/OverviewPage.tsx: process table + detail panel
+      - src/components/ProcessTable.tsx: columns PID, Name, CPU%, Memory, State, HP, XP
+      - src/stores/worldStore.ts: now has diagnostics[] in store
+      - Diagnostics have target_type + target_name that can match process name/pid
+
+      Mirror TUI behavior: show diagnostic indicator in process table rows.
+    prompt: |
+      Add diagnostic column to web process table.
+
+      File: src/components/ProcessTable.tsx (modify)
+      - Add "Diag" column after HP
+      - For each process row: find diagnostics matching this process
+        - Match by: diagnostic.target_type === 'process' && diagnostic.target_name contains process name or pid
+      - If matching diagnostics exist:
+        - Show highest severity icon + truncated summary (15 chars)
+        - Critical: ■ red, Warning: ■ yellow, Info: ● blue
+        - Tooltip on hover: full summary text
+      - If no diagnostics: empty cell
+      - Clicking the diagnostic indicator → navigate to /diagnostics with that diagnostic selected
+
+      File: src/components/StatsBar.tsx (modify)
+      - Add diagnostic summary to top bar: "■ N Critical  ■ N Warning" (only if > 0)
+      - Critical count in red, Warning in yellow
+      - Clicking → navigate to /diagnostics
+
+      COMMIT: feat(web): add diagnostic indicators to process table and stats bar
+    test: "cd crates/aether-web/frontend && npm run build"
+    depends_on: [web-diagnostics-page]
+
+  - id: web-metrics-page
+    title: "Implement Metrics page with Prometheus charts"
+    agent: rust-engineer
+    scope: web
+    type: feat
+    context: |
+      EXISTING CODE:
+      - aether-metrics: MetricsExporter on /metrics, PrometheusConsumer queries Prometheus
+      - aether-web/api.rs: REST API infrastructure
+      - src/stores/worldStore.ts: zustand store
+      - src/components/SparklineChart.tsx: recharts AreaChart component
+
+      After MS12, Prometheus metrics are available. This page shows time-series charts.
+    prompt: |
+      Implement Metrics page.
+
+      File: crates/aether-web/src/api.rs (modify)
+      - GET /api/metrics/summary → current metric values:
+        { cpu_percent: f64, memory_used_bytes: u64, memory_total_bytes: u64,
+          load_avg: [f64;3], diagnostics_active: { critical, warning, info },
+          process_count: u32, top_cpu_processes: Vec<{pid, name, cpu}> }
+      - GET /api/metrics/history?metric=X&duration=300 → recent time-series data
+        { metric: string, samples: Vec<{ timestamp: u64, value: f64 }> }
+        - Read from MetricStore (last N seconds of a given metric)
+
+      File: src/pages/MetricsPage.tsx
+      - Dashboard layout with metric cards in grid (2x3 or responsive)
+      - Each card: title, current value (large), sparkline chart, trend indicator
+
+      File: src/components/MetricCard.tsx
+      - Props: title, value (formatted), unit, chartData (number[]), trend ('up'|'down'|'stable'), color
+      - Large current value display
+      - recharts AreaChart showing recent history (60 data points)
+      - Trend arrow with color: up+red for concerning, up+green for good (context-dependent)
+
+      File: src/components/SystemCharts.tsx
+      - Full-width charts section below metric cards:
+        - CPU Usage Over Time (line chart, last 5 min)
+        - Memory Usage Over Time (area chart, last 5 min)
+        - Active Diagnostics Over Time (stacked area by severity)
+      - recharts LineChart/AreaChart with axes, legend, tooltips
+      - Auto-refresh from WebSocket data (accumulate last 300 data points in store)
+
+      File: src/stores/metricsStore.ts
+      - Separate zustand store for time-series history
+      - appendSample(metric, value, timestamp) — keeps last 300 samples per metric
+      - getHistory(metric) → { timestamp, value }[]
+      - Updated from WebSocket data each tick
+
+      Update App.tsx: add /metrics route.
+      Update Layout.tsx: add "Metrics" nav link.
+
+      COMMIT: feat(web): implement Metrics page with time-series charts
+    test: "cd crates/aether-web/frontend && npm run build"
+    depends_on: [web-diagnostics-page]
+
+  - id: web-host-selector
+    title: "Add host selector for cluster-ready multi-host view"
+    agent: rust-engineer
+    scope: web
+    type: feat
+    context: |
+      EXISTING CODE:
+      - aether-core: HostId (String newtype) used in Diagnostic, TimeSeries
+      - src/stores/worldStore.ts: all process data
+      - src/components/Layout.tsx: sidebar + top bar
+      - Currently single-host, but data model supports HostId per metric/diagnostic
+
+      Host selector prepares for multi-host/cluster mode.
+    prompt: |
+      Add host selector to web UI.
+
+      File: src/stores/worldStore.ts (modify)
+      - Add: availableHosts: string[], selectedHost: string | null
+      - Actions: setSelectedHost(host), clearHostFilter()
+      - When selectedHost is set: filter processes and diagnostics by host
+
+      File: src/components/HostSelector.tsx
+      - Dropdown in top bar (right side of StatsBar)
+      - Options: "All Hosts" + list of available hosts
+      - Each host shows: name, process count, diagnostic count
+      - Selected host highlighted
+      - When multiple hosts available: show host badges with status indicator
+        - Green dot: healthy (0 critical), Yellow: has warnings, Red: has criticals
+
+      File: src/components/StatsBar.tsx (modify)
+      - Include HostSelector on the right side
+      - Stats reflect filtered view when host is selected
+
+      File: src/pages/OverviewPage.tsx (modify)
+      - Filter process table by selectedHost when set
+
+      File: src/pages/DiagnosticsPage.tsx (modify)
+      - Filter diagnostics by selectedHost when set
+
+      For now with single host: selector shows "local" only.
+      When Prometheus consumer adds external hosts, they appear automatically.
+
+      COMMIT: feat(web): add host selector for cluster-ready multi-host view
+    test: "cd crates/aether-web/frontend && npm run build"
+    depends_on: [web-metrics-page]

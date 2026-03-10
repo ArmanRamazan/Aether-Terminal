@@ -1,0 +1,137 @@
+phase: "ms10-diagnostics-ui"
+description: "MVP Phase 1d: Diagnostics tab in TUI, diagnostic indicators in Overview, wire into main"
+
+tasks:
+  - id: diagnostics-tab-tui
+    title: "Create Diagnostics tab (F6) in TUI"
+    agent: rust-engineer
+    scope: render
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+
+      EXISTING CODE:
+      - tui/app.rs: App struct with Tab enum (Overview, World3D, Network, Arbiter, Rules),
+        handle_key with F1-F5, render() dispatches to tab modules
+      - tui/mod.rs: mod declarations for overview, world3d, network, arbiter, rules, help, input, tabs, widgets
+      - tui/tabs.rs: tab bar rendering with tab names
+      - palette.rs: color constants, color_for_hp(), color_for_load()
+      - aether-core: Diagnostic { id, host, target, severity, category, summary, evidence, recommendation },
+        Severity (Info, Warning, Critical), DiagTarget, Evidence, Recommendation
+    prompt: |
+      Create Diagnostics tab in TUI.
+
+      File: crates/aether-render/src/palette.rs (modify)
+      - Add: pub const DIAGNOSTIC_CRITICAL: Color = Color::Rgb(255, 60, 60);
+      - Add: pub const DIAGNOSTIC_WARNING: Color = Color::Rgb(255, 200, 50);
+      - Add: pub const DIAGNOSTIC_INFO: Color = Color::Rgb(100, 200, 255);
+
+      File: crates/aether-render/src/tui/diagnostics.rs (create)
+      - DiagnosticsTab { selected: usize, scroll_offset: usize, detail_scroll: usize }
+        - render(&self, area: Rect, buf: &mut Buffer, diagnostics: &[Diagnostic])
+          - Split area vertically: 55% list, 45% detail
+          - List panel (Block with "Diagnostics" title):
+            - Header line: "■ N Critical  ■ N Warning  ■ N Info" with severity colors
+            - Table rows: severity icon (colored ■/●), target name, summary, key metric value
+            - Selected row highlighted
+            - Scrollable if more than fits
+          - Detail panel (Block with selected diagnostic summary as title):
+            - If nothing selected: "Select a diagnostic to view details"
+            - Target: "{type}: {name}"
+            - Severity + Category badges
+            - Evidence section: each evidence as "metric: current / threshold (context)"
+            - If trend in evidence: show trend value with arrow (↑ growing, → stable, ↓ declining)
+            - Recommendation box: action + reason + urgency
+            - Keybinding hints: "[Enter] Execute  [d] Dismiss  [m] Mute rule"
+        - handle_key(&mut self, key: KeyEvent) -> Option<DiagnosticAction>
+          - Up/Down/j/k: navigate list
+          - Enter: return DiagnosticAction::Execute(diagnostic_id)
+          - d: return DiagnosticAction::Dismiss(diagnostic_id)
+          - m: return DiagnosticAction::MuteRule(rule_id) — TODO for later
+        - severity_style(severity: Severity) -> Style — maps to palette colors
+      - DiagnosticAction enum: Execute(u64), Dismiss(u64), MuteRule(String)
+
+      Update tui/mod.rs: pub mod diagnostics;
+
+      Update tui/app.rs:
+      - Add Tab::Diagnostics to Tab enum
+      - Add F6 keybinding in handle_key
+      - Add diagnostics: Vec<Diagnostic> field to App struct
+      - In render(): when Tab::Diagnostics → call diagnostics_tab.render()
+      - Update tabs.rs names list to include "Diagnostics"
+
+      COMMIT: feat(render): add Diagnostics tab (F6) with findings list and detail panel
+    test: "cargo check -p aether-render"
+    depends_on: []
+
+  - id: overview-diag-column
+    title: "Add diagnostic indicator column to Overview tab"
+    agent: rust-engineer
+    scope: render
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+
+      EXISTING CODE:
+      - tui/overview.rs: OverviewTab with process table rendering
+        - Columns: PID, Name, CPU, MEM, State, HP
+        - SortColumn enum for sorting
+        - render(&self, area, buf, world, ...) reads WorldGraph processes
+      - palette.rs: DIAGNOSTIC_CRITICAL, DIAGNOSTIC_WARNING, DIAGNOSTIC_INFO colors
+      - aether-core: Diagnostic, Severity, DiagTarget::Process { pid, name }
+    prompt: |
+      Add Diag column to Overview process table.
+
+      File: crates/aether-render/src/tui/overview.rs (modify)
+      - Add diagnostics: &[Diagnostic] parameter to render()
+      - Add "Diag" column after HP in table header
+      - For each process row: find diagnostic by matching DiagTarget::Process { pid }
+        - If Critical: "■ {summary truncated to 15 chars}" in DIAGNOSTIC_CRITICAL color
+        - If Warning: "■ {summary truncated}" in DIAGNOSTIC_WARNING color
+        - If Info: "● {summary truncated}" in DIAGNOSTIC_INFO color
+        - If multiple: show highest severity one
+        - If none: empty cell
+
+      Update app.rs render() call to pass diagnostics to overview.
+
+      COMMIT: feat(render): add diagnostic indicators to Overview process table
+    test: "cargo check -p aether-render"
+    depends_on: [diagnostics-tab-tui]
+
+  - id: analyze-main-wire
+    title: "Wire AnalyzeEngine into main.rs"
+    agent: rust-engineer
+    scope: terminal
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+
+      EXISTING CODE:
+      - main.rs: Cli struct with --log-level, --mcp-stdio, --mcp-sse, --no-3d, --no-game,
+        --theme, --rules, --predict, --model-path, --ebpf, --web
+      - main.rs creates: Arc<RwLock<WorldGraph>>, Arc<Mutex<ArbiterQueue>>
+      - main.rs spawns: IngestionPipeline, WorldGraph updater, Arbiter executor, etc.
+      - App struct has diagnostics: Vec<Diagnostic> field (from diagnostics-tab-tui task)
+      - aether-analyze: AnalyzeEngine::new(config), run(world, diag_tx, cancel)
+      - aether-analyze: AnalyzeConfig { interval, history_capacity, host }
+    prompt: |
+      Wire AnalyzeEngine into main.
+
+      File: crates/aether-terminal/src/main.rs (modify)
+      - Add CLI flags:
+        - no_analyze: bool (#[arg(long)]) — "Disable diagnostic engine"
+        - analyze_interval: Option<u64> (#[arg(long)]) — "Diagnostic analysis interval in seconds"
+      - In main(), after creating world graph and before TUI:
+        - Unless --no-analyze:
+          1. Create AnalyzeConfig (interval from --analyze-interval or 5s default, host "local")
+          2. Create AnalyzeEngine::new(config)
+          3. Create mpsc::channel::<Vec<Diagnostic>>(32)
+          4. Spawn engine.run(world.clone(), diag_tx, cancel.child_token()) as tokio task
+          5. Create diagnostics storage: Arc<Mutex<Vec<Diagnostic>>>
+          6. Spawn receiver task: loop { recv diag_rx → update Arc<Mutex<Vec<Diagnostic>>> }
+          7. Pass Arc<Mutex<Vec<Diagnostic>>> to App for rendering
+        - In TUI render loop: read diagnostics from Arc<Mutex> and pass to App
+
+      COMMIT: feat(terminal): wire AnalyzeEngine with --no-analyze flag
+    test: "cargo run -p aether-terminal -- --help"
+    depends_on: [diagnostics-tab-tui]
