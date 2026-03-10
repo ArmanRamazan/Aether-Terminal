@@ -74,6 +74,7 @@ name = "aether-predict"
 version = "0.1.0"
 dependencies = [
  "aether-core",
+ "glam",
  "thiserror 2.0.18",
  "tokio",
 ]
