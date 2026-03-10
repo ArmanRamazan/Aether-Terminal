@@ -95,7 +95,8 @@ impl CompiledRuleSet {
             .iter()
             .map(|rule| {
                 let compiled = jit.compile_rule(&mut codegen, rule)?;
-                Ok((compiled, rule.duration))
+                let duration = rule.duration_secs().map(Duration::from_secs);
+                Ok((compiled, duration))
             })
             .collect::<Result<Vec<_>, ScriptError>>()?;
         Ok(Self {
@@ -196,8 +197,9 @@ impl CompiledRuleSet {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{Action, CompareOp, Expr, Field, Rule, Severity, Value};
+    use crate::ast::{Action, CmpOp, Condition, Expr, Literal, Rule, Severity};
     use crate::codegen::WorldStateFFI;
+    use crate::lexer::Span;
 
     fn make_state(pid: u32, cpu: f32, mem: u64) -> WorldStateFFI {
         WorldStateFFI {
@@ -217,30 +219,41 @@ mod tests {
     fn high_cpu_rule() -> Rule {
         Rule {
             name: "high_cpu".to_string(),
-            when_clause: Expr::Comparison {
-                field: Field::CpuPercent,
-                op: CompareOp::Gt,
-                value: Value::Float(90.0),
+            condition: Condition::Comparison {
+                left: Expr::FieldAccess {
+                    object: "process".to_string(),
+                    field: "cpu".to_string(),
+                },
+                op: CmpOp::Gt,
+                right: Expr::Literal(Literal::Float(90.0)),
             },
-            duration: None,
-            then_clause: Action::Alert {
+            actions: vec![Action::Alert {
+                message: "high cpu".to_string(),
                 severity: Severity::Warning,
-            },
+            }],
+            span: Span { start: 0, end: 0 },
         }
     }
 
     fn high_cpu_duration_rule(secs: u64) -> Rule {
         Rule {
             name: "high_cpu_sustained".to_string(),
-            when_clause: Expr::Comparison {
-                field: Field::CpuPercent,
-                op: CompareOp::Gt,
-                value: Value::Float(90.0),
+            condition: Condition::Duration {
+                condition: Box::new(Condition::Comparison {
+                    left: Expr::FieldAccess {
+                        object: "process".to_string(),
+                        field: "cpu".to_string(),
+                    },
+                    op: CmpOp::Gt,
+                    right: Expr::Literal(Literal::Float(90.0)),
+                }),
+                seconds: secs,
             },
-            duration: Some(Duration::from_secs(secs)),
-            then_clause: Action::Alert {
+            actions: vec![Action::Alert {
+                message: "high cpu sustained".to_string(),
                 severity: Severity::Critical,
-            },
+            }],
+            span: Span { start: 0, end: 0 },
         }
     }
 
@@ -262,20 +275,26 @@ mod tests {
     fn test_matching_condition_triggers_action() {
         let kill_rule = Rule {
             name: "kill_zombie".to_string(),
-            when_clause: Expr::And(
-                Box::new(Expr::Comparison {
-                    field: Field::State,
-                    op: CompareOp::Eq,
-                    value: Value::Int(2), // Zombie
+            condition: Condition::And(
+                Box::new(Condition::Comparison {
+                    left: Expr::FieldAccess {
+                        object: "process".to_string(),
+                        field: "state".to_string(),
+                    },
+                    op: CmpOp::Eq,
+                    right: Expr::Literal(Literal::Int(2)), // Zombie
                 }),
-                Box::new(Expr::Comparison {
-                    field: Field::CpuPercent,
-                    op: CompareOp::Lt,
-                    value: Value::Float(1.0),
+                Box::new(Condition::Comparison {
+                    left: Expr::FieldAccess {
+                        object: "process".to_string(),
+                        field: "cpu".to_string(),
+                    },
+                    op: CmpOp::Lt,
+                    right: Expr::Literal(Literal::Float(1.0)),
                 }),
             ),
-            duration: None,
-            then_clause: Action::Kill,
+            actions: vec![Action::Kill],
+            span: Span { start: 0, end: 0 },
         };
 
         let mut ruleset = CompiledRuleSet::compile(&[kill_rule]).expect("compilation failed");
@@ -358,29 +377,37 @@ mod tests {
 
     #[test]
     fn test_multiple_rules_tracked_independently() {
+        let cpu_cond = Condition::Comparison {
+            left: Expr::FieldAccess {
+                object: "process".to_string(),
+                field: "cpu".to_string(),
+            },
+            op: CmpOp::Gt,
+            right: Expr::Literal(Literal::Float(90.0)),
+        };
         let rule_a = Rule {
             name: "rule_a".to_string(),
-            when_clause: Expr::Comparison {
-                field: Field::CpuPercent,
-                op: CompareOp::Gt,
-                value: Value::Float(90.0),
+            condition: Condition::Duration {
+                condition: Box::new(cpu_cond.clone()),
+                seconds: 3600,
             },
-            duration: Some(Duration::from_secs(3600)),
-            then_clause: Action::Alert {
+            actions: vec![Action::Alert {
+                message: "rule a".to_string(),
                 severity: Severity::Warning,
-            },
+            }],
+            span: Span { start: 0, end: 0 },
         };
         let rule_b = Rule {
             name: "rule_b".to_string(),
-            when_clause: Expr::Comparison {
-                field: Field::CpuPercent,
-                op: CompareOp::Gt,
-                value: Value::Float(90.0),
+            condition: Condition::Duration {
+                condition: Box::new(cpu_cond),
+                seconds: 0,
             },
-            duration: Some(Duration::from_secs(0)),
-            then_clause: Action::Alert {
+            actions: vec![Action::Alert {
+                message: "rule b".to_string(),
                 severity: Severity::Critical,
-            },
+            }],
+            span: Span { start: 0, end: 0 },
         };
 
         let mut ruleset =

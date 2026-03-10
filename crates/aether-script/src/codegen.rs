@@ -6,7 +6,7 @@
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
 use cranelift_codegen::ir::immediates::Ieee32;
 use cranelift_codegen::ir::{
-    types, AbiParam, Function, InstBuilder, MemFlags, Signature, UserFuncName,
+    types, AbiParam, Function, InstBuilder, MemFlags, Signature, Type, UserFuncName,
 };
 use cranelift_codegen::isa::CallConv;
 use cranelift_codegen::settings;
@@ -16,7 +16,7 @@ use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::Module;
 
-use crate::ast::{Action, CompareOp, Expr, Field, Rule, Value};
+use crate::ast::{Action, CmpOp, Condition, Expr, Literal, Rule};
 use crate::error::ScriptError;
 
 /// C-compatible process state passed to compiled rules.
@@ -82,14 +82,12 @@ impl CodeGenerator {
 
             let state_ptr = builder.block_params(entry)[0];
             let result_ptr = builder.block_params(entry)[1];
-            let matched = emit_condition(&mut builder, state_ptr, &rule.when_clause)?;
-            emit_return(
-                &mut builder,
-                state_ptr,
-                result_ptr,
-                matched,
-                &rule.then_clause,
-            );
+            let matched = emit_condition(&mut builder, state_ptr, rule.eval_condition())?;
+            let action = rule
+                .actions
+                .first()
+                .ok_or_else(|| ScriptError::Compile("rule has no actions".into()))?;
+            emit_return(&mut builder, state_ptr, result_ptr, matched, action);
             builder.finalize();
         }
 
@@ -201,6 +199,26 @@ fn build_rule_signature() -> Signature {
     sig
 }
 
+/// Resolve a field access to its byte offset and Cranelift IR type in `WorldStateFFI`.
+fn resolve_field(object: &str, field: &str) -> Result<(i32, Type), ScriptError> {
+    if object != "process" {
+        return Err(ScriptError::Compile(format!(
+            "unknown object: {object}"
+        )));
+    }
+    match field {
+        "pid" => Ok((0, types::I32)),
+        "cpu" | "cpu_percent" => Ok((4, types::F32)),
+        "mem" | "mem_bytes" => Ok((8, types::I64)),
+        "mem_growth" | "mem_growth_percent" => Ok((16, types::F32)),
+        "state" => Ok((20, types::I32)),
+        "hp" => Ok((24, types::F32)),
+        _ => Err(ScriptError::Compile(format!(
+            "unknown field: {object}.{field}"
+        ))),
+    }
+}
+
 /// Emit the return sequence: write matched/action/pid/severity to result pointer.
 ///
 /// RuleResult layout: `{ matched: u32, action_type: u32, target_pid: u32, severity: u32 }`.
@@ -236,7 +254,7 @@ fn action_constants(
     action: &Action,
 ) -> (cranelift_codegen::ir::Value, cranelift_codegen::ir::Value) {
     match action {
-        Action::Alert { severity } => {
+        Action::Alert { severity, .. } => {
             let a = builder.ins().iconst(types::I32, 1);
             let s = builder.ins().iconst(types::I32, severity.as_i64());
             (a, s)
@@ -246,7 +264,7 @@ fn action_constants(
             let s = builder.ins().iconst(types::I32, 0);
             (a, s)
         }
-        Action::Log => {
+        Action::Log { .. } => {
             let a = builder.ins().iconst(types::I32, 3);
             let s = builder.ins().iconst(types::I32, 0);
             (a, s)
@@ -258,21 +276,30 @@ fn action_constants(
 fn emit_condition(
     builder: &mut FunctionBuilder,
     state_ptr: cranelift_codegen::ir::Value,
-    expr: &Expr,
+    condition: &Condition,
 ) -> Result<cranelift_codegen::ir::Value, ScriptError> {
-    match expr {
-        Expr::Comparison { field, op, value } => {
-            emit_comparison(builder, state_ptr, *field, *op, *value)
+    match condition {
+        Condition::Comparison { left, op, right } => {
+            emit_comparison(builder, state_ptr, left, *op, right)
         }
-        Expr::And(left, right) => {
+        Condition::And(left, right) => {
             let l = emit_condition(builder, state_ptr, left)?;
             let r = emit_condition(builder, state_ptr, right)?;
             Ok(builder.ins().band(l, r))
         }
-        Expr::Or(left, right) => {
+        Condition::Or(left, right) => {
             let l = emit_condition(builder, state_ptr, left)?;
             let r = emit_condition(builder, state_ptr, right)?;
             Ok(builder.ins().bor(l, r))
+        }
+        Condition::Not(inner) => {
+            let v = emit_condition(builder, state_ptr, inner)?;
+            let one = builder.ins().iconst(types::I8, 1);
+            Ok(builder.ins().bxor(v, one))
+        }
+        Condition::Duration { condition, .. } => {
+            // Duration tracking is handled at runtime level; compile inner condition.
+            emit_condition(builder, state_ptr, condition)
         }
     }
 }
@@ -281,53 +308,76 @@ fn emit_condition(
 fn emit_comparison(
     builder: &mut FunctionBuilder,
     state_ptr: cranelift_codegen::ir::Value,
-    field: Field,
-    op: CompareOp,
-    value: Value,
+    left: &Expr,
+    op: CmpOp,
+    right: &Expr,
 ) -> Result<cranelift_codegen::ir::Value, ScriptError> {
-    let (offset, ty) = field.offset_and_type();
+    let (offset, ty) = match left {
+        Expr::FieldAccess { object, field } => resolve_field(object, field)?,
+        _ => {
+            return Err(ScriptError::Compile(
+                "left side of comparison must be a field access".into(),
+            ))
+        }
+    };
     let loaded = builder.ins().load(ty, MemFlags::new(), state_ptr, offset);
 
-    match (ty, value) {
-        (t, Value::Int(n)) if t == types::I32 => {
-            let rhs = builder.ins().iconst(types::I32, n);
+    match right {
+        Expr::Literal(lit) => emit_literal_cmp(builder, loaded, ty, op, lit),
+        _ => Err(ScriptError::Compile(
+            "right side of comparison must be a literal".into(),
+        )),
+    }
+}
+
+/// Emit a comparison between a loaded field value and a literal.
+fn emit_literal_cmp(
+    builder: &mut FunctionBuilder,
+    loaded: cranelift_codegen::ir::Value,
+    ty: Type,
+    op: CmpOp,
+    lit: &Literal,
+) -> Result<cranelift_codegen::ir::Value, ScriptError> {
+    match lit {
+        Literal::Int(n) if ty == types::I32 => {
+            let rhs = builder.ins().iconst(types::I32, *n);
             Ok(builder.ins().icmp(int_cc(op), loaded, rhs))
         }
-        (t, Value::Int(n)) if t == types::I64 => {
-            let rhs = builder.ins().iconst(types::I64, n);
+        Literal::Int(n) if ty == types::I64 => {
+            let rhs = builder.ins().iconst(types::I64, *n);
             Ok(builder.ins().icmp(int_cc(op), loaded, rhs))
         }
-        (t, Value::Float(f)) if t == types::F32 => {
-            let rhs = builder.ins().f32const(Ieee32::with_float(f as f32));
+        Literal::Float(f) | Literal::Percent(f) if ty == types::F32 => {
+            let rhs = builder.ins().f32const(Ieee32::with_float(*f as f32));
             Ok(builder.ins().fcmp(float_cc(op), loaded, rhs))
         }
         _ => Err(ScriptError::Compile(format!(
-            "type mismatch: field {field:?} cannot be compared with {value:?}"
+            "type mismatch: cannot compare {ty} with {lit:?}"
         ))),
     }
 }
 
 /// Map comparison operator to Cranelift integer condition code.
-fn int_cc(op: CompareOp) -> IntCC {
+fn int_cc(op: CmpOp) -> IntCC {
     match op {
-        CompareOp::Gt => IntCC::SignedGreaterThan,
-        CompareOp::Lt => IntCC::SignedLessThan,
-        CompareOp::Gte => IntCC::SignedGreaterThanOrEqual,
-        CompareOp::Lte => IntCC::SignedLessThanOrEqual,
-        CompareOp::Eq => IntCC::Equal,
-        CompareOp::Neq => IntCC::NotEqual,
+        CmpOp::Gt => IntCC::SignedGreaterThan,
+        CmpOp::Lt => IntCC::SignedLessThan,
+        CmpOp::Gte => IntCC::SignedGreaterThanOrEqual,
+        CmpOp::Lte => IntCC::SignedLessThanOrEqual,
+        CmpOp::Eq => IntCC::Equal,
+        CmpOp::Neq => IntCC::NotEqual,
     }
 }
 
 /// Map comparison operator to Cranelift float condition code.
-fn float_cc(op: CompareOp) -> FloatCC {
+fn float_cc(op: CmpOp) -> FloatCC {
     match op {
-        CompareOp::Gt => FloatCC::GreaterThan,
-        CompareOp::Lt => FloatCC::LessThan,
-        CompareOp::Gte => FloatCC::GreaterThanOrEqual,
-        CompareOp::Lte => FloatCC::LessThanOrEqual,
-        CompareOp::Eq => FloatCC::Equal,
-        CompareOp::Neq => FloatCC::NotEqual,
+        CmpOp::Gt => FloatCC::GreaterThan,
+        CmpOp::Lt => FloatCC::LessThan,
+        CmpOp::Gte => FloatCC::GreaterThanOrEqual,
+        CmpOp::Lte => FloatCC::LessThanOrEqual,
+        CmpOp::Eq => FloatCC::Equal,
+        CmpOp::Neq => FloatCC::NotEqual,
     }
 }
 
@@ -340,20 +390,25 @@ fn verify(func: &Function) -> Result<(), ScriptError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{Action, CompareOp, Expr, Field, Rule, Severity, Value};
+    use crate::ast::{Action, CmpOp, Condition, Expr, Literal, Rule, Severity};
+    use crate::lexer::Span;
 
     fn simple_rule() -> Rule {
         Rule {
             name: "high_cpu".to_string(),
-            when_clause: Expr::Comparison {
-                field: Field::CpuPercent,
-                op: CompareOp::Gt,
-                value: Value::Float(90.0),
+            condition: Condition::Comparison {
+                left: Expr::FieldAccess {
+                    object: "process".to_string(),
+                    field: "cpu".to_string(),
+                },
+                op: CmpOp::Gt,
+                right: Expr::Literal(Literal::Float(90.0)),
             },
-            duration: None,
-            then_clause: Action::Alert {
+            actions: vec![Action::Alert {
+                message: "high cpu".to_string(),
                 severity: Severity::Warning,
-            },
+            }],
+            span: Span { start: 0, end: 0 },
         }
     }
 
@@ -389,27 +444,36 @@ mod tests {
     fn test_generate_ir_compound_conditions() {
         let rule = Rule {
             name: "compound".to_string(),
-            duration: None,
-            when_clause: Expr::And(
-                Box::new(Expr::Comparison {
-                    field: Field::CpuPercent,
-                    op: CompareOp::Gt,
-                    value: Value::Float(80.0),
+            condition: Condition::And(
+                Box::new(Condition::Comparison {
+                    left: Expr::FieldAccess {
+                        object: "process".to_string(),
+                        field: "cpu".to_string(),
+                    },
+                    op: CmpOp::Gt,
+                    right: Expr::Literal(Literal::Float(80.0)),
                 }),
-                Box::new(Expr::Or(
-                    Box::new(Expr::Comparison {
-                        field: Field::MemBytes,
-                        op: CompareOp::Gt,
-                        value: Value::Int(1_000_000_000),
+                Box::new(Condition::Or(
+                    Box::new(Condition::Comparison {
+                        left: Expr::FieldAccess {
+                            object: "process".to_string(),
+                            field: "mem_bytes".to_string(),
+                        },
+                        op: CmpOp::Gt,
+                        right: Expr::Literal(Literal::Int(1_000_000_000)),
                     }),
-                    Box::new(Expr::Comparison {
-                        field: Field::State,
-                        op: CompareOp::Eq,
-                        value: Value::Int(2), // Zombie
+                    Box::new(Condition::Comparison {
+                        left: Expr::FieldAccess {
+                            object: "process".to_string(),
+                            field: "state".to_string(),
+                        },
+                        op: CmpOp::Eq,
+                        right: Expr::Literal(Literal::Int(2)), // Zombie
                     }),
                 )),
             ),
-            then_clause: Action::Kill,
+            actions: vec![Action::Kill],
+            span: Span { start: 0, end: 0 },
         };
 
         let mut gen = CodeGenerator::new();
