@@ -476,10 +476,7 @@ mod tests {
     #[test]
     fn test_submit_adds_pending_entry() {
         let mut queue = ArbiterQueue::default();
-        queue.submit(
-            "Claude".to_string(),
-            AgentAction::KillProcess { pid: 1234 },
-        );
+        queue.submit("Claude".to_string(), AgentAction::KillProcess { pid: 1234 });
         assert_eq!(queue.pending_count(), 1);
         assert_eq!(queue.approved_count(), 0);
         assert_eq!(queue.denied_count(), 0);
@@ -488,10 +485,7 @@ mod tests {
     #[test]
     fn test_approve_moves_to_history() {
         let mut queue = ArbiterQueue::default();
-        queue.submit(
-            "Claude".to_string(),
-            AgentAction::KillProcess { pid: 1234 },
-        );
+        queue.submit("Claude".to_string(), AgentAction::KillProcess { pid: 1234 });
         queue.approve(0);
         assert_eq!(queue.pending_count(), 0);
         assert_eq!(queue.approved_count(), 1);
@@ -500,10 +494,7 @@ mod tests {
     #[test]
     fn test_deny_moves_to_history() {
         let mut queue = ArbiterQueue::default();
-        queue.submit(
-            "Claude".to_string(),
-            AgentAction::KillProcess { pid: 1234 },
-        );
+        queue.submit("Claude".to_string(), AgentAction::KillProcess { pid: 1234 });
         queue.deny(0);
         assert_eq!(queue.pending_count(), 0);
         assert_eq!(queue.denied_count(), 1);
@@ -512,14 +503,10 @@ mod tests {
     #[test]
     fn test_navigate_down_wraps() {
         let mut tab = ArbiterTab::default();
-        tab.queue.submit(
-            "A".to_string(),
-            AgentAction::KillProcess { pid: 1 },
-        );
-        tab.queue.submit(
-            "B".to_string(),
-            AgentAction::KillProcess { pid: 2 },
-        );
+        tab.queue
+            .submit("A".to_string(), AgentAction::KillProcess { pid: 1 });
+        tab.queue
+            .submit("B".to_string(), AgentAction::KillProcess { pid: 2 });
 
         tab.handle_key(KeyCode::Char('j'));
         assert_eq!(tab.selected_action, Some(0));
@@ -532,14 +519,10 @@ mod tests {
     #[test]
     fn test_navigate_up_wraps() {
         let mut tab = ArbiterTab::default();
-        tab.queue.submit(
-            "A".to_string(),
-            AgentAction::KillProcess { pid: 1 },
-        );
-        tab.queue.submit(
-            "B".to_string(),
-            AgentAction::KillProcess { pid: 2 },
-        );
+        tab.queue
+            .submit("A".to_string(), AgentAction::KillProcess { pid: 1 });
+        tab.queue
+            .submit("B".to_string(), AgentAction::KillProcess { pid: 2 });
 
         tab.handle_key(KeyCode::Char('k'));
         assert_eq!(tab.selected_action, Some(1)); // wraps to last
@@ -550,10 +533,8 @@ mod tests {
     #[test]
     fn test_approve_selected_action() {
         let mut tab = ArbiterTab::default();
-        tab.queue.submit(
-            "Claude".to_string(),
-            AgentAction::KillProcess { pid: 1234 },
-        );
+        tab.queue
+            .submit("Claude".to_string(), AgentAction::KillProcess { pid: 1234 });
         tab.selected_action = Some(0);
 
         let result = tab.handle_key(KeyCode::Char('y'));
@@ -566,10 +547,8 @@ mod tests {
     #[test]
     fn test_deny_selected_action() {
         let mut tab = ArbiterTab::default();
-        tab.queue.submit(
-            "Claude".to_string(),
-            AgentAction::KillProcess { pid: 1234 },
-        );
+        tab.queue
+            .submit("Claude".to_string(), AgentAction::KillProcess { pid: 1234 });
         tab.selected_action = Some(0);
 
         let result = tab.handle_key(KeyCode::Char('n'));
@@ -581,10 +560,8 @@ mod tests {
     #[test]
     fn test_inspect_returns_pid() {
         let mut tab = ArbiterTab::default();
-        tab.queue.submit(
-            "Claude".to_string(),
-            AgentAction::KillProcess { pid: 42 },
-        );
+        tab.queue
+            .submit("Claude".to_string(), AgentAction::KillProcess { pid: 42 });
         tab.selected_action = Some(0);
 
         let result = tab.handle_key(KeyCode::Char('i'));
@@ -616,14 +593,10 @@ mod tests {
     #[test]
     fn test_clamp_selection_after_approve() {
         let mut tab = ArbiterTab::default();
-        tab.queue.submit(
-            "A".to_string(),
-            AgentAction::KillProcess { pid: 1 },
-        );
-        tab.queue.submit(
-            "B".to_string(),
-            AgentAction::KillProcess { pid: 2 },
-        );
+        tab.queue
+            .submit("A".to_string(), AgentAction::KillProcess { pid: 1 });
+        tab.queue
+            .submit("B".to_string(), AgentAction::KillProcess { pid: 2 });
         tab.selected_action = Some(1);
 
         // Approve the second (and last) pending action
@@ -654,10 +627,7 @@ mod tests {
     fn test_history_capacity_trim() {
         let mut queue = ArbiterQueue::default();
         for i in 0..(HISTORY_CAPACITY + 10) {
-            queue.submit(
-                "A".to_string(),
-                AgentAction::KillProcess { pid: i as u32 },
-            );
+            queue.submit("A".to_string(), AgentAction::KillProcess { pid: i as u32 });
         }
         // Approve all
         for _ in 0..(HISTORY_CAPACITY + 10) {
