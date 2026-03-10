@@ -145,21 +145,26 @@ fn process_state_to_u32(state: ProcessState) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{Action, CompareOp, Expr, Field, Rule, Severity, Value};
+    use crate::ast::{Action, CmpOp, Condition, Expr, Literal, Rule, Severity};
+    use crate::lexer::Span;
     use aether_core::models::{ProcessNode, SystemSnapshot};
 
     fn high_cpu_rule() -> Rule {
         Rule {
             name: "high_cpu".to_string(),
-            when_clause: Expr::Comparison {
-                field: Field::CpuPercent,
-                op: CompareOp::Gt,
-                value: Value::Float(90.0),
+            condition: Condition::Comparison {
+                left: Expr::FieldAccess {
+                    object: "process".to_string(),
+                    field: "cpu".to_string(),
+                },
+                op: CmpOp::Gt,
+                right: Expr::Literal(Literal::Float(90.0)),
             },
-            duration: None,
-            then_clause: Action::Alert {
+            actions: vec![Action::Alert {
+                message: "high cpu".to_string(),
                 severity: Severity::Warning,
-            },
+            }],
+            span: Span { start: 0, end: 0 },
         }
     }
 
