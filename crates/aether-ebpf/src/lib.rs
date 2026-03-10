@@ -10,10 +10,21 @@ pub mod events;
 pub mod loader;
 
 #[cfg(all(target_os = "linux", feature = "ebpf"))]
+pub mod probes;
+
+#[cfg(all(target_os = "linux", feature = "ebpf"))]
 pub mod ring_buffer;
 
 pub use error::EbpfError;
-pub use events::{ProcessExitEvent, ProcessForkEvent};
+pub use events::{
+    ProcessExitEvent, ProcessForkEvent, SyscallEvent, TcpCloseEvent, TcpConnectEvent,
+};
+
+#[cfg(all(target_os = "linux", feature = "ebpf"))]
+pub use loader::{AttachType, ProgramDef};
+
+#[cfg(all(target_os = "linux", feature = "ebpf"))]
+pub use probes::ProbeManager;
 
 #[cfg(all(target_os = "linux", feature = "ebpf"))]
 pub use ring_buffer::RawKernelEvent;

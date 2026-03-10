@@ -12,7 +12,9 @@ use tokio::io::unix::AsyncFd;
 use tokio::io::Interest;
 
 use crate::error::EbpfError;
-use crate::events::{ProcessExitEvent, ProcessForkEvent};
+use crate::events::{
+    ProcessExitEvent, ProcessForkEvent, SyscallEvent, TcpCloseEvent, TcpConnectEvent,
+};
 
 /// Raw kernel event deserialized from a BPF ring buffer.
 #[derive(Debug, Clone, PartialEq)]
@@ -21,6 +23,12 @@ pub enum RawKernelEvent {
     Fork(ProcessForkEvent),
     /// Process exit detected.
     Exit(ProcessExitEvent),
+    /// TCP connection initiated.
+    TcpConnect(TcpConnectEvent),
+    /// TCP connection closed.
+    TcpClose(TcpCloseEvent),
+    /// Syscall entered.
+    Syscall(SyscallEvent),
 }
 
 /// Async reader for BPF ring buffer maps.
@@ -52,10 +60,7 @@ impl RingBufferReader {
         let exit_buf = AsyncFd::with_interest(exit_ring, Interest::READABLE)
             .map_err(|e| EbpfError::MapError(format!("AsyncFd exit_events: {e}")))?;
 
-        Ok(Self {
-            fork_buf,
-            exit_buf,
-        })
+        Ok(Self { fork_buf, exit_buf })
     }
 
     /// Poll both ring buffers and return all available events.
@@ -141,6 +146,33 @@ fn parse_exit(bytes: &[u8]) -> Option<ProcessExitEvent> {
     Some(unsafe { std::ptr::read_unaligned(bytes.as_ptr().cast::<ProcessExitEvent>()) })
 }
 
+/// Parse raw bytes into a `TcpConnectEvent`. Returns `None` on size mismatch.
+pub(crate) fn parse_tcp_connect(bytes: &[u8]) -> Option<TcpConnectEvent> {
+    if bytes.len() < mem::size_of::<TcpConnectEvent>() {
+        return None;
+    }
+    // SAFETY: TcpConnectEvent is repr(C), Copy, and we verified the buffer size.
+    Some(unsafe { std::ptr::read_unaligned(bytes.as_ptr().cast::<TcpConnectEvent>()) })
+}
+
+/// Parse raw bytes into a `TcpCloseEvent`. Returns `None` on size mismatch.
+pub(crate) fn parse_tcp_close(bytes: &[u8]) -> Option<TcpCloseEvent> {
+    if bytes.len() < mem::size_of::<TcpCloseEvent>() {
+        return None;
+    }
+    // SAFETY: TcpCloseEvent is repr(C), Copy, and we verified the buffer size.
+    Some(unsafe { std::ptr::read_unaligned(bytes.as_ptr().cast::<TcpCloseEvent>()) })
+}
+
+/// Parse raw bytes into a `SyscallEvent`. Returns `None` on size mismatch.
+pub(crate) fn parse_syscall(bytes: &[u8]) -> Option<SyscallEvent> {
+    if bytes.len() < mem::size_of::<SyscallEvent>() {
+        return None;
+    }
+    // SAFETY: SyscallEvent is repr(C), Copy, and we verified the buffer size.
+    Some(unsafe { std::ptr::read_unaligned(bytes.as_ptr().cast::<SyscallEvent>()) })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -153,8 +185,7 @@ mod tests {
             timestamp_ns: 123_456_789,
         };
         // SAFETY: ProcessForkEvent is repr(C), Copy. Transmuting to bytes is safe.
-        let bytes: [u8; mem::size_of::<ProcessForkEvent>()] =
-            unsafe { mem::transmute(event) };
+        let bytes: [u8; mem::size_of::<ProcessForkEvent>()] = unsafe { mem::transmute(event) };
 
         let parsed = parse_fork(&bytes).expect("should parse valid fork bytes");
         assert_eq!(parsed.parent_pid, 1);
@@ -169,8 +200,7 @@ mod tests {
             exit_code: -9,
             timestamp_ns: 987_654_321,
         };
-        let bytes: [u8; mem::size_of::<ProcessExitEvent>()] =
-            unsafe { mem::transmute(event) };
+        let bytes: [u8; mem::size_of::<ProcessExitEvent>()] = unsafe { mem::transmute(event) };
 
         let parsed = parse_exit(&bytes).expect("should parse valid exit bytes");
         assert_eq!(parsed.pid, 100);
@@ -181,13 +211,19 @@ mod tests {
     #[test]
     fn test_parse_fork_short_bytes_returns_none() {
         let bytes = [0u8; 4]; // too short
-        assert!(parse_fork(&bytes).is_none(), "short buffer should return None");
+        assert!(
+            parse_fork(&bytes).is_none(),
+            "short buffer should return None"
+        );
     }
 
     #[test]
     fn test_parse_exit_short_bytes_returns_none() {
         let bytes = [0u8; 8]; // too short (need 16)
-        assert!(parse_exit(&bytes).is_none(), "short buffer should return None");
+        assert!(
+            parse_exit(&bytes).is_none(),
+            "short buffer should return None"
+        );
     }
 
     #[test]
@@ -202,8 +238,110 @@ mod tests {
             exit_code: 0,
             timestamp_ns: 0,
         });
-        // Verify enum variants are distinguishable.
+        let connect = RawKernelEvent::TcpConnect(TcpConnectEvent {
+            pid: 1,
+            saddr: 0,
+            daddr: 0,
+            sport: 0,
+            dport: 0,
+            timestamp_ns: 0,
+        });
+        let close = RawKernelEvent::TcpClose(TcpCloseEvent {
+            pid: 1,
+            saddr: 0,
+            daddr: 0,
+            sport: 0,
+            dport: 0,
+            bytes_sent: 0,
+            bytes_recv: 0,
+            duration_ns: 0,
+        });
+        let syscall = RawKernelEvent::Syscall(SyscallEvent {
+            pid: 1,
+            syscall_nr: 0,
+            timestamp_ns: 0,
+        });
         assert!(matches!(fork, RawKernelEvent::Fork(_)));
         assert!(matches!(exit, RawKernelEvent::Exit(_)));
+        assert!(matches!(connect, RawKernelEvent::TcpConnect(_)));
+        assert!(matches!(close, RawKernelEvent::TcpClose(_)));
+        assert!(matches!(syscall, RawKernelEvent::Syscall(_)));
+    }
+
+    #[test]
+    fn test_parse_tcp_connect_valid_bytes() {
+        let event = TcpConnectEvent {
+            pid: 5,
+            saddr: 0x7F000001,
+            daddr: 0xC0A80001,
+            sport: 12345,
+            dport: 80,
+            timestamp_ns: 999,
+        };
+        let bytes: [u8; mem::size_of::<TcpConnectEvent>()] = unsafe { mem::transmute(event) };
+        let parsed = parse_tcp_connect(&bytes).expect("should parse valid tcp connect bytes");
+        assert_eq!(parsed.pid, 5);
+        assert_eq!(parsed.daddr, 0xC0A80001);
+        assert_eq!(parsed.dport, 80);
+    }
+
+    #[test]
+    fn test_parse_tcp_connect_short_bytes_returns_none() {
+        let bytes = [0u8; 8];
+        assert!(
+            parse_tcp_connect(&bytes).is_none(),
+            "short buffer should return None"
+        );
+    }
+
+    #[test]
+    fn test_parse_tcp_close_valid_bytes() {
+        let event = TcpCloseEvent {
+            pid: 10,
+            saddr: 0x7F000001,
+            daddr: 0xC0A80001,
+            sport: 54321,
+            dport: 443,
+            bytes_sent: 1024,
+            bytes_recv: 2048,
+            duration_ns: 500_000,
+        };
+        let bytes: [u8; mem::size_of::<TcpCloseEvent>()] = unsafe { mem::transmute(event) };
+        let parsed = parse_tcp_close(&bytes).expect("should parse valid tcp close bytes");
+        assert_eq!(parsed.pid, 10);
+        assert_eq!(parsed.bytes_sent, 1024);
+        assert_eq!(parsed.duration_ns, 500_000);
+    }
+
+    #[test]
+    fn test_parse_tcp_close_short_bytes_returns_none() {
+        let bytes = [0u8; 16];
+        assert!(
+            parse_tcp_close(&bytes).is_none(),
+            "short buffer should return None"
+        );
+    }
+
+    #[test]
+    fn test_parse_syscall_valid_bytes() {
+        let event = SyscallEvent {
+            pid: 42,
+            syscall_nr: 1,
+            timestamp_ns: 777,
+        };
+        let bytes: [u8; mem::size_of::<SyscallEvent>()] = unsafe { mem::transmute(event) };
+        let parsed = parse_syscall(&bytes).expect("should parse valid syscall bytes");
+        assert_eq!(parsed.pid, 42);
+        assert_eq!(parsed.syscall_nr, 1);
+        assert_eq!(parsed.timestamp_ns, 777);
+    }
+
+    #[test]
+    fn test_parse_syscall_short_bytes_returns_none() {
+        let bytes = [0u8; 4];
+        assert!(
+            parse_syscall(&bytes).is_none(),
+            "short buffer should return None"
+        );
     }
 }
