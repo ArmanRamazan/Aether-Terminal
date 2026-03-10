@@ -18,6 +18,16 @@ pub enum EbpfError {
     /// A BPF map operation failed.
     #[error("BPF map error: {0}")]
     MapError(String),
+    /// Failed to parse raw event data from ring buffer.
+    #[error("event parse error: {reason} (type={event_type}, len={data_len})")]
+    ParseError {
+        /// Event type discriminant from the ring buffer header.
+        event_type: u32,
+        /// Actual data length received.
+        data_len: usize,
+        /// Human-readable reason.
+        reason: String,
+    },
 }
 
 #[cfg(test)]
