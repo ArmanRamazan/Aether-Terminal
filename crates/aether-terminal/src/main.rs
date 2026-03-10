@@ -84,7 +84,7 @@ async fn main() -> anyhow::Result<()> {
     let cancel = CancellationToken::new();
 
     // Spawn ingestion pipeline
-    let pipeline = IngestionPipeline::new(probe, event_tx);
+    let mut pipeline = IngestionPipeline::new(probe, event_tx);
     let pipeline_cancel = cancel.child_token();
     tokio::spawn(async move {
         if let Err(e) = pipeline.run(pipeline_cancel).await {
