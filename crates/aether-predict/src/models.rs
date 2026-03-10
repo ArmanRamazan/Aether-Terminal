@@ -75,11 +75,26 @@ impl ConfidenceScorer {
     pub fn new() -> Self {
         Self {
             thresholds: [
-                (AnomalyType::OomRisk, AnomalyType::OomRisk.default_threshold()),
-                (AnomalyType::CpuSpike, AnomalyType::CpuSpike.default_threshold()),
-                (AnomalyType::MemoryLeak, AnomalyType::MemoryLeak.default_threshold()),
-                (AnomalyType::Deadlock, AnomalyType::Deadlock.default_threshold()),
-                (AnomalyType::DiskExhaustion, AnomalyType::DiskExhaustion.default_threshold()),
+                (
+                    AnomalyType::OomRisk,
+                    AnomalyType::OomRisk.default_threshold(),
+                ),
+                (
+                    AnomalyType::CpuSpike,
+                    AnomalyType::CpuSpike.default_threshold(),
+                ),
+                (
+                    AnomalyType::MemoryLeak,
+                    AnomalyType::MemoryLeak.default_threshold(),
+                ),
+                (
+                    AnomalyType::Deadlock,
+                    AnomalyType::Deadlock.default_threshold(),
+                ),
+                (
+                    AnomalyType::DiskExhaustion,
+                    AnomalyType::DiskExhaustion.default_threshold(),
+                ),
             ],
         }
     }

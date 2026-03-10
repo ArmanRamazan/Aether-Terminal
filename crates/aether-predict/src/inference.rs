@@ -48,7 +48,9 @@ impl OnnxModel {
         if input.len() != expected_len {
             return Err(PredictError::Inference(format!(
                 "expected {} input values for shape {:?}, got {}",
-                expected_len, self.input_shape, input.len()
+                expected_len,
+                self.input_shape,
+                input.len()
             )));
         }
 
@@ -163,18 +165,20 @@ mod tests {
 
         let total: usize = shape.iter().product();
         let offset_data = vec![0.5f32; total];
-        let offset_tensor: Tensor = tract_ndarray::ArrayD::from_shape_vec(
-            tract_ndarray::IxDyn(shape),
-            offset_data,
-        )
-        .expect("build offset tensor")
-        .into();
+        let offset_tensor: Tensor =
+            tract_ndarray::ArrayD::from_shape_vec(tract_ndarray::IxDyn(shape), offset_data)
+                .expect("build offset tensor")
+                .into();
         let offset = model
             .add_const("offset", offset_tensor.into_arc_tensor())
             .expect("add const");
 
         let sum = model
-            .wire_node("add", tract_onnx::tract_core::ops::math::add(), &[source, offset])
+            .wire_node(
+                "add",
+                tract_onnx::tract_core::ops::math::add(),
+                &[source, offset],
+            )
             .expect("wire add");
         model.set_output_outlets(&sum).expect("set output");
         model

@@ -84,8 +84,7 @@ impl FeatureExtractor {
 
         // Phase 1: extract raw features and collect min/max.
         let mut stats = RunningStats::new();
-        let mut raw: Vec<(u32, FeatureVector)> =
-            Vec::with_capacity(world.process_count());
+        let mut raw: Vec<(u32, FeatureVector)> = Vec::with_capacity(world.process_count());
 
         for proc in world.processes() {
             let mem_delta = self
