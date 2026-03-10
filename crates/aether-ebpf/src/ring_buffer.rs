@@ -13,23 +13,9 @@ use tokio::io::Interest;
 
 use crate::error::EbpfError;
 use crate::events::{
-    ProcessExitEvent, ProcessForkEvent, SyscallEvent, TcpCloseEvent, TcpConnectEvent,
+    ProcessExitEvent, ProcessForkEvent, RawKernelEvent, SyscallEvent, TcpCloseEvent,
+    TcpConnectEvent,
 };
-
-/// Raw kernel event deserialized from a BPF ring buffer.
-#[derive(Debug, Clone, PartialEq)]
-pub enum RawKernelEvent {
-    /// Process fork detected.
-    Fork(ProcessForkEvent),
-    /// Process exit detected.
-    Exit(ProcessExitEvent),
-    /// TCP connection initiated.
-    TcpConnect(TcpConnectEvent),
-    /// TCP connection closed.
-    TcpClose(TcpCloseEvent),
-    /// Syscall entered.
-    Syscall(SyscallEvent),
-}
 
 /// Async reader for BPF ring buffer maps.
 ///
