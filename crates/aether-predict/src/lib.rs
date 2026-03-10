@@ -7,4 +7,5 @@ pub mod error;
 pub mod features;
 #[cfg(feature = "predict")]
 pub mod inference;
+pub mod models;
 pub mod window;
