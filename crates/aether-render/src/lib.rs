@@ -15,4 +15,8 @@ pub enum RenderError {
     /// Terminal I/O failure (crossterm / ratatui).
     #[error("terminal I/O error: {0}")]
     Io(#[from] std::io::Error),
+
+    /// Theme file parsing or validation error.
+    #[error("theme error: {0}")]
+    Theme(String),
 }

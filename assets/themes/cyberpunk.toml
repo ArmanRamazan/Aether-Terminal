@@ -1,0 +1,11 @@
+# Cyberpunk — Blade Runner / Ghost in the Shell inspired palette.
+# Default theme for Aether Terminal.
+
+[colors]
+bg        = "#050A0E"
+healthy   = "#00F0FF"
+neon_blue = "#0080FF"
+warning   = "#FCEE09"
+critical  = "#FF003C"
+data      = "#FAFAFA"
+xp_purple = "#BF00FF"
