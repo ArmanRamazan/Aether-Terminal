@@ -6,10 +6,10 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use aether_core::graph::WorldGraph;
@@ -114,7 +114,10 @@ impl PredictEngine {
     /// Processes a single tick: extract, window, select, infer.
     async fn process_tick(&mut self, world: &Arc<RwLock<WorldGraph>>) {
         let (features, names) = {
-            let guard = world.read().await;
+            let guard = match world.read() {
+                Ok(g) => g,
+                Err(_) => return,
+            };
             let features = self.extractor.extract(&guard);
             let names: HashMap<u32, String> =
                 guard.processes().map(|p| (p.pid, p.name.clone())).collect();
@@ -251,7 +254,7 @@ mod tests {
 
         let world = Arc::new(RwLock::new(WorldGraph::new()));
         {
-            let mut w = world.write().await;
+            let mut w = world.write().expect("lock");
             w.add_process(make_process(1, 50.0, 1024));
             w.add_process(make_process(2, 80.0, 2048));
         }
@@ -341,7 +344,7 @@ mod tests {
 
         let world = Arc::new(RwLock::new(WorldGraph::new()));
         {
-            let mut w = world.write().await;
+            let mut w = world.write().expect("lock");
             w.add_process(make_process(1, 90.0, 4096));
             w.add_process(make_process(2, 10.0, 512));
             w.add_process(make_process(3, 50.0, 2048));

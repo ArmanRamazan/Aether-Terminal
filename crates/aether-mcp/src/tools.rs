@@ -6,6 +6,7 @@ use serde_json::{json, Value};
 
 use aether_core::models::ProcessState;
 use aether_core::{AgentAction, WorldGraph};
+use aether_predict::models::PredictedAnomaly;
 
 use crate::arbiter::ArbiterQueue;
 
@@ -251,6 +252,40 @@ pub(crate) fn execute_action(
         "status": "pending_approval",
         "action_id": action_id,
     }))
+}
+
+/// Return current AI predictions as JSON.
+///
+/// Includes per-prediction details (pid, type, confidence, ETA) and summary stats.
+pub(crate) fn predict_anomalies(predictions: &Mutex<Vec<PredictedAnomaly>>) -> Value {
+    let preds = predictions.lock().expect("predictions lock poisoned");
+
+    let items: Vec<Value> = preds
+        .iter()
+        .map(|p| {
+            json!({
+                "pid": p.pid,
+                "process_name": p.process_name,
+                "anomaly_type": p.anomaly_type,
+                "confidence": p.confidence,
+                "eta_seconds": p.eta_seconds,
+                "recommended_action": p.recommended_action,
+            })
+        })
+        .collect();
+
+    let total = items.len();
+    let model_status = if preds.is_empty() {
+        "no_predictions"
+    } else {
+        "active"
+    };
+
+    json!({
+        "predictions": items,
+        "total": total,
+        "model_status": model_status,
+    })
 }
 
 #[cfg(test)]
