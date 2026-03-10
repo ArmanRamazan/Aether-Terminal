@@ -1,0 +1,98 @@
+phase: "ms7-hot-reload"
+description: "Hot-reload with file watcher, ScriptEngine task, Rules tab integration"
+
+tasks:
+  - id: file-watcher
+    title: "Implement hot-reload with file watcher"
+    agent: rust-engineer
+    scope: script
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      EXISTING CODE (from ms7-lexer-parser, type-checker, cranelift-jit):
+      - Full pipeline: lexer → parser → type-checker → codegen → JIT compiler → runtime
+      - CompiledRuleSet in runtime.rs, JitCompiler in codegen.rs
+      - ScriptError for all error types
+      - Add `notify` and `arc-swap` to Cargo.toml
+    prompt: |
+      Implement hot-reload in crates/aether-script/src/hot_reload.rs.
+
+      - HotReloader: rules Arc<ArcSwap<CompiledRuleSet>>, watch_paths
+      - pub async fn watch(&self, cancel: CancellationToken)
+        - File change → tokenize → parse → type-check → compile → atomic swap
+        - Error → log, keep old rules
+        - Debounce 100ms
+      - pub fn current_rules() → Guard<Arc<CompiledRuleSet>>
+
+      Update lib.rs: add pub mod hot_reload;
+
+      Tests:
+      - test_current_rules_returns_initial_rules
+      - test_compilation_error_preserves_old_rules
+
+      COMMIT: feat(script): implement hot-reload with file watcher
+    test: "cargo test -p aether-script"
+    depends_on: []
+
+  - id: script-engine
+    title: "Implement ScriptEngine as tokio task"
+    agent: rust-engineer
+    scope: script
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+
+      EXISTING CODE (from previous task):
+      - hot_reload.rs: HotReloader with Arc<ArcSwap<CompiledRuleSet>>
+      - runtime.rs: CompiledRuleSet, evaluate(), DurationTracker
+      - aether-core: AgentAction enum, SystemEvent, WorldGraph
+    prompt: |
+      Implement ScriptEngine in crates/aether-script/src/engine.rs.
+
+      - ScriptEngine: rules (Arc<ArcSwap<CompiledRuleSet>>), duration_tracker, action_tx, stats
+      - EngineStats: evaluations, actions_triggered, rule_match_counts
+      - pub async fn run(&mut self, world_rx, cancel)
+      - pub fn stats() → &EngineStats
+
+      Update lib.rs: add pub mod engine;
+
+      Tests:
+      - test_engine_evaluates_rules_and_produces_actions
+      - test_engine_stats_track_counts
+
+      COMMIT: feat(script): implement ScriptEngine as tokio task
+    test: "cargo test -p aether-script"
+    depends_on: [file-watcher]
+
+  - id: rules-tab-integration
+    title: "Integrate JIT rule engine with Rules tab"
+    agent: rust-engineer
+    scope: terminal
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+
+      EXISTING CODE:
+      - main.rs has Cli struct (--log-level, --mcp-stdio, --mcp-sse), SysinfoProbe, IngestionPipeline, WorldGraph, ArbiterQueue, McpServer, App
+      - App (tui/app.rs) has Tab enum (Overview, World3D, Network, Arbiter), handle_key with F1-F4
+      - tui/ has: overview.rs, world3d.rs, network.rs, arbiter.rs, help.rs, input.rs, tabs.rs, widgets/
+      - ScriptEngine, HotReloader, EngineStats from aether-script
+    prompt: |
+      Add Rules tab (F5) and --rules CLI flag.
+
+      File: crates/aether-render/src/tui/rules.rs
+      - RulesTab struct: selected_rule
+      - render(&self, area, buf, stats, rules) — shows active rules, stats, details
+      Update tui/mod.rs and App: add Tab::Rules, F5 binding
+
+      File: crates/aether-terminal/src/main.rs (modify)
+      - Add --rules <PATH> flag to Cli struct
+      - When --rules: load rules, create HotReloader, spawn ScriptEngine
+      - Connect action output to Arbiter queue
+
+      COMMIT: feat(terminal): integrate JIT rule engine with Rules tab
+    test: "cargo run -p aether-terminal -- --help"
+    depends_on: [script-engine]

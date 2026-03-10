@@ -1,0 +1,93 @@
+phase: "ms6-ebpf-integration"
+description: "eBPF integration: bridge to ingestion, hybrid pipeline, main wiring"
+
+tasks:
+  - id: ebpf-bridge
+    title: "Add eBPF bridge for kernel event translation"
+    agent: rust-engineer
+    scope: ingestion
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      EXISTING CODE:
+      - aether-ingestion has: pipeline.rs (IngestionPipeline<P>), sysinfo_probe.rs, error.rs (IngestionError)
+      - aether-ingestion/lib.rs exports: pub mod error, pipeline, sysinfo_probe
+      - IngestionPipeline is generic over P: SystemProbe, uses FAST_TICK=100ms SLOW_TICK=1s
+      - SystemEvent has ProcessCreated{pid,name}, ProcessExited{pid}, MetricsUpdate, TopologyChange
+      - aether-ebpf/events.rs has RawKernelEvent (from ms6-foundation)
+    prompt: |
+      Implement eBPF bridge in aether-ingestion.
+
+      File: crates/aether-ingestion/src/ebpf_bridge.rs
+      - EbpfBridge struct: event_rx (mpsc::Receiver<RawKernelEvent>), event_tx (mpsc::Sender<SystemEvent>)
+      - pub async fn run(&mut self, cancel: CancellationToken) -> Result<(), IngestionError>
+        - ProcessFork → SystemEvent::ProcessCreated
+        - ProcessExit → SystemEvent::ProcessExited
+        - Tcp* → SystemEvent::TopologyChange
+
+      Update lib.rs: add pub mod ebpf_bridge;
+
+      Tests:
+      - test_bridge_converts_process_fork_to_created
+      - test_bridge_converts_process_exit_to_exited
+
+      COMMIT: feat(ingestion): add eBPF bridge for kernel event translation
+    test: "cargo test -p aether-ingestion"
+    depends_on: []
+
+  - id: hybrid-pipeline
+    title: "Add hybrid eBPF/sysinfo pipeline with auto-fallback"
+    agent: rust-engineer
+    scope: ingestion
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+
+      EXISTING CODE:
+      - pipeline.rs has IngestionPipeline<P: SystemProbe> with run(), handle_fast_tick(), handle_slow_tick()
+      - EbpfBridge (from previous task) translates RawKernelEvent → SystemEvent
+    prompt: |
+      Extend pipeline.rs for hybrid eBPF+sysinfo mode.
+
+      File: crates/aether-ingestion/src/pipeline.rs (modify)
+      - Add PipelineMode enum: Sysinfo, Hybrid
+      - pub fn with_ebpf(mut self, bridge: EbpfBridge) -> Self
+      - In run(): Hybrid mode merges eBPF events + sysinfo polling via tokio::select!
+
+      Tests:
+      - test_hybrid_mode_merges_event_sources
+      - test_fallback_to_sysinfo_on_ebpf_failure
+
+      COMMIT: feat(ingestion): add hybrid eBPF/sysinfo pipeline with auto-fallback
+    test: "cargo test -p aether-ingestion"
+    depends_on: [ebpf-bridge]
+
+  - id: ebpf-main-wire
+    title: "Integrate eBPF telemetry with --ebpf flag"
+    agent: rust-engineer
+    scope: terminal
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+
+      EXISTING CODE:
+      - main.rs has Cli struct with --log-level, --mcp-stdio, --mcp-sse
+      - main.rs creates SysinfoProbe, IngestionPipeline, spawns pipeline task
+      - main.rs has CancellationToken, graph updater, arbiter executor, MCP integration
+      - App::new(world) for TUI
+    prompt: |
+      Add --ebpf flag to main.rs CLI.
+
+      File: crates/aether-terminal/src/main.rs (modify)
+      - Add to Cli struct: #[arg(long)] ebpf: bool
+      - When --ebpf:
+        - Try BpfLoader::load_and_attach()
+        - Success: spawn ring buffer reader, create EbpfBridge, pipeline.with_ebpf(bridge)
+        - Failure: log warning, continue with sysinfo-only
+
+      COMMIT: feat(terminal): integrate eBPF telemetry with --ebpf flag
+    test: "cargo run -p aether-terminal -- --help"
+    depends_on: [hybrid-pipeline]

@@ -1,0 +1,73 @@
+phase: "ms8-features"
+description: "Predictive AI: feature extraction and sliding window buffer"
+
+tasks:
+  - id: feature-extraction
+    title: "Implement per-process feature extraction"
+    agent: rust-engineer
+    scope: predict
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      EXISTING CODE:
+      - aether-predict/src/lib.rs is a stub (doc-comment only, no modules)
+      - aether-predict/Cargo.toml already has: tract-onnx, aether-core, tokio, thiserror, serde
+      - aether-core/models.rs: ProcessNode (pid, ppid, name, cpu_percent f32, mem_bytes u64, state, hp f32, xp u32, position_3d)
+      - aether-core/graph.rs: WorldGraph with processes() iterator, find_by_pid(), process_count()
+
+      Extracts 9-dimensional feature vector per process, min-max normalized.
+    prompt: |
+      Implement feature extraction.
+
+      File: crates/aether-predict/src/error.rs
+      - PredictError enum with thiserror: Model(String), Inference(String), Feature(String)
+
+      File: crates/aether-predict/src/features.rs
+      - FeatureVector = [f32; 9] (cpu%, mem, mem_delta, fd_count, thread_count, net_in, net_out, syscall_rate, io_wait)
+      - RunningStats: min/max tracking for normalization
+      - FeatureExtractor: extract(world) → HashMap<u32, FeatureVector>
+
+      Update lib.rs: pub mod error; pub mod features;
+
+      Tests:
+      - test_extract_features_from_sample_world
+      - test_features_in_zero_one_range
+      - test_delta_computed_between_snapshots
+      - test_empty_world_returns_empty_map
+
+      COMMIT: feat(predict): implement per-process feature extraction
+    test: "cargo test -p aether-predict"
+    depends_on: []
+
+  - id: sliding-window
+    title: "Implement sliding window buffer for time-series"
+    agent: rust-engineer
+    scope: predict
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+
+      EXISTING CODE (from previous task):
+      - features.rs: FeatureVector, FeatureExtractor, RunningStats
+      - error.rs: PredictError
+    prompt: |
+      Implement sliding window in crates/aether-predict/src/window.rs.
+
+      - SlidingWindow: windows HashMap<u32, VecDeque<FeatureVector>>, capacity (default 60)
+      - push(), get_window(), is_full(), to_tensor() (flatten to Vec<f32>), cleanup()
+
+      Update lib.rs: add pub mod window;
+
+      Tests:
+      - test_push_60_samples_window_full
+      - test_push_61_evicts_oldest
+      - test_to_tensor_correct_size (60*9=540)
+      - test_cleanup_removes_dead_processes
+      - test_partial_window_to_tensor_returns_none
+
+      COMMIT: feat(predict): implement sliding window buffer for time-series
+    test: "cargo test -p aether-predict"
+    depends_on: [feature-extraction]

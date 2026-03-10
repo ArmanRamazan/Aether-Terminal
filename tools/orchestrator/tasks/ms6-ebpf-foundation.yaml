@@ -1,0 +1,135 @@
+phase: "ms6-ebpf-foundation"
+description: "eBPF foundation: crate setup, BPF loader, network/syscall probes, event types"
+
+tasks:
+  - id: ebpf-setup
+    title: "Initialize eBPF crate with process monitor BPF program"
+    agent: rust-engineer
+    scope: ebpf
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      EXISTING CODE:
+      - aether-ebpf/src/lib.rs is a stub (doc-comment only, no modules)
+      - aether-ebpf/Cargo.toml exists in workspace
+      - aether-core has SystemEvent::{ProcessCreated, ProcessExited} events
+      - CoreError has Probe(String) variant
+
+      Uses aya (pure-Rust BPF loader). Feature-gated behind #[cfg(feature = "ebpf")].
+      BPF programs written in C. Targets Linux only. Requires root.
+    prompt: |
+      Set up the eBPF crate with BPF program source and module structure.
+
+      File: crates/aether-ebpf/Cargo.toml
+      - Add dependencies: aya, aya-log, tokio, thiserror, aether-core (path)
+      - All behind [target.'cfg(target_os = "linux")'.dependencies] or feature gate
+
+      File: crates/aether-ebpf/src/lib.rs
+      - pub mod loader; pub mod events;
+      - #[cfg(target_os = "linux")] gate on modules
+
+      File: crates/aether-ebpf/src/error.rs
+      - EbpfError enum: PermissionDenied, KernelVersion(String), BtfMissing, LoadFailed(String), MapError(String)
+
+      File: bpf/process_monitor.bpf.c (BPF C source, not compiled automatically)
+      - Tracepoints sched/sched_process_fork and sched/sched_process_exit
+      - Ring buffer map 256KB
+      - Structs: process_fork_event, process_exit_event
+
+      COMMIT: feat(ebpf): initialize eBPF crate with process monitor BPF program
+    test: "cargo check -p aether-ebpf"
+    depends_on: []
+
+  - id: bpf-loader
+    title: "Implement BPF loader and ring buffer reader"
+    agent: rust-engineer
+    scope: ebpf
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      EXISTING CODE (from previous task):
+      - lib.rs with pub mod loader, events
+      - error.rs with EbpfError
+      - BPF C source in bpf/process_monitor.bpf.c
+    prompt: |
+      Implement BPF loader and ring buffer reader.
+
+      File: crates/aether-ebpf/src/loader.rs
+      - BpfLoader struct
+      - pub async fn load_and_attach(program_bytes: &[u8]) -> Result<LoadedProgram, EbpfError>
+      - LoadedProgram struct: owns aya::Bpf, cleanup on drop
+      - Handle: PermissionDenied, KernelVersionTooOld, BtfMissing
+
+      File: crates/aether-ebpf/src/ring_buffer.rs
+      - RingBufferReader struct
+      - pub async fn poll(&mut self) -> Result<Vec<RawKernelEvent>, EbpfError>
+
+      Tests (#[ignore] — require root):
+      - Ring buffer reader parses sample bytes correctly
+
+      COMMIT: feat(ebpf): implement BPF loader and ring buffer reader
+    test: "cargo check -p aether-ebpf"
+    depends_on: [ebpf-setup]
+
+  - id: net-syscall-bpf
+    title: "Add network and syscall BPF programs"
+    agent: rust-engineer
+    scope: ebpf
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      EXISTING CODE (from previous tasks):
+      - BpfLoader, RingBufferReader, EbpfError
+      - process_monitor.bpf.c
+    prompt: |
+      Add network and syscall BPF programs.
+
+      File: bpf/net_monitor.bpf.c — kprobe/tcp_connect + kprobe/tcp_close
+      File: bpf/syscall_monitor.bpf.c — raw_tracepoint/sys_enter
+      File: crates/aether-ebpf/src/probes.rs — ProbeManager with attach_all/detach_all
+
+      COMMIT: feat(ebpf): add network and syscall BPF programs
+    test: "cargo check -p aether-ebpf"
+    depends_on: [bpf-loader]
+
+  - id: kernel-events
+    title: "Define kernel event types with C ABI compatibility"
+    agent: rust-engineer
+    scope: ebpf
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      EXISTING CODE (from previous tasks):
+      - BPF C programs define structs for each event type
+      - RingBufferReader polls raw bytes
+
+      Rust #[repr(C)] structs matching BPF C layout.
+      Every unsafe block MUST have safety comment.
+    prompt: |
+      Define kernel event types in crates/aether-ebpf/src/events.rs.
+
+      - RawKernelEvent enum: ProcessFork, ProcessExit, TcpConnect, TcpClose, SyscallEvent
+      - #[repr(C)] structs matching C layout
+      - pub unsafe fn parse_event(event_type: u32, data: &[u8]) -> Result<RawKernelEvent, EbpfError>
+      - Helper: pub fn comm_to_string(comm: &[u8; 16]) -> String
+
+      Tests:
+      - test_struct_sizes_match_c_layout
+      - test_parse_process_fork_event
+      - test_comm_to_string_handles_null_terminator
+
+      COMMIT: feat(ebpf): define kernel event types with C ABI compatibility
+    test: "cargo test -p aether-ebpf"
+    depends_on: [net-syscall-bpf]

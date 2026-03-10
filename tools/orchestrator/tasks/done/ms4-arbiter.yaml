@@ -1,0 +1,83 @@
+phase: "ms4-arbiter"
+description: "Arbiter Mode UI tab and MCP integration in main binary"
+
+tasks:
+  - id: arbiter-tab
+    title: "Implement Arbiter tab with action approval UI"
+    agent: rust-engineer
+    scope: render
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      Arbiter tab (F4) shows pending AI agent actions for human approval.
+      User presses Y to approve, N to deny, I to inspect the process.
+    prompt: |
+      Implement the Arbiter tab.
+
+      File: crates/aether-render/src/tui/arbiter.rs
+      - ArbiterTab struct:
+        - selected_action: Option<usize>
+      - pub fn render(&self, area: Rect, buf: &mut Buffer, queue: &ArbiterQueue)
+      - Layout (vertical split):
+        - Top 60%: Pending actions list
+          - Each row: "[1] {source}: {action} PID {pid} ({name}) — {time_ago} [Y/N/I]"
+          - Color: Palette::WARNING for pending, Palette::CRITICAL for old (>60s)
+          - Selected action highlighted
+        - Bottom 40%: Action history log
+          - "[APPROVED] kill PID 1234 (firefox) — 2m ago"
+          - "[DENIED] restart PID 5678 (nginx) — 5m ago"
+          - Approved in Palette::HEALTHY, Denied in Palette::CRITICAL
+        - Stats line: "Pending: 3 | Approved: 12 | Denied: 2"
+      - Key bindings:
+        - j/k: navigate pending actions
+        - Y: approve selected action
+        - N: deny selected action
+        - I: inspect process (switch to Overview tab with this PID selected)
+
+      Update tui/mod.rs: add pub mod arbiter;
+      Integrate into App: F4 renders ArbiterTab.
+
+      COMMIT: feat(render): implement Arbiter tab with action approval UI
+    test: "cargo check -p aether-render"
+    depends_on: []
+
+  - id: mcp-main-integration
+    title: "Integrate MCP server with main app"
+    agent: rust-engineer
+    scope: terminal
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      Wire MCP server into main binary. Share WorldGraph and ArbiterQueue.
+      CLI flags control transport mode.
+    prompt: |
+      Integrate MCP into main.rs.
+
+      File: crates/aether-terminal/src/main.rs (modify)
+      - Add CLI flags (clap):
+        - --mcp-stdio: run in stdio MCP mode (no TUI)
+        - --mcp-sse <PORT>: run SSE MCP server alongside TUI (default port 3000)
+      - Wire up:
+        - Create shared Arc<RwLock<WorldGraph>> (already exists from ingestion)
+        - Create shared Arc<Mutex<ArbiterQueue>>
+        - Create mpsc channel for AgentActions
+        - McpServer gets references to WorldGraph and action_tx
+      - Mode handling:
+        - If --mcp-stdio: run stdio transport only (no TUI, no crossterm)
+        - If --mcp-sse: spawn SSE server as background tokio task, run TUI normally
+        - Neither: TUI only (default)
+      - Arbiter action execution:
+        - Spawn background task that receives approved actions from ArbiterQueue
+        - Execute: KillProcess → nix::sys::signal::kill or sysinfo kill, RestartService → todo
+        - Log result
+      - Share ArbiterQueue with render (for ArbiterTab)
+
+      COMMIT: feat(terminal): integrate MCP server with main app
+    test: "cargo run -p aether-terminal -- --help"
+    depends_on: [arbiter-tab]

@@ -1,0 +1,44 @@
+phase: "ms7-type-checker"
+description: "Type system for Aether DSL: field resolution, type checking, error reporting"
+
+tasks:
+  - id: type-system
+    title: "Implement type checker for Aether DSL"
+    agent: rust-engineer
+    scope: script
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      EXISTING CODE (from ms7-lexer-parser):
+      - lexer.rs: Token enum with logos, Span, tokenize()
+      - ast.rs: RuleFile, Rule, Condition (Comparison/Duration/And/Or/Not), Expr (FieldAccess/Literal), CmpOp, Action, Severity
+      - parser.rs: recursive descent parser, parse() → RuleFile
+      - error.rs: ScriptError with Lex/Parse/Type/Compile variants
+      - aether-core/models.rs: ProcessNode has fields pid, ppid, name, cpu_percent, mem_bytes, state, hp, xp
+      - aether-core/models.rs: ProcessState enum (Running, Sleeping, Zombie, Stopped)
+    prompt: |
+      Implement the type checker.
+
+      File: crates/aether-script/src/types.rs
+      - AetherType enum: Percent, Duration, Int, Float, Str, Bool, ProcessState, Process, System
+      - TypeEnv with built-in types:
+        - "process" → fields: cpu (Percent), mem_bytes (Int), mem_growth (Percent), state (ProcessState), name (Str), pid (Int), parent (Str), hp (Percent)
+        - "system" → fields: load (Percent), total_mem (Int), process_count (Int)
+      - TypeChecker: check(RuleFile) → Result<(), Vec<TypeError>>
+      - resolve_field(), check_condition(), check_action()
+
+      Update lib.rs: add pub mod types;
+
+      Tests:
+      - test_valid_rule_passes_type_check
+      - test_percent_vs_float_comparison_passes
+      - test_percent_vs_string_comparison_fails
+      - test_unknown_field_produces_error
+      - test_unknown_object_produces_error
+
+      COMMIT: feat(script): implement type checker for Aether DSL
+    test: "cargo test -p aether-script"
+    depends_on: []

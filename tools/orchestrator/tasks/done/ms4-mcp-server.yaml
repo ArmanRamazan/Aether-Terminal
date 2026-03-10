@@ -1,0 +1,111 @@
+phase: "ms4-mcp-server"
+description: "MCP server core: JSON-RPC skeleton, stdio transport, SSE transport"
+
+tasks:
+  - id: json-rpc-server
+    title: "Implement JSON-RPC server skeleton"
+    agent: rust-engineer
+    scope: mcp
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      MCP uses JSON-RPC 2.0 protocol. Server dispatches methods to handlers.
+      Uses rmcp crate (Rust MCP SDK) for protocol handling.
+      Shared WorldGraph via Arc<RwLock>.
+    prompt: |
+      Implement the MCP server skeleton.
+
+      File: crates/aether-mcp/src/server.rs
+      - McpServer struct:
+        - graph: Arc<RwLock<WorldGraph>>
+        - action_tx: mpsc::Sender<AgentAction> (for Arbiter queue)
+      - MCP server setup using rmcp crate:
+        - Server info: name="aether-terminal", version="0.1.0"
+        - Tool registration (stubs for now): get_system_topology, inspect_process, list_anomalies, execute_action
+        - Error handling: MethodNotFound, InvalidParams, InternalError
+      - Implement the rmcp::ServerHandler trait (or equivalent) for method dispatch
+
+      File: crates/aether-mcp/src/lib.rs — pub mod server;
+
+      Tests:
+      - Server creates successfully with mock WorldGraph
+      - Tool list includes all 4 tools
+
+      COMMIT: feat(mcp): implement JSON-RPC server skeleton
+    test: "cargo test -p aether-mcp"
+    depends_on: []
+
+  - id: stdio-transport
+    title: "Add stdio transport for Claude Desktop"
+    agent: rust-engineer
+    scope: mcp
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      Stdio transport reads JSON-RPC from stdin, writes to stdout.
+      Used by Claude Desktop for MCP integration.
+      When active, TUI is disabled (stdin conflict).
+    prompt: |
+      Implement stdio transport.
+
+      File: crates/aether-mcp/src/transport/stdio.rs
+      - pub async fn run_stdio(server: McpServer) -> Result<()>
+        - Use rmcp's stdio transport if available, or implement:
+          - Read lines from tokio::io::stdin
+          - Parse as JSON-RPC request
+          - Dispatch to server
+          - Write JSON-RPC response to stdout
+          - Loop until EOF or error
+      - Activated with --mcp-stdio CLI flag
+      - When running: no TUI (stdout is for MCP)
+
+      File: crates/aether-mcp/src/transport/mod.rs — pub mod stdio;
+
+      Tests:
+      - Process a sample JSON-RPC request string, verify response format
+
+      COMMIT: feat(mcp): add stdio transport for Claude Desktop
+    test: "cargo test -p aether-mcp"
+    depends_on: [json-rpc-server]
+
+  - id: sse-transport
+    title: "Add SSE/HTTP transport for realtime AI connection"
+    agent: rust-engineer
+    scope: mcp
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      SSE transport runs an Axum HTTP server alongside TUI.
+      POST /mcp for JSON-RPC requests, GET /mcp/sse for push notifications.
+    prompt: |
+      Implement SSE transport.
+
+      File: crates/aether-mcp/src/transport/sse.rs
+      - pub async fn run_sse(server: Arc<McpServer>, port: u16) -> Result<()>
+        - Axum HTTP server on configurable port (default 3000)
+        - Routes:
+          - POST /mcp — JSON-RPC request → response
+          - GET /mcp/sse — Server-Sent Events stream for push notifications
+          - GET /health — returns {"status": "ok", "version": "0.1.0"}
+        - SSE events: system_update (periodic), anomaly (on detection), action_result (after approval)
+        - Runs as standalone tokio task (doesn't block TUI)
+      - Activated with --mcp-sse <port> CLI flag
+
+      File: crates/aether-mcp/src/transport/mod.rs — add pub mod sse;
+
+      Tests:
+      - Health endpoint returns 200 with correct JSON
+      - POST /mcp with valid request returns JSON-RPC response
+
+      COMMIT: feat(mcp): add SSE/HTTP transport for realtime AI connection
+    test: "cargo test -p aether-mcp"
+    depends_on: [stdio-transport]

@@ -1,0 +1,181 @@
+phase: "ms4-mcp-tools"
+description: "MCP tools: system topology, process inspection, anomaly listing, action execution"
+
+tasks:
+  - id: get-system-topology
+    title: "Implement get_system_topology tool"
+    agent: rust-engineer
+    scope: mcp
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      Returns JSON graph of processes and connections for AI agents.
+      Limits response to top 50 processes by CPU for token efficiency.
+    prompt: |
+      Implement get_system_topology MCP tool.
+
+      File: crates/aether-mcp/src/tools.rs
+      - pub async fn get_system_topology(graph: &RwLock<WorldGraph>) -> serde_json::Value
+        - Read WorldGraph
+        - Collect top 50 processes by CPU usage
+        - Collect all connections for those processes
+        - Return JSON:
+          ```json
+          {
+            "processes": [{"pid": 1234, "name": "firefox", "cpu_percent": 15.2, "mem_bytes": 536870912, "state": "Running", "hp": 95.0}],
+            "connections": [{"source_pid": 1234, "dest": "1.2.3.4:443", "protocol": "TCP", "bytes_per_sec": 1024}],
+            "summary": {"total_processes": 142, "total_connections": 50, "avg_cpu": 12.5, "total_memory_bytes": 8589934592}
+          }
+          ```
+      - Register as MCP tool in server.rs
+
+      Update lib.rs: add pub mod tools;
+
+      Tests:
+      - Returns valid JSON with processes array
+      - Limits to 50 processes max
+      - Summary fields are computed correctly
+
+      COMMIT: feat(mcp): implement get_system_topology tool
+    test: "cargo test -p aether-mcp"
+    depends_on: []
+
+  - id: inspect-process
+    title: "Implement inspect_process tool"
+    agent: rust-engineer
+    scope: mcp
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      Detailed view of a single process with connections and recommendations.
+    prompt: |
+      Implement inspect_process MCP tool.
+
+      File: crates/aether-mcp/src/tools.rs (extend)
+      - pub async fn inspect_process(graph: &RwLock<WorldGraph>, pid: u32) -> Result<serde_json::Value>
+        - Find process by PID in WorldGraph
+        - Return error if not found
+        - Collect all connections for this process
+        - Generate recommendations:
+          - if cpu_percent > 80%: "High CPU usage — investigate potential busy loop or heavy computation"
+          - if hp < 30.0: "Low health — consider restarting or investigating resource leaks"
+          - if state == Zombie: "Zombie process — parent should reap or kill"
+          - if mem_bytes > 1GB: "High memory usage — check for memory leaks"
+        - Return JSON:
+          ```json
+          {
+            "process": {"pid": 1234, "name": "firefox", ...all fields...},
+            "connections": [...],
+            "recommendations": ["High CPU usage — investigate..."]
+          }
+          ```
+
+      Tests:
+      - Returns process data for valid PID
+      - Returns error for invalid PID
+      - Recommendations generated for high-CPU process
+
+      COMMIT: feat(mcp): implement inspect_process tool
+    test: "cargo test -p aether-mcp"
+    depends_on: [get-system-topology]
+
+  - id: list-anomalies
+    title: "Implement list_anomalies tool"
+    agent: rust-engineer
+    scope: mcp
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      Returns processes with anomalies: low HP, zombie, high CPU, memory growth.
+      Sorted by severity for AI agent prioritization.
+    prompt: |
+      Implement list_anomalies MCP tool.
+
+      File: crates/aether-mcp/src/tools.rs (extend)
+      - pub async fn list_anomalies(graph: &RwLock<WorldGraph>) -> serde_json::Value
+        - Scan all processes for anomalies:
+          - HP < 50: severity based on HP level
+          - state == Zombie: critical severity
+          - cpu_percent > 90%: warning severity
+          - mem_bytes growing (if tracking available): warning severity
+        - For each anomaly:
+          - pid, name, reason (string), severity ("critical"/"warning"), suggested_action
+          - suggested_action: "kill" for zombie, "investigate" for high CPU, "restart" for low HP
+        - Sort by severity (critical first), then by HP ascending
+        - Return JSON:
+          ```json
+          {
+            "anomalies": [
+              {"pid": 1234, "name": "leaked-app", "reason": "HP below 50 (HP: 23.0)", "severity": "critical", "suggested_action": "restart"}
+            ],
+            "total": 5
+          }
+          ```
+
+      Tests:
+      - Zombie process detected as critical anomaly
+      - High CPU process detected as warning
+      - Normal processes not included
+
+      COMMIT: feat(mcp): implement list_anomalies tool
+    test: "cargo test -p aether-mcp"
+    depends_on: [inspect-process]
+
+  - id: execute-action
+    title: "Implement execute_action with Arbiter queue"
+    agent: rust-engineer
+    scope: mcp
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      Actions from AI agents go to Arbiter queue for human approval.
+      NOT executed immediately — pending until human approves in Arbiter tab.
+    prompt: |
+      Implement execute_action tool and Arbiter queue.
+
+      File: crates/aether-mcp/src/arbiter.rs
+      - PendingAction struct:
+        - id: String (UUID)
+        - action: AgentAction
+        - pid: u32
+        - requested_at: std::time::Instant
+        - source: String (e.g., "claude-agent")
+      - ArbiterQueue struct:
+        - pending: Vec<PendingAction>
+        - history: Vec<(PendingAction, bool)> — (action, approved)
+      - Methods:
+        - pub fn enqueue(&mut self, action: AgentAction, pid: u32, source: &str) -> String — returns action_id
+        - pub fn approve(&mut self, id: &str) -> Result<AgentAction> — removes and returns for execution
+        - pub fn deny(&mut self, id: &str) -> Result<()> — removes from queue
+        - pub fn pending(&self) -> &[PendingAction]
+        - pub fn history(&self) -> &[(PendingAction, bool)]
+
+      File: crates/aether-mcp/src/tools.rs (extend)
+      - pub async fn execute_action(queue: &Mutex<ArbiterQueue>, action: &str, pid: u32) -> serde_json::Value
+        - Parse action string to AgentAction (kill/restart/inspect)
+        - Enqueue in ArbiterQueue
+        - Return: {"status": "pending_approval", "action_id": "uuid-here"}
+
+      Update lib.rs: add pub mod arbiter;
+
+      Tests:
+      - Enqueue returns UUID
+      - Approve removes from pending and returns action
+      - Deny removes from pending
+      - execute_action returns pending_approval status
+
+      COMMIT: feat(mcp): implement execute_action with Arbiter queue
+    test: "cargo test -p aether-mcp"
+    depends_on: [list-anomalies]

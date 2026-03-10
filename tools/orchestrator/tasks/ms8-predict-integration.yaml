@@ -1,0 +1,99 @@
+phase: "ms8-predict-integration"
+description: "Predictive AI integration: PredictEngine task, visualization, MCP tool"
+
+tasks:
+  - id: predict-engine
+    title: "Implement PredictEngine as async task"
+    agent: rust-engineer
+    scope: predict
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      EXISTING CODE (from ms8-features + ms8-inference):
+      - features.rs: FeatureExtractor, FeatureVector
+      - window.rs: SlidingWindow
+      - inference.rs: AnomalyDetector, CpuForecaster (both Optional)
+      - models.rs: PredictedAnomaly, AnomalyType, ConfidenceScorer
+      - error.rs: PredictError
+    prompt: |
+      Implement PredictEngine in crates/aether-predict/src/engine.rs.
+
+      - PredictEngine: extractor, window, anomaly_detector (Option), forecaster (Option), prediction_tx, config
+      - PredictConfig: inference_interval (5s), top_n (20), confidence_threshold (0.7), model_path
+      - pub async fn run(&mut self, world_rx, cancel)
+      - select_top_n(features, n) → Vec<u32> by variance
+
+      Update lib.rs: add pub mod engine;
+
+      Tests:
+      - test_engine_processes_world_state
+      - test_top_n_selects_highest_variance
+      - test_predictions_above_threshold_only
+      - test_works_without_model_graceful_degradation
+
+      COMMIT: feat(predict): implement PredictEngine as async task
+    test: "cargo test -p aether-predict"
+    depends_on: []
+
+  - id: prediction-visualization
+    title: "Add prediction visualization in Overview and 3D tabs"
+    agent: rust-engineer
+    scope: render
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+
+      EXISTING CODE:
+      - overview.rs: OverviewTab with process table, sparklines, detail panel, SortColumn, render()
+      - world3d.rs: World3dTab with SceneRenderer, camera controls, node interaction
+      - scene.rs: SceneRenderer with render(), camera, layout, pulse/flow effects
+      - palette.rs: Palette struct with color constants + color_for_load/hp functions
+      - PredictedAnomaly from aether-predict/models.rs
+    prompt: |
+      Add prediction visualization.
+
+      File: crates/aether-render/src/palette.rs (modify)
+      - Add: pub const PREDICTION: Color = Color::Rgb(255, 102, 0);
+
+      File: crates/aether-render/src/tui/overview.rs (modify)
+      - Add "Predictions" section with anomalies sorted by eta
+      - Process table: add prediction indicator column
+
+      File: crates/aether-render/src/engine/scene.rs (modify)
+      - Predicted nodes: pulsing orange outline at 2Hz
+
+      COMMIT: feat(render): add prediction visualization in Overview and 3D tabs
+    test: "cargo check -p aether-render"
+    depends_on: [predict-engine]
+
+  - id: predict-main-integration
+    title: "Integrate predictive AI with --predict flag and MCP tool"
+    agent: rust-engineer
+    scope: terminal
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+
+      EXISTING CODE:
+      - main.rs: Cli struct (--log-level, --mcp-stdio, --mcp-sse), SysinfoProbe, IngestionPipeline, WorldGraph, ArbiterQueue, McpServer, App
+      - main.rs spawns: pipeline task, graph updater, arbiter executor, action forwarder, optional MCP
+      - MCP tools.rs has: get_system_topology, inspect_process, list_anomalies, execute_action
+      - Gamification: HpEngine, XpTracker, AchievementTracker (in aether-gamification)
+      - PredictEngine from aether-predict/engine.rs
+    prompt: |
+      Wire predictions into main and MCP.
+
+      File: crates/aether-terminal/src/main.rs (modify)
+      - Add CLI flags: --predict (bool), --model-path <PATH> (optional)
+      - When --predict: init PredictEngine, spawn as tokio task
+      - Connect predictions to render + gamification (+20 XP per accurate prediction)
+
+      File: crates/aether-mcp/src/tools.rs (extend)
+      - New MCP tool: predict_anomalies → JSON with predictions, model_status, stats
+
+      COMMIT: feat(terminal): integrate predictive AI with --predict flag and MCP tool
+    test: "cargo run -p aether-terminal -- --help"
+    depends_on: [prediction-visualization]

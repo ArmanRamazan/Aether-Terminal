@@ -67,21 +67,38 @@ AUTO=false
 FLAGS=()
 ORCH_FLAGS=()
 FILES=()
+MILESTONES=()
 for arg in "$@"; do
   case "$arg" in
     --auto) AUTO=true ;;
     --dry-run|--skip-verify) FLAGS+=("$arg"); ORCH_FLAGS+=("$arg") ;;
+    --ms[0-9]|--ms[0-9][0-9]) MILESTONES+=("$arg") ;;
     *) FILES+=("$arg") ;;
   esac
 done
 
+# Expand --msN flags into matching YAML files (sorted)
+for ms in "${MILESTONES[@]}"; do
+  prefix="${ms#--}"  # e.g. "ms2"
+  matched=()
+  for f in tasks/${prefix}-*.yaml; do
+    [[ -f "$f" ]] && matched+=("$f")
+  done
+  if [[ ${#matched[@]} -eq 0 ]]; then
+    echo "  Warning: no files match tasks/${prefix}-*.yaml"
+  else
+    FILES+=("${matched[@]}")
+  fi
+done
+
 if [[ ${#FILES[@]} -eq 0 ]]; then
-  echo "Usage: $0 [--auto] [--dry-run] [--skip-verify] <yaml1> <yaml2> ..."
+  echo "Usage: $0 [--auto] [--dry-run] [--skip-verify] [--msN ...] [yaml ...]"
   echo ""
   echo "Flags:"
   echo "  --auto           Never ask on failure, always continue to next sprint"
   echo "  --dry-run        Preview without executing"
   echo "  --skip-verify    Skip VERIFY phase"
+  echo "  --msN            Expand to all tasks/msN-*.yaml (e.g. --ms2 --ms3)"
   echo ""
   echo "Stop a running pipeline:"
   echo "  $0 --stop                           # from another terminal"
@@ -89,8 +106,9 @@ if [[ ${#FILES[@]} -eq 0 ]]; then
   echo "  Ctrl+C                               # from same terminal"
   echo ""
   echo "Examples:"
-  echo "  $0 --auto tasks/ms2-*.yaml tasks/ms3-*.yaml"
-  echo "  $0 --dry-run tasks/ms2-*.yaml"
+  echo "  $0 --auto --ms2 --ms3               # all MS2 + MS3 sprints"
+  echo "  $0 --auto tasks/ms2-*.yaml          # same with glob"
+  echo "  $0 --dry-run --ms2                   # preview MS2"
   exit 1
 fi
 

@@ -1,0 +1,112 @@
+phase: "ms5-persistence"
+description: "SQLite persistence for gamification and main app wiring"
+
+tasks:
+  - id: sqlite-schema
+    title: "Add SQLite persistence"
+    agent: rust-engineer
+    scope: gamification
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      SqliteStorage implements the Storage trait from aether-core.
+      Database at ~/.aether-terminal/data.db.
+      Tables: sessions, achievements, action_log.
+    prompt: |
+      Implement SQLite storage.
+
+      File: crates/aether-gamification/src/storage.rs
+      - SqliteStorage struct:
+        - conn: rusqlite::Connection
+      - impl SqliteStorage:
+        - pub fn open(path: &Path) -> Result<Self>
+          - Create directory if not exists
+          - Open/create database
+          - Run migrations (CREATE TABLE IF NOT EXISTS)
+        - Tables:
+          ```sql
+          CREATE TABLE IF NOT EXISTS sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            started_at TEXT NOT NULL,
+            ended_at TEXT,
+            total_xp INTEGER NOT NULL DEFAULT 0,
+            rank TEXT NOT NULL DEFAULT 'Novice',
+            uptime_secs INTEGER NOT NULL DEFAULT 0
+          );
+          CREATE TABLE IF NOT EXISTS achievements (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            unlocked_at TEXT NOT NULL,
+            session_id INTEGER REFERENCES sessions(id)
+          );
+          CREATE TABLE IF NOT EXISTS action_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            action TEXT NOT NULL,
+            pid INTEGER,
+            source TEXT NOT NULL,
+            approved INTEGER,
+            session_id INTEGER REFERENCES sessions(id)
+          );
+          ```
+        - pub fn start_session(&self) -> Result<i64> — insert new session, return id
+        - pub fn end_session(&self, id: i64, xp: u32, rank: &str, uptime: u64) -> Result<()>
+        - pub fn save_achievement(&self, id: &str, name: &str, session_id: i64) -> Result<()>
+        - pub fn load_achievements(&self) -> Result<Vec<(String, String)>> — (id, name) pairs
+        - pub fn log_action(&self, action: &str, pid: u32, source: &str, approved: bool, session_id: i64) -> Result<()>
+        - pub fn load_rankings(&self) -> Result<Vec<(i64, u32, String)>> — (session_id, xp, rank) ordered by xp desc
+      - Implement Storage trait from aether-core
+
+      Update lib.rs: add pub mod storage;
+
+      Tests:
+      - Open creates DB and tables
+      - Save and load session round-trip
+      - Save and load achievements
+      - Rankings sorted by XP descending
+
+      COMMIT: feat(gamification): add SQLite persistence
+    test: "cargo test -p aether-gamification"
+    depends_on: []
+
+  - id: gamification-main-wire
+    title: "Wire gamification with persistence"
+    agent: rust-engineer
+    scope: terminal
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      Gamification runs as a background tokio task.
+      Updates HP/XP each tick. Saves session on exit.
+      Status bar shows rank and XP.
+    prompt: |
+      Wire gamification into main.rs.
+
+      File: crates/aether-terminal/src/main.rs (modify)
+      - Open SqliteStorage at ~/.aether-terminal/data.db
+      - Start new session on launch
+      - Spawn gamification task:
+        - Receives WorldGraph snapshots (via broadcast channel or periodic reads)
+        - Every second: apply HpEngine to graph, tick XpTracker
+        - Check achievements
+        - Send GameEvents to render for display
+      - Status bar integration:
+        - Show rank name, total XP, XP to next rank
+        - Example: "Rank: Operator | XP: 234/500"
+      - Achievement notification:
+        - When AchievementUnlocked event received, show temporary overlay
+        - "Achievement Unlocked: First Blood!" in Palette::XP_PURPLE
+        - Auto-dismiss after 3 seconds
+      - On exit (graceful shutdown):
+        - End session with final XP, rank, uptime
+        - Save any new achievements
+
+      COMMIT: feat(terminal): wire gamification with persistence
+    test: "cargo run -p aether-terminal"
+    depends_on: [sqlite-schema]

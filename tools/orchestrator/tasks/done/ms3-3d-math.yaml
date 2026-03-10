@@ -1,0 +1,146 @@
+phase: "ms3-3d-math"
+description: "3D math foundation: orbital camera, projection pipeline, Braille canvas"
+
+tasks:
+  - id: orbital-camera
+    title: "Implement orbital camera system"
+    agent: rust-engineer
+    scope: engine
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      OrbitalCamera orbits around a center point.
+      Uses glam for Mat4 (view/projection matrices).
+      User controls: arrow keys rotate, +/- zoom.
+    prompt: |
+      Implement the camera system.
+
+      File: crates/aether-render/src/engine/camera.rs
+      - OrbitalCamera struct:
+        - center: Vec3 — point camera orbits around
+        - distance: f32 — distance from center (default 10.0)
+        - yaw: f32 — horizontal angle in radians (default 0.0)
+        - pitch: f32 — vertical angle in radians (default 0.3, clamped to -PI/2..PI/2)
+        - fov: f32 — field of view in radians (default 60° = PI/3)
+        - near: f32 — near clipping plane (default 0.1)
+        - far: f32 — far clipping plane (default 100.0)
+      - Methods:
+        - pub fn new() -> Self (with defaults)
+        - pub fn view_matrix(&self) -> Mat4 — glam lookAt from position to center
+        - pub fn projection_matrix(&self, aspect: f32) -> Mat4 — perspective projection
+        - pub fn rotate(&mut self, dyaw: f32, dpitch: f32) — add to yaw/pitch, clamp pitch
+        - pub fn zoom(&mut self, delta: f32) — change distance, clamp to 1.0..50.0
+        - pub fn position(&self) -> Vec3 — compute camera world position from spherical coords
+        - pub fn auto_center(&mut self, points: &[Vec3]) — set center to centroid of points
+        - pub fn reset(&mut self) — restore defaults
+
+      File: crates/aether-render/src/engine/mod.rs — pub mod camera;
+      Update lib.rs: add pub mod engine;
+
+      Tests:
+      - view_matrix at default position is valid (not zero/NaN)
+      - rotation changes yaw and pitch
+      - zoom clamps to range
+      - position computes correct spherical coordinates
+      - auto_center moves center to mean of points
+
+      COMMIT: feat(engine): implement orbital camera system
+    test: "cargo test -p aether-render"
+    depends_on: []
+
+  - id: projection-pipeline
+    title: "Add 3D to screen projection pipeline"
+    agent: rust-engineer
+    scope: engine
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      Projects 3D world coordinates to 2D screen coordinates.
+      Handles clipping (behind camera) and NDC transform.
+    prompt: |
+      Implement the projection pipeline.
+
+      File: crates/aether-render/src/engine/projection.rs
+      - ScreenPoint struct: { x: f32, y: f32, depth: f32 }
+      - pub fn project_point(
+          point: Vec3,
+          view: &Mat4,
+          proj: &Mat4,
+          screen_w: u32,
+          screen_h: u32,
+        ) -> Option<ScreenPoint>
+        - Transform: world → view → clip → NDC → screen
+        - Returns None if behind camera (clip.w <= 0 or z < near)
+        - NDC to screen: x = (ndc.x + 1) * 0.5 * screen_w, y = (1 - ndc.y) * 0.5 * screen_h
+        - depth = clip.z / clip.w (for z-buffer)
+
+      Update engine/mod.rs: add pub mod projection;
+
+      Tests:
+      - Point at camera center projects near screen center
+      - Point behind camera returns None
+      - Point far to the right projects to right side of screen
+
+      COMMIT: feat(engine): add 3D to screen projection pipeline
+    test: "cargo test -p aether-render"
+    depends_on: [orbital-camera]
+
+  - id: braille-canvas
+    title: "Implement Braille canvas with 2x4 subpixel mapping"
+    agent: rust-engineer
+    scope: render
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      Each terminal cell = 2x4 dot grid = 8 bits per Braille character.
+      Unicode Braille range: U+2800 to U+28FF.
+      This gives 2x horizontal and 4x vertical resolution.
+    prompt: |
+      Implement the Braille canvas.
+
+      File: crates/aether-render/src/braille.rs
+      - BrailleCanvas struct:
+        - cell_width: usize — terminal columns
+        - cell_height: usize — terminal rows
+        - buffer: Vec<u8> — indexed by cell (cell_width * cell_height)
+        - color_buffer: Vec<Color> — per-cell color
+      - Braille dot offset map (standard numbering):
+        ```
+        [0,0]=0x01  [1,0]=0x08
+        [0,1]=0x02  [1,1]=0x10
+        [0,2]=0x04  [1,2]=0x20
+        [0,3]=0x40  [1,3]=0x80
+        ```
+      - Methods:
+        - pub fn new(cell_width: usize, cell_height: usize) -> Self
+        - pub fn pixel_width(&self) -> usize — cell_width * 2
+        - pub fn pixel_height(&self) -> usize — cell_height * 4
+        - pub fn set_pixel(&mut self, x: usize, y: usize) — set dot in cell
+        - pub fn set_pixel_colored(&mut self, x: usize, y: usize, color: Color)
+        - pub fn clear_pixel(&mut self, x: usize, y: usize)
+        - pub fn clear(&mut self) — reset all cells
+        - pub fn cell_char(&self, cx: usize, cy: usize) -> char — U+2800 + buffer[cy*w+cx]
+        - pub fn cell_color(&self, cx: usize, cy: usize) -> Color
+        - pub fn to_lines(&self) -> Vec<(String, Vec<Color>)> — convert to lines of Braille chars with colors
+
+      Update lib.rs: add pub mod braille;
+
+      Tests:
+      - empty canvas → all cells are U+2800 (blank Braille)
+      - all 8 dots set → U+28FF
+      - set_pixel at (0,0) → bit 0x01 set
+      - set_pixel at (1,3) → bit 0x80 set
+      - pixel_width = cell_width * 2, pixel_height = cell_height * 4
+
+      COMMIT: feat(render): implement Braille canvas with 2x4 subpixel mapping
+    test: "cargo test -p aether-render"
+    depends_on: [projection-pipeline]

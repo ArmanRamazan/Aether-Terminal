@@ -1,0 +1,86 @@
+phase: "ms3-graph-layout"
+description: "Force-directed 3D graph layout with Fruchterman-Reingold algorithm"
+
+tasks:
+  - id: force-layout
+    title: "Implement 3D force-directed graph layout"
+    agent: rust-engineer
+    scope: engine
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      Fruchterman-Reingold algorithm extended to 3D.
+      Connected nodes attract, all nodes repel.
+      Temperature-based cooling for convergence.
+    prompt: |
+      Implement force-directed layout.
+
+      File: crates/aether-render/src/engine/layout.rs
+      - ForceLayout struct:
+        - positions: HashMap<u32, Vec3> — pid → 3D position
+        - velocities: HashMap<u32, Vec3>
+        - temperature: f32 — cooling schedule (starts at 1.0, decreases)
+        - k: f32 — optimal distance (calculated from node count and volume)
+      - Methods:
+        - pub fn new() -> Self
+        - pub fn initial_placement(&mut self, pids: &[u32])
+          - Random distribution on sphere surface (radius proportional to count)
+        - pub fn step(&mut self, graph: &WorldGraph)
+          - Calculate repulsive forces between all node pairs: force = k² / distance, along direction away
+          - Calculate attractive forces along edges: force = distance² / k, toward neighbor
+          - Apply velocity with damping (0.9 factor)
+          - Limit displacement by temperature
+          - Reduce temperature by 0.95 factor (cooling)
+        - pub fn get_position(&self, pid: u32) -> Option<Vec3>
+        - pub fn sync_with_graph(&mut self, graph: &WorldGraph)
+          - Add new pids (place near parent + random jitter)
+          - Remove dead pids
+        - pub fn converge(&mut self, graph: &WorldGraph, iterations: usize)
+          - Run step() N times (for initial layout)
+
+      Update engine/mod.rs: add pub mod layout;
+
+      Tests:
+      - two connected nodes converge (distance decreases over iterations)
+      - two disconnected nodes repel (distance increases)
+      - sync adds new nodes and removes dead ones
+      - initial_placement distributes nodes in 3D space (not all at origin)
+
+      COMMIT: feat(engine): implement 3D force-directed graph layout
+    test: "cargo test -p aether-render"
+    depends_on: []
+
+  - id: layout-integration
+    title: "Integrate force layout with world graph"
+    agent: rust-engineer
+    scope: engine
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      Layout positions need to be synced back to ProcessNode.position_3d in WorldGraph.
+      New processes appear near their parent.
+    prompt: |
+      Integrate layout with WorldGraph.
+
+      File: crates/aether-render/src/engine/layout.rs (modify)
+      - Add method: pub fn update_graph_positions(&self, graph: &mut WorldGraph)
+        - For each pid in positions: update ProcessNode.position_3d via graph.update_process()
+
+      File: crates/aether-core/src/graph.rs (modify if needed)
+      - Ensure update_process works for position updates
+      - Add pub fn pids(&self) -> Vec<u32> — return all pids for layout sync
+      - Add pub fn edges_as_pid_pairs(&self) -> Vec<(u32, u32)> — for layout force calculation
+
+      Tests:
+      - update_graph_positions writes positions back to WorldGraph
+      - New process placed near parent position
+
+      COMMIT: feat(engine): integrate force layout with world graph
+    test: "cargo test -p aether-render"
+    depends_on: [force-layout]

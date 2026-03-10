@@ -1,0 +1,167 @@
+phase: "ms3-rasterizer"
+description: "Software rasterizer: z-buffer, line drawing, circle drawing, Phong shading"
+
+tasks:
+  - id: z-buffer
+    title: "Add z-buffer for depth testing"
+    agent: rust-engineer
+    scope: engine
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      Z-buffer at Braille pixel resolution (term_w*2 × term_h*4).
+      Ensures closer objects occlude farther ones.
+    prompt: |
+      Implement the z-buffer.
+
+      File: crates/aether-render/src/engine/rasterizer.rs
+      - ZBuffer struct:
+        - width: usize, height: usize — in Braille pixels
+        - buffer: Vec<f32> — depth values, initialized to f32::INFINITY
+      - Methods:
+        - pub fn new(width: usize, height: usize) -> Self
+        - pub fn test_and_set(&mut self, x: usize, y: usize, depth: f32) -> bool
+          - Returns true if depth < current value (pixel should be drawn), and updates buffer
+          - Returns false if depth >= current (pixel occluded)
+        - pub fn clear(&mut self) — reset all to INFINITY
+
+      Update engine/mod.rs: add pub mod rasterizer;
+
+      Tests:
+      - closer pixel (depth 0.5) overwrites farther (depth 1.0)
+      - farther pixel (depth 1.0) rejected after closer (depth 0.5)
+      - clear resets all depths
+
+      COMMIT: feat(engine): add z-buffer for depth testing
+    test: "cargo test -p aether-render"
+    depends_on: []
+
+  - id: line-rasterizer
+    title: "Add Bresenham line rasterizer"
+    agent: rust-engineer
+    scope: engine
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      Bresenham's line algorithm adapted for Braille subpixel space.
+      Depth interpolated along line for z-buffer test per pixel.
+    prompt: |
+      Implement line rasterization.
+
+      File: crates/aether-render/src/engine/rasterizer.rs (extend)
+      - pub fn draw_line(
+          canvas: &mut BrailleCanvas,
+          zbuf: &mut ZBuffer,
+          p0: ScreenPoint,
+          p1: ScreenPoint,
+          color: Color,
+        )
+        - Convert ScreenPoint x,y to Braille pixel coords (multiply by 2 for x, 4 for y)
+        - Bresenham's line algorithm between the two pixel coords
+        - Linearly interpolate depth from p0.depth to p1.depth along the line
+        - For each pixel: test z-buffer, if passes → set_pixel_colored on canvas
+        - Bounds check: skip pixels outside canvas dimensions
+
+      Tests:
+      - horizontal line produces pixels at expected y
+      - vertical line produces pixels at expected x
+      - diagonal line produces roughly correct pixel count
+
+      COMMIT: feat(engine): add Bresenham line rasterizer
+    test: "cargo test -p aether-render"
+    depends_on: [z-buffer]
+
+  - id: circle-rasterizer
+    title: "Add circle rasterizer for process nodes"
+    agent: rust-engineer
+    scope: engine
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      Process nodes are rendered as circles (spheres projected to 2D).
+      Midpoint circle algorithm + scanline fill for filled circles.
+    prompt: |
+      Implement circle rasterization.
+
+      File: crates/aether-render/src/engine/rasterizer.rs (extend)
+      - pub fn draw_circle(
+          canvas: &mut BrailleCanvas,
+          zbuf: &mut ZBuffer,
+          center: ScreenPoint,
+          radius: f32,
+          color: Color,
+        )
+        - Midpoint circle algorithm in Braille pixel space
+        - Z-buffer test at center.depth for all pixels (simplified — uniform depth for circle)
+        - Bounds check for all pixels
+
+      - pub fn draw_filled_circle(
+          canvas: &mut BrailleCanvas,
+          zbuf: &mut ZBuffer,
+          center: ScreenPoint,
+          radius: f32,
+          color: Color,
+        )
+        - Scanline fill: for each y in [center_y - radius, center_y + radius]:
+          - Compute x range at that y using circle equation
+          - Fill all pixels in that x range
+          - Z-buffer test per pixel
+
+      Tests:
+      - circle at known position sets pixels at expected distance from center
+      - filled circle has more pixels set than outline
+
+      COMMIT: feat(engine): add circle rasterizer for process nodes
+    test: "cargo test -p aether-render"
+    depends_on: [line-rasterizer]
+
+  - id: phong-shading
+    title: "Add Phong-like shading for 3D nodes"
+    agent: rust-engineer
+    scope: engine
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      Simplified Phong shading: ambient + diffuse components.
+      Light positioned at camera (headlight).
+      In terminal, brightness maps to color intensity.
+    prompt: |
+      Implement shading.
+
+      File: crates/aether-render/src/engine/shading.rs
+      - pub fn shade_point(normal: Vec3, light_dir: Vec3, base_color: Color) -> Color
+        - ambient_factor: 0.3
+        - diffuse_factor: 0.7 * f32::max(normal.dot(light_dir), 0.0)
+        - total_brightness: ambient_factor + diffuse_factor
+        - Apply brightness to base_color RGB channels (clamp to 255)
+        - Return Color::Rgb(r, g, b)
+
+      - pub fn sphere_normal(pixel_x: f32, pixel_y: f32, center_x: f32, center_y: f32, radius: f32) -> Vec3
+        - Compute normal for a point on a sphere (for shading circles as spheres)
+        - dx = (pixel_x - center_x) / radius
+        - dy = (pixel_y - center_y) / radius
+        - dz = sqrt(1.0 - dx*dx - dy*dy).max(0.0)
+        - Return Vec3::new(dx, dy, dz).normalize()
+
+      Update engine/mod.rs: add pub mod shading;
+
+      Tests:
+      - facing light (normal == light_dir) → near full brightness
+      - perpendicular to light → ambient only (~30%)
+      - behind light (opposite normal) → ambient only
+
+      COMMIT: feat(engine): add Phong-like shading for 3D nodes
+    test: "cargo test -p aether-render"
+    depends_on: [circle-rasterizer]

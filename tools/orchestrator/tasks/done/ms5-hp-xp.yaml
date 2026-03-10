@@ -1,0 +1,141 @@
+phase: "ms5-hp-xp"
+description: "Gamification: HP calculation, XP/ranking system, achievements"
+
+tasks:
+  - id: hp-calculation
+    title: "Implement HP calculation engine"
+    agent: rust-engineer
+    scope: gamification
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      HP reflects process health. Damaged by high CPU, memory leaks, zombie state.
+      Healthy processes regenerate HP slowly.
+    prompt: |
+      Implement the HP engine.
+
+      File: crates/aether-gamification/src/hp.rs
+      - HpEngine struct (stateless calculator)
+      - pub fn calculate_hp_delta(current: &ProcessNode, previous: &ProcessNode, dt_secs: f32) -> f32
+        - Memory growth > 5%/min (compare mem_bytes): -1.0 * dt_secs
+        - CPU > 90%: -2.0 * dt_secs
+        - Zombie state: return -(current.hp) (set to 0 immediately)
+        - Healthy (no anomalies): +0.5 * dt_secs (regeneration)
+        - Clamp result so HP stays in 0.0..100.0 after applying
+      - pub fn apply_to_graph(graph: &mut WorldGraph, prev_graph: &WorldGraph, dt_secs: f32)
+        - For each process in graph: calculate delta, update HP
+        - New processes (not in prev_graph): HP stays at 100.0
+
+      File: crates/aether-gamification/src/lib.rs — pub mod hp;
+
+      Tests:
+      - High CPU process loses HP
+      - Memory leak process loses HP
+      - Zombie process goes to 0 HP
+      - Healthy process regenerates (not above 100)
+      - New process starts at 100 HP
+
+      COMMIT: feat(gamification): implement HP calculation engine
+    test: "cargo test -p aether-gamification"
+    depends_on: []
+
+  - id: xp-ranking
+    title: "Implement XP tracking and ranks"
+    agent: rust-engineer
+    scope: gamification
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      User gains XP from uptime, actions, and achievements.
+      Ranks: Novice → Operator → Engineer → Architect → AetherLord.
+    prompt: |
+      Implement XP and ranking.
+
+      File: crates/aether-gamification/src/xp.rs
+      - Rank enum: Novice, Operator, Engineer, Architect, AetherLord
+        - impl Rank:
+          - pub fn threshold(&self) -> u32 — 0, 100, 500, 2000, 10000
+          - pub fn from_xp(xp: u32) -> Self — determine rank from XP
+          - pub fn display_name(&self) -> &str
+      - XpTracker struct:
+        - total_xp: u32
+        - pending_events: Vec<GameEvent>
+      - Methods:
+        - pub fn new() -> Self
+        - pub fn add_xp(&mut self, amount: u32, reason: &str)
+        - pub fn current_rank(&self) -> Rank
+        - pub fn xp_to_next_rank(&self) -> u32
+        - pub fn total_xp(&self) -> u32
+        - pub fn tick(&mut self, dt_secs: f32) — add uptime XP (+1 per 60 seconds)
+        - pub fn on_action_approved(&mut self) — +50 XP
+        - pub fn on_zombie_killed(&mut self) — +10 XP
+        - pub fn drain_events(&mut self) -> Vec<GameEvent>
+
+      Update lib.rs: add pub mod xp;
+
+      Tests:
+      - Rank::from_xp returns correct rank at thresholds (0, 99, 100, 499, 500, 1999, 2000, 9999, 10000)
+      - XP accumulates correctly
+      - xp_to_next_rank computed correctly
+      - tick adds uptime XP
+
+      COMMIT: feat(gamification): implement XP tracking and ranks
+    test: "cargo test -p aether-gamification"
+    depends_on: [hp-calculation]
+
+  - id: achievements
+    title: "Implement achievement tracking"
+    agent: rust-engineer
+    scope: gamification
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      5 initial achievements. Checked against game state each tick.
+      No double-unlock. Emits GameEvent::AchievementUnlocked.
+    prompt: |
+      Implement achievements.
+
+      File: crates/aether-gamification/src/achievements.rs
+      - AchievementDef struct: id: String, name: String, description: String
+      - GameState struct (for checking conditions):
+        - kills: u32
+        - uptime_hours: f32
+        - zombie_kills: u32
+        - arbiter_approvals: u32
+        - dpi_analyses: u32 (placeholder for future)
+      - AchievementTracker struct:
+        - definitions: Vec<AchievementDef>
+        - unlocked: HashSet<String>
+      - Methods:
+        - pub fn new() -> Self — initialize with 5 achievements:
+          - "first_blood": kills > 0, "First Blood", "Kill your first process"
+          - "uptime_champion": uptime_hours > 24.0, "Uptime Champion", "24h without anomalies"
+          - "network_oracle": dpi_analyses > 100, "Network Oracle", "Analyze 100 network flows"
+          - "zombie_hunter": zombie_kills > 50, "Zombie Hunter", "Kill 50 zombie processes"
+          - "ai_whisperer": arbiter_approvals > 100, "AI Whisperer", "Approve 100 AI agent actions"
+        - pub fn check(&mut self, state: &GameState) -> Vec<AchievementDef>
+          - Returns newly unlocked achievements
+          - Adds to unlocked set
+        - pub fn is_unlocked(&self, id: &str) -> bool
+        - pub fn unlocked_count(&self) -> usize
+        - pub fn total_count(&self) -> usize
+
+      Update lib.rs: add pub mod achievements;
+
+      Tests:
+      - Achievement unlocks at threshold
+      - No double-unlock (calling check twice doesn't re-trigger)
+      - Correct initial achievement count (5)
+
+      COMMIT: feat(gamification): implement achievement tracking
+    test: "cargo test -p aether-gamification"
+    depends_on: [xp-ranking]

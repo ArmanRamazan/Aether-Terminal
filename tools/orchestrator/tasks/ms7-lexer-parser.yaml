@@ -1,0 +1,116 @@
+phase: "ms7-lexer-parser"
+description: "Aether DSL: lexer with logos, AST type definitions, recursive descent parser"
+
+tasks:
+  - id: lexer-logos
+    title: "Implement lexer with logos"
+    agent: rust-engineer
+    scope: script
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      EXISTING CODE:
+      - aether-script/src/lib.rs is a stub (doc-comment only, no modules)
+      - aether-script/Cargo.toml already has: logos, cranelift-codegen, cranelift-frontend, cranelift-jit, cranelift-module, cranelift-native, aether-core
+      - aether-core has AgentAction enum (KillProcess, RestartService, Inspect, CustomScript)
+
+      Custom DSL for process monitoring rules. Example:
+        rule high_cpu_alert {
+          when process.cpu > 90% for 30s
+          then alert "High CPU on {process.name}" severity critical
+        }
+      Logos crate generates a zero-copy tokenizer from derive macros.
+    prompt: |
+      Implement the DSL lexer.
+
+      File: crates/aether-script/src/error.rs
+      - ScriptError enum with thiserror: Lex(String), Parse(String), Type(String), Compile(String)
+
+      File: crates/aether-script/src/lexer.rs
+      - Token enum with #[derive(Logos)]
+      - Span struct: { start: usize, end: usize }
+      - Spanned<T> = (T, Span)
+      - pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ScriptError>
+
+      Update lib.rs: pub mod error; pub mod lexer;
+
+      Tests:
+      - test_tokenize_simple_rule
+      - test_tokenize_duration_literals
+      - test_tokenize_operators
+      - test_tokenize_error_on_invalid_token
+
+      COMMIT: feat(script): implement lexer with logos
+    test: "cargo test -p aether-script"
+    depends_on: []
+
+  - id: ast-types
+    title: "Define AST types for Aether DSL"
+    agent: rust-engineer
+    scope: script
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+
+      EXISTING CODE (from previous task):
+      - lexer.rs with Token enum, Span, tokenize()
+      - error.rs with ScriptError
+    prompt: |
+      Define AST types in crates/aether-script/src/ast.rs.
+
+      - RuleFile, Rule (name, condition, actions, span)
+      - Condition enum: Comparison, Duration, And, Or, Not
+      - Expr enum: FieldAccess, Literal
+      - CmpOp, Severity, Action enums
+
+      Update lib.rs: add pub mod ast;
+
+      Tests:
+      - test_ast_node_construction
+      - test_cmpop_display
+
+      COMMIT: feat(script): define AST types for Aether DSL
+    test: "cargo test -p aether-script"
+    depends_on: [lexer-logos]
+
+  - id: recursive-descent-parser
+    title: "Implement recursive descent parser"
+    agent: rust-engineer
+    scope: script
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+
+      EXISTING CODE (from previous tasks):
+      - lexer.rs with Token, Span, Spanned, tokenize()
+      - ast.rs with RuleFile, Rule, Condition, Expr, Action etc.
+      - error.rs with ScriptError
+
+      Hand-written parser (no generator). Demonstrates compiler skills.
+      Precedence: not > and > or. Error recovery: skip to next 'rule' keyword.
+    prompt: |
+      Implement the recursive descent parser.
+
+      File: crates/aether-script/src/parser.rs
+      - Parser struct: tokens, pos, errors
+      - pub fn parse(tokens: Vec<Spanned<Token>>) -> Result<RuleFile, Vec<ParseError>>
+      - Methods: parse_rule, parse_condition (or→and→not→primary), parse_comparison, parse_action, parse_expr
+      - Error recovery: skip to next 'rule' on error
+
+      File: rules/default.aether (example rules file)
+
+      Update lib.rs: add pub mod parser;
+
+      Tests:
+      - test_parse_simple_rule
+      - test_parse_compound_condition_and_or
+      - test_parse_duration_condition
+      - test_parse_error_recovery
+      - test_parse_all_default_rules
+
+      COMMIT: feat(script): implement recursive descent parser
+    test: "cargo test -p aether-script"
+    depends_on: [ast-types]

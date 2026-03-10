@@ -1,0 +1,104 @@
+phase: "ms7-cranelift-jit"
+description: "Cranelift JIT: IR generation, compilation/execution, duration tracking"
+
+tasks:
+  - id: cranelift-ir
+    title: "Implement Cranelift IR generation from typed AST"
+    agent: rust-engineer
+    scope: script
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      EXISTING CODE (from ms7-lexer-parser + ms7-type-checker):
+      - lexer.rs, ast.rs, parser.rs, types.rs — full pipeline: source → tokens → AST → typed AST
+      - Cargo.toml already has: cranelift-codegen, cranelift-frontend, cranelift-jit, cranelift-module, cranelift-native
+      - aether-core/models.rs: ProcessNode fields (pid u32, cpu_percent f32, mem_bytes u64, state ProcessState, hp f32, xp u32, name String)
+      - error.rs: ScriptError::Compile(String) variant
+
+      Generates Cranelift IR from typed AST. Each rule → native function.
+    prompt: |
+      Implement IR generation.
+
+      File: crates/aether-script/src/codegen.rs
+      - WorldStateFFI (#[repr(C)]): pid, cpu_percent, mem_bytes, mem_growth_percent, state, hp, name_ptr, name_len, process_count, processes_ptr
+      - RuleResult (#[repr(C)]): matched, action_type, target_pid, severity
+      - CodeGenerator: generate_rule(rule) → Result<Function, ScriptError>
+      - Function signature: fn(*const WorldStateFFI, u32) → RuleResult
+
+      Update lib.rs: add pub mod codegen;
+
+      Tests:
+      - test_generate_ir_simple_comparison
+      - test_generated_ir_passes_verifier
+      - test_generate_ir_compound_conditions
+
+      COMMIT: feat(script): implement Cranelift IR generation from typed AST
+    test: "cargo test -p aether-script"
+    depends_on: []
+
+  - id: jit-compilation
+    title: "Implement JIT compilation and rule execution"
+    agent: rust-engineer
+    scope: script
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+
+      EXISTING CODE (from previous task):
+      - codegen.rs: CodeGenerator, WorldStateFFI, RuleResult, generate_rule()
+      - All cranelift deps in Cargo.toml
+      - Every unsafe block MUST have safety comment
+    prompt: |
+      Implement JIT compilation and execution.
+
+      File: crates/aether-script/src/codegen.rs (extend)
+      - JitCompiler: compile(Function) → Result<*const u8, ScriptError>
+      - CompiledRule: name, func_ptr, metadata
+
+      File: crates/aether-script/src/runtime.rs
+      - CompiledRuleSet: rules Vec<CompiledRule>
+      - pub fn evaluate(&self, state: &WorldState) → Vec<RuleAction>
+      - RuleAction: rule_name, action, target_pid
+      - Safety: document all unsafe fn pointer calls
+
+      Update lib.rs: add pub mod runtime;
+
+      Tests:
+      - test_compile_and_execute_simple_rule
+      - test_matching_condition_triggers_action
+      - test_non_matching_condition_no_action
+
+      COMMIT: feat(script): implement JIT compilation and rule execution
+    test: "cargo test -p aether-script"
+    depends_on: [cranelift-ir]
+
+  - id: duration-tracking
+    title: "Add duration tracking for stateful rules"
+    agent: rust-engineer
+    scope: script
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+
+      EXISTING CODE (from previous tasks):
+      - runtime.rs: CompiledRuleSet, evaluate(), RuleAction
+      - codegen.rs: JitCompiler, CompiledRule
+    prompt: |
+      Add duration tracking to runtime.rs.
+
+      File: crates/aether-script/src/runtime.rs (extend)
+      - DurationTracker: timers HashMap<(String, u32), Instant>
+      - check_duration(rule_name, pid, condition_met, required) → bool
+      - Integrate into evaluate(): duration rules only fire after elapsed time
+
+      Tests:
+      - test_rule_fires_only_after_duration_elapsed
+      - test_timer_resets_when_condition_false
+      - test_multiple_rules_tracked_independently
+
+      COMMIT: feat(script): add duration tracking for stateful rules
+    test: "cargo test -p aether-script"
+    depends_on: [jit-compilation]

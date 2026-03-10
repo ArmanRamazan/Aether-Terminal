@@ -1,0 +1,71 @@
+phase: "ms8-inference"
+description: "ONNX inference: model loading via tract, prediction types and confidence scoring"
+
+tasks:
+  - id: model-loading
+    title: "Implement ONNX model loading and inference via tract"
+    agent: rust-engineer
+    scope: predict
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      EXISTING CODE (from ms8-features):
+      - features.rs: FeatureVector [f32; 9], FeatureExtractor
+      - window.rs: SlidingWindow, to_tensor()
+      - error.rs: PredictError with Model/Inference/Feature variants
+      - Cargo.toml has tract-onnx (feature-gated)
+
+      tract-onnx is pure-Rust ONNX runtime. No C++ deps.
+    prompt: |
+      Implement ONNX model loading and inference.
+
+      File: crates/aether-predict/src/inference.rs
+      - OnnxModel: load(path) → Result, predict(&[f32]) → Result<Vec<f32>>
+      - AnomalyDetector (autoencoder): detect() → anomaly score (MSE reconstruction error)
+      - CpuForecaster (LSTM): forecast() → (predicted_cpu, confidence)
+      - Feature-gated behind #[cfg(feature = "predict")]
+
+      Update lib.rs: add pub mod inference;
+
+      Tests:
+      - test_predict_wrong_input_shape_fails
+      - test_anomaly_detection_produces_positive_score
+      (Use mock or graceful no-model-file handling in tests)
+
+      COMMIT: feat(predict): implement ONNX model loading and inference via tract
+    test: "cargo test -p aether-predict"
+    depends_on: []
+
+  - id: prediction-types
+    title: "Define prediction types and confidence scoring"
+    agent: rust-engineer
+    scope: predict
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+
+      EXISTING CODE (from previous tasks):
+      - inference.rs: OnnxModel, AnomalyDetector, CpuForecaster
+      - features.rs: FeatureVector
+    prompt: |
+      Define prediction types in crates/aether-predict/src/models.rs.
+
+      - PredictedAnomaly: pid, process_name, anomaly_type, confidence, eta_seconds, recommended_action
+      - AnomalyType enum: OomRisk, CpuSpike, MemoryLeak, Deadlock, DiskExhaustion
+        - default_threshold(), recommended_action() methods
+      - ConfidenceScorer: score() and classify() methods
+
+      Update lib.rs: add pub mod models;
+
+      Tests:
+      - test_predicted_anomaly_serde_roundtrip
+      - test_confidence_in_zero_one_range
+      - test_classify_high_cpu_returns_cpu_spike
+      - test_default_thresholds_sensible
+
+      COMMIT: feat(predict): define prediction types and confidence scoring
+    test: "cargo test -p aether-predict"
+    depends_on: [model-loading]

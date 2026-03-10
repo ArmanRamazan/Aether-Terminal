@@ -1,0 +1,62 @@
+phase: "ms2-network-tab"
+description: "Network tab with connection list and statistics panel"
+
+tasks:
+  - id: connection-list
+    title: "Add network connection list view"
+    agent: rust-engineer
+    scope: render
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      Network tab (F3) shows all network connections from WorldGraph edges.
+      Color-coded by protocol, sorted by bytes/sec.
+    prompt: |
+      Implement the network connection list.
+
+      File: crates/aether-render/src/tui/network.rs
+      - NetworkTab struct:
+        - selected_row: Option<usize>
+        - filter_text: String
+        - scroll_offset: usize
+      - pub fn render(&self, area: Rect, buf: &mut Buffer, world: &WorldGraph)
+      - Table columns: Source PID, Source Name, Dest IP:Port, Protocol, State, Bytes/s
+      - Color by protocol: TCP=Palette::HEALTHY, UDP=Palette::NEON_BLUE, DNS=Palette::WARNING, Unknown=Color::Gray
+      - Sort by bytes/sec descending (most active first)
+      - Filter input: / to start typing filter, matches process name or IP
+      - j/k to scroll, Esc to clear filter
+
+      Update tui/mod.rs: add pub mod network;
+
+      COMMIT: feat(render): add network connection list view
+    test: "cargo check -p aether-render"
+    depends_on: []
+
+  - id: network-stats
+    title: "Add network statistics panel"
+    agent: rust-engineer
+    scope: render
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      Summary panel at the top of the Network tab showing aggregate stats.
+    prompt: |
+      Add network statistics summary.
+
+      File: crates/aether-render/src/tui/network.rs (modify)
+      - Add summary panel at top of Network tab (vertical split: 20% stats, 80% table):
+        - Total connections count
+        - Active transfers count (bytes_per_sec > 0)
+        - Bytes in/out per second (sparkline using VecDeque<u64>)
+        - Protocol distribution as simple text: "TCP: 60% | UDP: 30% | DNS: 10%"
+      - Stats panel in a Block with title "Network Summary" and Palette::NEON_BLUE border
+
+      COMMIT: feat(render): add network statistics panel
+    test: "cargo check -p aether-render"
+    depends_on: [connection-list]

@@ -1,0 +1,92 @@
+phase: "ms2-vim-navigation"
+description: "Vim-style input modes and help overlay"
+
+tasks:
+  - id: command-mode
+    title: "Add Vim-style input modes"
+    agent: rust-engineer
+    scope: render
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      Three input modes like Vim: Normal, Command (:), Search (/).
+      Status bar shows current mode and input buffer.
+    prompt: |
+      Implement Vim-style input handling.
+
+      File: crates/aether-render/src/tui/input.rs
+      - InputMode enum: Normal, Command, Search
+      - InputHandler struct:
+        - mode: InputMode
+        - buffer: String (for command/search text)
+      - pub fn handle_key(&mut self, key: KeyEvent) -> InputAction
+      - InputAction enum:
+        - None, Quit, SwitchTab(Tab), Navigate(Direction)
+        - ExecuteCommand(String), Search(String), CancelInput
+        - ScrollUp, ScrollDown, Select, Deselect
+      - Normal mode:
+        - h/j/k/l: navigate (left/down/up/right)
+        - q, Ctrl-C: quit
+        - F1-F4: switch tabs
+        - Enter: select
+        - Esc: deselect/back
+        - ':': enter Command mode
+        - '/': enter Search mode
+        - '?': toggle help
+      - Command mode:
+        - Type command text, Enter to execute, Esc to cancel
+        - Commands: :kill <pid>, :sort <column>, :q (quit)
+      - Search mode:
+        - Type search text, Enter to search, Esc to cancel
+        - n/N: next/prev match (in Normal mode after search)
+      - Status bar integration: show "[NORMAL]", "[COMMAND] :kill ", "[SEARCH] /firefox"
+
+      Update tui/mod.rs: add pub mod input;
+      Integrate InputHandler into App struct.
+
+      COMMIT: feat(render): add Vim-style input modes
+    test: "cargo test -p aether-render"
+    depends_on: []
+
+  - id: help-overlay
+    title: "Add help overlay"
+    agent: rust-engineer
+    scope: render
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      Floating help popup showing all keybindings.
+      Toggled with '?' key.
+    prompt: |
+      Implement help overlay.
+
+      File: crates/aether-render/src/tui/help.rs
+      - HelpOverlay struct:
+        - visible: bool
+      - pub fn toggle(&mut self)
+      - pub fn render(&self, area: Rect, buf: &mut Buffer)
+        - Centered popup (60% width, 70% height)
+        - Background: semi-transparent effect (Palette::BG)
+        - Border: Palette::HEALTHY
+        - Title: "Keybindings — Press any key to close"
+        - Content: two-column layout
+          - Navigation: h/j/k/l, Arrow keys
+          - Tabs: F1-F4
+          - Actions: Enter (select), Esc (back), q (quit)
+          - Modes: : (command), / (search), ? (help)
+          - Commands: :kill, :sort, :q
+      - When visible, any key press dismisses it
+      - Rendered on top of current tab content using Clear widget + Paragraph
+
+      Update tui/mod.rs: add pub mod help;
+      Integrate into App: '?' toggles overlay, overlay renders last in draw().
+
+      COMMIT: feat(render): add help overlay
+    test: "cargo check -p aether-render"
+    depends_on: [command-mode]

@@ -1,0 +1,156 @@
+phase: "ms5-polish"
+description: "Final polish: death animation, startup animation, theme system, CLI and README"
+
+tasks:
+  - id: death-animation
+    title: "Add process death dissolve animation"
+    agent: rust-engineer
+    scope: render
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      EXISTING CODE:
+      - effects.rs already has PulseEffect and FlowEffect structs
+      - SceneRenderer (engine/scene.rs) already renders nodes/edges with shading
+      - SceneRenderer has render() method returning Vec<(String, Vec<Color>)>
+      - WorldGraph (aether-core graph.rs) has apply_snapshot() which removes dead pids
+      - BrailleCanvas (braille.rs) has set_pixel_colored(), clear_pixel()
+      - Palette has BG, CRITICAL, HEALTHY constants
+    prompt: |
+      Implement death animation in existing effects.rs and integrate with SceneRenderer.
+
+      File: crates/aether-render/src/effects.rs (extend existing file)
+      - Add DeathEffect struct:
+        - dying_nodes: HashMap<u32, DeathState>
+      - DeathState struct:
+        - start_time: Instant
+        - original_position: Vec3
+        - duration: Duration (500ms)
+      - pub fn mark_dying(&mut self, pid: u32, position: Vec3)
+      - pub fn update(&mut self, dt: f32) — remove completed animations
+      - pub fn is_dying(&self, pid: u32) -> Option<f32> — progress 0.0..1.0
+
+      File: crates/aether-render/src/engine/scene.rs (modify)
+      - Add death: DeathEffect field to SceneRenderer
+      - In render(): before sync_with_graph, detect removed pids and mark_dying
+      - Dying nodes: scattered pixel offsets, color fade to Palette::BG
+
+      COMMIT: feat(render): add process death dissolve animation
+    test: "cargo check -p aether-render"
+    depends_on: []
+
+  - id: startup-animation
+    title: "Add startup animation sequence"
+    agent: rust-engineer
+    scope: render
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      EXISTING CODE:
+      - effects.rs has PulseEffect, FlowEffect, and now DeathEffect
+      - App (tui/app.rs) has run() method with draw() called each frame
+      - Palette has HEALTHY (cyan), XP_PURPLE, BG constants
+      - App already has tick_rate = 16ms (60fps)
+    prompt: |
+      Implement startup animation in effects.rs and integrate with App.
+
+      File: crates/aether-render/src/effects.rs (extend)
+      - StartupAnimation struct:
+        - phase: StartupPhase enum (MatrixRain, TitleType, FadeIn, Done)
+        - elapsed: f32
+      - Phase timing:
+        - MatrixRain: 0.0..1.0s — random green chars falling in columns
+        - TitleType: 1.0..2.5s — "AETHER TERMINAL" typed char by char
+        - FadeIn: 2.5..3.0s — blend to main UI
+        - Done: normal rendering
+      - pub fn update(&mut self, dt: f32) -> bool — returns true when done
+      - pub fn render(&self, area: Rect, buf: &mut Buffer)
+
+      File: crates/aether-render/src/tui/app.rs (modify)
+      - Add startup: StartupAnimation field to App
+      - In draw(): if !startup.is_done(), render startup instead of normal UI
+
+      COMMIT: feat(render): add startup animation sequence
+    test: "cargo check -p aether-render"
+    depends_on: [death-animation]
+
+  - id: theme-system
+    title: "Add TOML-based theme system"
+    agent: rust-engineer
+    scope: render
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      EXISTING CODE:
+      - palette.rs has Palette struct with const colors (BG, HEALTHY, NEON_BLUE, WARNING, CRITICAL, DATA, XP_PURPLE)
+      - palette.rs has color_for_load() and color_for_hp() functions
+      - All TUI widgets already reference Palette:: constants
+    prompt: |
+      Add TOML theme loading to existing palette.rs.
+
+      File: assets/themes/cyberpunk.toml — default theme matching current Palette constants
+      File: assets/themes/matrix.toml — green-on-black variant
+
+      File: crates/aether-render/src/palette.rs (modify)
+      - Add Theme struct with color fields matching current Palette constants
+      - ThemeLoader: pub fn load_from_file(path: &Path) -> Result<Theme>
+      - Parse TOML hex strings → Color::Rgb
+      - Fallback to default cyberpunk if file not found
+      - Add toml dependency to aether-render Cargo.toml
+
+      Tests:
+      - test_hex_color_parsing_valid
+      - test_theme_fallback_on_missing_file
+
+      COMMIT: feat(render): add TOML-based theme system
+    test: "cargo test -p aether-render"
+    depends_on: [startup-animation]
+
+  - id: cli-readme
+    title: "Finalize CLI and add README"
+    agent: rust-engineer
+    scope: terminal
+    type: docs
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+
+      EXISTING CODE:
+      - main.rs already has: --log-level, --mcp-stdio, --mcp-sse <PORT>
+      - main.rs uses clap derive Parser
+      - Full MCP integration (McpServer with stdio + SSE)
+      - Arbiter queue with action execution
+      - IngestionPipeline with SysinfoProbe
+      - TUI App with 4 tabs (Overview/World3D/Network/Arbiter)
+      - 3D engine with BrailleCanvas, camera, rasterizer, shading
+      - Gamification: HpEngine, XpTracker, AchievementTracker, SqliteStorage
+      - README.md already exists (check current content before rewriting)
+    prompt: |
+      Extend CLI flags and update README.
+
+      File: crates/aether-terminal/src/main.rs (modify Cli struct only)
+      - Add missing clap flags:
+        - --no-3d: disable 3D rendering (bool flag)
+        - --no-game: disable gamification (bool flag)
+        - --theme <NAME>: theme name or path (default: "cyberpunk")
+        - --rules <PATH>: load DSL rule files (no-op placeholder for MS7)
+        - --predict: enable predictive AI (no-op placeholder for MS8)
+        - --ebpf: enable eBPF telemetry (no-op placeholder for MS6)
+      - Use env!("CARGO_PKG_VERSION") for version
+
+      File: README.md (update existing)
+      - Features list with status markers (implemented/planned)
+      - Usage examples with all CLI flags
+      - Architecture overview
+
+      COMMIT: docs: finalize CLI flags and update README
+    test: "cargo run -p aether-terminal -- --help"
+    depends_on: [theme-system]

@@ -1,0 +1,99 @@
+phase: "ms3-visual-effects"
+description: "Visual effects: node pulsation, health colors, edge data flow animation"
+
+tasks:
+  - id: node-pulsation
+    title: "Add CPU load pulsation effect"
+    agent: rust-engineer
+    scope: render
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      Nodes with high CPU load pulse (radius oscillates sinusoidally).
+      Creates a "breathing" visual effect showing system load.
+    prompt: |
+      Implement pulsation effect.
+
+      File: crates/aether-render/src/effects.rs
+      - PulseEffect struct:
+        - time: f32 — accumulated time in seconds
+      - pub fn update(&mut self, dt: f32)
+        - Increment time
+      - pub fn pulse_radius(&self, base_radius: f32, cpu_percent: f32) -> f32
+        - amplitude = cpu_percent / 100.0 * 0.3 * base_radius (0% = no pulse, 100% = ±30%)
+        - frequency = 1.0 + cpu_percent / 100.0 * 2.0 (1-3 Hz)
+        - Return base_radius + amplitude * sin(time * frequency * 2π)
+      - Integrate into SceneRenderer: apply pulse_radius before drawing each node
+
+      Update lib.rs: add pub mod effects;
+
+      COMMIT: feat(render): add CPU load pulsation effect
+    test: "cargo check -p aether-render"
+    depends_on: []
+
+  - id: health-visualization
+    title: "Add health-based color visualization"
+    agent: rust-engineer
+    scope: render
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      Node colors reflect HP. Critical nodes get bloom effect.
+      Zombie processes flicker. Edges blend source/dest colors.
+    prompt: |
+      Implement health-based visualization.
+
+      File: crates/aether-render/src/engine/scene.rs (modify)
+      - Node color: use palette::color_for_hp(node.hp) instead of fixed color
+      - Edge color: blend source and dest node colors
+        - fn blend_colors(c1: Color, c2: Color) -> Color — average RGB channels
+      - Critical nodes (HP < 20%):
+        - Draw double circle: outer circle at radius+3 with lower alpha (simulated bloom)
+        - Use Palette::CRITICAL color
+      - Zombie processes (state == Zombie):
+        - Flicker effect: alternate visible/invisible every 500ms
+        - Use frame counter or time-based toggle
+
+      COMMIT: feat(render): add health-based color visualization
+    test: "cargo check -p aether-render"
+    depends_on: [node-pulsation]
+
+  - id: edge-flow-animation
+    title: "Add data flow animation on edges"
+    agent: rust-engineer
+    scope: render
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      Bright dots travel along edges showing data flow direction.
+      Speed proportional to bytes_per_sec.
+    prompt: |
+      Implement edge flow animation.
+
+      File: crates/aether-render/src/effects.rs (extend)
+      - FlowEffect struct:
+        - time: f32
+      - pub fn update(&mut self, dt: f32)
+      - pub fn flow_dot_position(&self, bytes_per_sec: u64) -> f32
+        - Returns position along edge as 0.0..1.0
+        - Speed: base_speed + bytes_per_sec.min(10_000_000) as f32 / 10_000_000.0
+        - Position = fract(time * speed)
+      - Integration in SceneRenderer:
+        - For each edge with bytes_per_sec > 0:
+          - Compute dot position along the projected line
+          - Interpolate screen coordinates between source and dest
+          - Draw bright dot (Palette::DATA color) at that position
+          - Draw 2-3 dots spaced evenly for high-traffic edges
+
+      COMMIT: feat(render): add data flow animation on edges
+    test: "cargo check -p aether-render"
+    depends_on: [health-visualization]

@@ -1,0 +1,123 @@
+phase: "ms3-scene-renderer"
+description: "Scene render pipeline, World3D tab widget, and node interaction"
+
+tasks:
+  - id: scene-pipeline
+    title: "Implement scene render pipeline"
+    agent: rust-engineer
+    scope: engine
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      SceneRenderer combines camera, layout, canvas, z-buffer, and rasterizer
+      into a single render pipeline that produces Braille output.
+    prompt: |
+      Implement the scene render pipeline.
+
+      File: crates/aether-render/src/engine/scene.rs
+      - SceneRenderer struct:
+        - camera: OrbitalCamera
+        - layout: ForceLayout
+        - canvas: BrailleCanvas
+        - zbuffer: ZBuffer
+      - pub fn new(cell_width: usize, cell_height: usize) -> Self
+      - pub fn resize(&mut self, cell_width: usize, cell_height: usize)
+      - pub fn render(&mut self, graph: &WorldGraph) -> Vec<(String, Vec<Color>)>:
+        1. Clear canvas and z-buffer
+        2. Sync layout with graph, run 1 layout step
+        3. Get view and projection matrices from camera
+        4. For each edge in graph:
+           - Project source and dest node positions to screen
+           - draw_line between projected points (color: Palette::NEON_BLUE)
+        5. For each node in graph:
+           - Project center position to screen
+           - Calculate radius based on distance (closer = larger, range 1-5 Braille pixels)
+           - draw_filled_circle with color from palette::color_for_hp(node.hp)
+           - Apply Phong shading for sphere appearance
+        6. Convert canvas to Braille lines with colors
+        7. Return lines for ratatui rendering
+      - pub fn camera_mut(&mut self) -> &mut OrbitalCamera
+
+      Update engine/mod.rs: add pub mod scene;
+
+      COMMIT: feat(engine): implement scene render pipeline
+    test: "cargo check -p aether-render"
+    depends_on: []
+
+  - id: world3d-tab
+    title: "Add World3D tab with interactive camera"
+    agent: rust-engineer
+    scope: render
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      World3D tab (F2) renders the 3D process graph using SceneRenderer.
+      Keyboard controls for camera rotation and zoom.
+    prompt: |
+      Implement the World3D tab.
+
+      File: crates/aether-render/src/tui/world3d.rs
+      - World3DTab struct:
+        - scene: SceneRenderer
+        - auto_rotate: bool (default false)
+        - selected_pid: Option<u32>
+      - pub fn render(&mut self, area: Rect, buf: &mut Buffer, world: &WorldGraph)
+        - Resize scene if area changed
+        - If auto_rotate: rotate camera by small amount each frame
+        - Call scene.render(graph)
+        - Draw each line of Braille output as ratatui Span with colors
+        - Overlay node labels: for each projected node position, draw process name if space allows
+      - pub fn handle_input(&mut self, key: KeyEvent) -> InputAction
+        - Arrow keys / WASD: rotate camera (0.1 radians per press)
+        - +/-/mouse wheel: zoom in/out
+        - Space: toggle auto-rotate
+        - R: reset camera to default
+        - C: center on selected node (auto_center)
+
+      Update tui/mod.rs: add pub mod world3d;
+      Integrate into App: F2 renders World3DTab.
+
+      COMMIT: feat(render): add World3D tab with interactive camera
+    test: "cargo check -p aether-render"
+    depends_on: [scene-pipeline]
+
+  - id: node-interaction
+    title: "Add node selection and interaction in 3D view"
+    agent: rust-engineer
+    scope: render
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      Select nodes in 3D view by tabbing through them or pressing Enter.
+      Selected node highlighted with brighter color.
+    prompt: |
+      Implement node interaction in 3D.
+
+      File: crates/aether-render/src/tui/world3d.rs (modify)
+      - Node selection:
+        - Tab key: cycle through nodes (sorted by projected screen position)
+        - Enter: select nearest node to cursor/center
+        - Esc: deselect
+      - Selected node visualization:
+        - Draw with thicker circle (radius + 2)
+        - Brighter color (shade with extra brightness)
+        - Draw selection indicator (highlight border)
+      - Selected node info panel:
+        - When a node is selected: show small info box at bottom with PID, name, CPU%, HP
+        - Press 'i' for full inspect (switch to Overview tab with this process selected)
+      - Nearest-node finding:
+        - Project all node positions
+        - Find closest to screen center (or cursor position)
+
+      COMMIT: feat(render): add node selection and interaction in 3D view
+    test: "cargo check -p aether-render"
+    depends_on: [world3d-tab]

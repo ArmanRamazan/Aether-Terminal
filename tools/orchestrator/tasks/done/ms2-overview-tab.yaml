@@ -1,0 +1,105 @@
+phase: "ms2-overview-tab"
+description: "Overview tab with process table, sparklines, and detail panel"
+
+tasks:
+  - id: process-table
+    title: "Add process table widget in Overview tab"
+    agent: rust-engineer
+    scope: render
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      The Overview tab (F1) is the primary data view.
+      Process table shows all running processes sorted by CPU.
+      Uses ratatui Table widget with cyberpunk palette colors.
+    prompt: |
+      Implement the process table widget.
+
+      File: crates/aether-render/src/tui/overview.rs
+      - OverviewTab struct:
+        - selected_row: Option<usize>
+        - sort_column: SortColumn enum (PID, Name, CPU, MEM, State, HP)
+        - sort_ascending: bool
+        - scroll_offset: usize
+      - pub fn render(&self, area: Rect, buf: &mut Buffer, world: &WorldGraph)
+      - Sortable table columns: PID, Name, CPU%, MEM, State, HP
+      - Columns auto-resize to terminal width using ratatui Constraint::Percentage
+      - Color-coded rows by CPU load using palette::color_for_load
+      - Header row styled with Palette::HEALTHY color
+      - Scroll with j/k keys, select with Enter
+      - Sort by pressing s then column key (c=CPU, m=MEM, p=PID, h=HP)
+
+      Update tui/mod.rs: add pub mod overview;
+
+      COMMIT: feat(render): add process table widget in Overview tab
+    test: "cargo check -p aether-render"
+    depends_on: []
+
+  - id: sparkline-widgets
+    title: "Add CPU/RAM/Network sparkline widgets"
+    agent: rust-engineer
+    scope: render
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      Sparklines show rolling 60-sample history (1 per second).
+      Placed above the process table in the Overview tab.
+      Uses ratatui's built-in Sparkline widget.
+    prompt: |
+      Implement sparkline widgets.
+
+      File: crates/aether-render/src/tui/widgets/sparklines.rs
+      - SystemSparklines struct:
+        - cpu_history: VecDeque<u64> (cap 60)
+        - ram_history: VecDeque<u64> (cap 60)
+        - net_history: VecDeque<u64> (cap 60)
+      - pub fn update(&mut self, world: &WorldGraph) — compute avg CPU, total RAM, total net bytes and push
+      - pub fn render(&self, area: Rect, buf: &mut Buffer)
+        - Layout: 3 sparklines in a horizontal row (33% each)
+        - CPU sparkline: Palette::HEALTHY color, label "CPU %"
+        - RAM sparkline: Palette::NEON_BLUE color, label "RAM"
+        - Network sparkline: Palette::XP_PURPLE color, label "NET"
+
+      File: crates/aether-render/src/tui/widgets/mod.rs — pub mod sparklines;
+      Update overview.rs: integrate sparklines above process table using vertical Layout
+
+      COMMIT: feat(render): add CPU/RAM/Network sparkline widgets
+    test: "cargo check -p aether-render"
+    depends_on: [process-table]
+
+  - id: process-detail-panel
+    title: "Add process detail panel"
+    agent: rust-engineer
+    scope: render
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      When a process is selected in the table, a detail panel slides out on the right.
+      Shows full process info, connections, HP bar, and per-process sparklines.
+    prompt: |
+      Implement the process detail panel.
+
+      File: crates/aether-render/src/tui/overview.rs (modify)
+      - When process selected (Enter on a row):
+        - Split overview area horizontally: 60% table, 40% detail panel
+        - Detail panel shows:
+          - Process name and PID (title)
+          - Full info: ppid, state, cpu_percent, mem_bytes (formatted)
+          - HP bar: colored gauge using palette::color_for_hp
+          - XP display
+          - Open connections list from WorldGraph edges
+      - Press Esc to close detail panel (deselect)
+      - Detail panel has Palette::BG background with bordered Block
+
+      COMMIT: feat(render): add process detail panel
+    test: "cargo check -p aether-render"
+    depends_on: [sparkline-widgets]
