@@ -1,4 +1,4 @@
-//! Cranelift IR generation from typed AST.
+//! Cranelift IR generation and JIT compilation from typed AST.
 //!
 //! Each rule compiles to a native function with signature:
 //! `fn(*const WorldStateFFI, u32) -> (matched, action_type, target_pid, severity)`.
@@ -11,7 +11,10 @@ use cranelift_codegen::ir::{
 use cranelift_codegen::isa::CallConv;
 use cranelift_codegen::settings;
 use cranelift_codegen::verify_function;
+use cranelift_codegen::Context;
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
+use cranelift_jit::{JITBuilder, JITModule};
+use cranelift_module::Module;
 
 use crate::ast::{Action, CompareOp, Expr, Field, Rule, Value};
 use crate::error::ScriptError;
@@ -78,8 +81,15 @@ impl CodeGenerator {
             builder.seal_block(entry);
 
             let state_ptr = builder.block_params(entry)[0];
+            let result_ptr = builder.block_params(entry)[1];
             let matched = emit_condition(&mut builder, state_ptr, &rule.when_clause)?;
-            emit_return(&mut builder, state_ptr, matched, &rule.then_clause);
+            emit_return(
+                &mut builder,
+                state_ptr,
+                result_ptr,
+                matched,
+                &rule.then_clause,
+            );
             builder.finalize();
         }
 
@@ -88,22 +98,110 @@ impl CodeGenerator {
     }
 }
 
-/// Build the function signature: `fn(i64, i32) -> i32, i32, i32, i32`.
+/// Type alias for the compiled rule function signature.
+///
+/// Arguments: `(*const WorldStateFFI, *mut RuleResult)`.
+/// The function writes its results into the RuleResult pointer. No return value.
+type RuleFn = unsafe extern "C" fn(*const WorldStateFFI, *mut RuleResult);
+
+/// A rule compiled to native machine code.
+pub struct CompiledRule {
+    /// Rule name from the DSL source.
+    pub name: String,
+    /// Native function pointer. Valid as long as the owning `JitCompiler` is alive.
+    func_ptr: *const u8,
+}
+
+impl CompiledRule {
+    /// Call the compiled rule against a process state.
+    ///
+    /// # Safety
+    /// - `state` must point to a valid `WorldStateFFI` for the duration of the call.
+    /// - The `JitCompiler` that produced this rule must still be alive (owns the code memory).
+    pub unsafe fn call(&self, state: *const WorldStateFFI) -> RuleResult {
+        // SAFETY: func_ptr was produced by JITModule::get_finalized_function,
+        // which returns a valid function pointer matching our RuleFn signature.
+        // The caller guarantees state is a valid pointer and the JIT module is alive.
+        let func: RuleFn = unsafe { std::mem::transmute(self.func_ptr) };
+        let mut result = RuleResult {
+            matched: 0,
+            action_type: 0,
+            target_pid: 0,
+            severity: 0,
+        };
+        unsafe { func(state, &mut result) };
+        result
+    }
+}
+
+/// JIT compiler that materializes Cranelift IR into executable machine code.
+///
+/// Owns the JIT memory — compiled rules are valid only while this struct lives.
+pub struct JitCompiler {
+    module: JITModule,
+}
+
+impl JitCompiler {
+    /// Create a new JIT compiler for the host platform.
+    pub fn new() -> Result<Self, ScriptError> {
+        let builder = JITBuilder::new(cranelift_module::default_libcall_names())
+            .map_err(|e| ScriptError::Compile(e.to_string()))?;
+        let module = JITModule::new(builder);
+        Ok(Self { module })
+    }
+
+    /// Compile a Cranelift IR function to native code, returning the function pointer.
+    pub fn compile(&mut self, func: Function) -> Result<*const u8, ScriptError> {
+        let func_id = self
+            .module
+            .declare_anonymous_function(&func.signature)
+            .map_err(|e| ScriptError::Compile(e.to_string()))?;
+
+        let mut ctx = Context::for_function(func);
+        self.module
+            .define_function(func_id, &mut ctx)
+            .map_err(|e| ScriptError::Compile(e.to_string()))?;
+
+        self.module
+            .finalize_definitions()
+            .map_err(|e| ScriptError::Compile(format!("JIT finalization failed: {e}")))?;
+
+        let code_ptr = self.module.get_finalized_function(func_id);
+        Ok(code_ptr)
+    }
+
+    /// Compile a rule AST end-to-end: generate IR, then JIT compile to native code.
+    pub fn compile_rule(
+        &mut self,
+        codegen: &mut CodeGenerator,
+        rule: &Rule,
+    ) -> Result<CompiledRule, ScriptError> {
+        let func = codegen.generate_rule(rule)?;
+        let func_ptr = self.compile(func)?;
+        Ok(CompiledRule {
+            name: rule.name.clone(),
+            func_ptr,
+        })
+    }
+}
+
+/// Build the function signature: `fn(*const WorldStateFFI, *mut RuleResult)`.
+///
+/// Uses struct-return via output pointer to avoid multi-value return limitations.
 fn build_rule_signature() -> Signature {
     let mut sig = Signature::new(CallConv::SystemV);
     sig.params.push(AbiParam::new(types::I64)); // *const WorldStateFFI
-    sig.params.push(AbiParam::new(types::I32)); // process index
-    sig.returns.push(AbiParam::new(types::I32)); // matched
-    sig.returns.push(AbiParam::new(types::I32)); // action_type
-    sig.returns.push(AbiParam::new(types::I32)); // target_pid
-    sig.returns.push(AbiParam::new(types::I32)); // severity
+    sig.params.push(AbiParam::new(types::I64)); // *mut RuleResult (output)
     sig
 }
 
-/// Emit the return sequence: load pid, select on matched, return 4 values.
+/// Emit the return sequence: write matched/action/pid/severity to result pointer.
+///
+/// RuleResult layout: `{ matched: u32, action_type: u32, target_pid: u32, severity: u32 }`.
 fn emit_return(
     builder: &mut FunctionBuilder,
     state_ptr: cranelift_codegen::ir::Value,
+    result_ptr: cranelift_codegen::ir::Value,
     matched: cranelift_codegen::ir::Value,
     action: &Action,
 ) {
@@ -116,9 +214,14 @@ fn emit_return(
     let final_action = builder.ins().select(matched, action_val, zero);
     let final_pid = builder.ins().select(matched, pid, zero);
     let final_sev = builder.ins().select(matched, severity_val, zero);
-    builder
-        .ins()
-        .return_(&[matched_i32, final_action, final_pid, final_sev]);
+
+    let flags = MemFlags::new();
+    builder.ins().store(flags, matched_i32, result_ptr, 0i32); // offset 0: matched
+    builder.ins().store(flags, final_action, result_ptr, 4i32); // offset 4: action_type
+    builder.ins().store(flags, final_pid, result_ptr, 8i32); // offset 8: target_pid
+    builder.ins().store(flags, final_sev, result_ptr, 12i32); // offset 12: severity
+
+    builder.ins().return_(&[]);
 }
 
 /// Emit integer constants for the action type and severity.
@@ -257,6 +360,10 @@ mod tests {
         let ir = func.to_string();
         assert!(ir.contains("f32const"), "should load f32 constant");
         assert!(ir.contains("fcmp"), "should have float comparison");
+        assert!(
+            ir.contains("store"),
+            "should store results to output pointer"
+        );
         assert!(ir.contains("return"), "should have return instruction");
     }
 
