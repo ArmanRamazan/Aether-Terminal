@@ -1,0 +1,201 @@
+phase: "ms9-web-backend"
+description: "Web UI backend: aether-web crate, axum server, REST API, WebSocket"
+
+tasks:
+  - id: web-crate-init
+    title: "Initialize aether-web crate with axum server"
+    agent: rust-engineer
+    scope: web
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+      Key rules: thiserror for crate errors, pub(crate) by default, no .unwrap() in production,
+      test names = test_<what>_<expectation>, doc-comments on all pub items, functions ≤50 lines.
+
+      EXISTING CODE:
+      - 9-crate cargo workspace (hexagonal architecture)
+      - aether-mcp/transport/sse.rs: already uses axum for SSE transport (port 3000)
+      - aether-core/models.rs: ProcessNode, NetworkEdge, SystemSnapshot, ProcessState
+      - aether-core/graph.rs: WorldGraph with processes(), edges(), find_by_pid()
+      - aether-core/arbiter.rs: ArbiterQueue with pending actions
+      - aether-terminal/main.rs: Cli struct uses clap derive, spawns tokio tasks
+
+      NEW CRATE: aether-web — serves Web UI alongside TUI via --web [PORT] flag.
+      Depends only on aether-core (hexagonal rule).
+    prompt: |
+      Initialize aether-web crate.
+
+      File: crates/aether-web/Cargo.toml
+      - Dependencies: aether-core (path), axum (features: ws), axum-extra, tower-http (features: cors, fs),
+        tokio, serde, serde_json, thiserror, tracing, rust-embed
+
+      File: crates/aether-web/CLAUDE.md
+      - Crate context: Web UI backend serving React SPA + REST API + WebSocket
+
+      File: crates/aether-web/src/error.rs
+      - WebError enum: Server(String), Serialization(String), WebSocket(String)
+
+      File: crates/aether-web/src/state.rs
+      - SharedState struct: world: Arc<RwLock<WorldGraph>>, arbiter: Arc<Mutex<ArbiterQueue>>
+      - impl Clone for SharedState (all Arc, cheap clone)
+
+      File: crates/aether-web/src/server.rs
+      - WebServer struct with config (port, static_dir Option<PathBuf>)
+      - pub async fn serve(state: SharedState, port: u16, cancel: CancellationToken)
+        - Build axum Router with state
+        - For now: GET / returns "Aether Web UI" placeholder text
+        - Bind to 0.0.0.0:port, serve with graceful shutdown on cancel
+      - pub fn router(state: SharedState) -> Router
+
+      File: crates/aether-web/src/lib.rs
+      - pub mod error, state, server
+
+      Update root Cargo.toml: add aether-web to workspace members.
+      Update crates/aether-terminal/Cargo.toml: add aether-web dependency.
+
+      Tests:
+      - test_server_router_builds — create router, verify no panic
+      - test_shared_state_clone — verify Clone works
+
+      COMMIT: feat(web): initialize aether-web crate with axum server
+    test: "cargo check -p aether-web"
+    depends_on: []
+
+  - id: rest-api
+    title: "Implement REST API endpoints"
+    agent: rust-engineer
+    scope: web
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+
+      EXISTING CODE (from web-crate-init):
+      - server.rs: WebServer with axum Router, SharedState
+      - state.rs: SharedState { world: Arc<RwLock<WorldGraph>>, arbiter: Arc<Mutex<ArbiterQueue>> }
+      - aether-core/graph.rs: WorldGraph — processes() -> impl Iterator<Item = &ProcessNode>,
+        edges() -> impl Iterator, find_by_pid(u32), process_count(), edge_count()
+      - aether-core/models.rs: ProcessNode { pid, ppid, name, cpu_percent, mem_bytes, state, hp, xp, position_3d },
+        NetworkEdge { source_pid, dest_pid(?), protocol, bytes_per_sec }, ProcessState enum
+      - aether-core/arbiter.rs: ArbiterQueue with pending_actions(), approve(), deny()
+    prompt: |
+      Implement REST API.
+
+      File: crates/aether-web/src/api.rs
+      - All handlers take axum State<SharedState>
+      - All responses are JSON (axum::Json)
+
+      Endpoints:
+      - GET /api/processes → JSON array of all processes
+        - Read WorldGraph, serialize each ProcessNode
+        - Include: pid, ppid, name, cpu_percent, mem_bytes, state (as string), hp, xp, position (as [f64;3])
+      - GET /api/processes/:pid → single process + its connections
+        - 404 if not found
+      - GET /api/connections → JSON array of all edges
+        - Include: from_pid, to_pid, protocol (as string), bytes_per_sec
+      - GET /api/stats → system stats aggregate
+        - process_count, total_cpu (sum), total_memory (sum), avg_hp
+      - GET /api/arbiter/pending → pending arbiter actions as JSON
+      - POST /api/arbiter/:id/approve → approve action, return 200/404
+      - POST /api/arbiter/:id/deny → deny action, return 200/404
+
+      Define response structs with Serialize:
+      - ProcessResponse, ConnectionResponse, StatsResponse, ArbiterActionResponse
+
+      Update server.rs: add all routes to router.
+
+      File: crates/aether-web/src/lib.rs
+      - Add pub mod api;
+
+      Tests:
+      - test_processes_endpoint_returns_json — use axum test client (tower::ServiceExt)
+      - test_process_by_pid_found
+      - test_process_by_pid_not_found_returns_404
+      - test_stats_endpoint_returns_aggregates
+      - test_connections_endpoint_returns_array
+
+      COMMIT: feat(web): implement REST API for processes, connections, stats, arbiter
+    test: "cargo test -p aether-web"
+    depends_on: [web-crate-init]
+
+  - id: websocket-handler
+    title: "Implement WebSocket real-time push"
+    agent: rust-engineer
+    scope: web
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+
+      EXISTING CODE (from rest-api):
+      - server.rs: axum Router with REST routes, SharedState
+      - api.rs: ProcessResponse, ConnectionResponse, StatsResponse (Serialize structs)
+      - state.rs: SharedState with Arc<RwLock<WorldGraph>>
+      - axum has WebSocket support via axum::extract::ws
+
+      WebSocket protocol:
+      - Server pushes WorldUpdate every 500ms with all processes, connections, stats
+      - Client can send: select_process (pid), arbiter_action (approve/deny)
+    prompt: |
+      Implement WebSocket handler.
+
+      File: crates/aether-web/src/ws.rs
+      - WebSocket upgrade handler: GET /ws → axum WebSocket
+      - pub async fn ws_handler(ws: WebSocketUpgrade, State(state): State<SharedState>) -> impl IntoResponse
+      - async fn handle_socket(mut socket: WebSocket, state: SharedState)
+        - Spawn two tasks:
+          1. Push loop: every 500ms, read WorldGraph → serialize to WorldUpdate JSON → send as Text message
+          2. Receive loop: read client messages, parse JSON, handle actions
+        - Use tokio::select! with both tasks, exit when socket closes
+      - WorldUpdate struct (Serialize):
+        - type_: "world_state"
+        - processes: Vec<ProcessResponse>
+        - connections: Vec<ConnectionResponse>
+        - stats: StatsResponse
+        - timestamp: u64 (millis since epoch)
+      - ClientMessage enum (Deserialize):
+        - SelectProcess { pid: u32 }
+        - ArbiterAction { action: String, action_id: String }
+      - Handle ClientMessage::ArbiterAction → call arbiter.approve()/deny()
+
+      Update server.rs: add /ws route.
+      Update lib.rs: add pub mod ws;
+
+      Tests:
+      - test_ws_upgrade_succeeds — connect to /ws, verify upgrade response
+      - test_world_update_serializes — verify WorldUpdate JSON structure
+
+      COMMIT: feat(web): implement WebSocket real-time push for world state
+    test: "cargo test -p aether-web"
+    depends_on: [rest-api]
+
+  - id: web-main-wire
+    title: "Wire aether-web into main.rs with --web flag"
+    agent: rust-engineer
+    scope: terminal
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+
+      EXISTING CODE:
+      - main.rs: Cli struct (clap derive) with --log-level, --mcp-stdio, --mcp-sse, --no-3d, --no-game,
+        --theme, --rules, --predict, --model-path, --ebpf
+      - main.rs spawns: IngestionPipeline task, WorldGraph updater, Arbiter executor, Action forwarder,
+        optional MCP, optional PredictEngine, optional ScriptEngine
+      - main.rs creates: Arc<RwLock<WorldGraph>>, Arc<Mutex<ArbiterQueue>>
+      - aether-web: WebServer::serve(state, port, cancel), SharedState { world, arbiter }
+    prompt: |
+      Add --web flag and wire aether-web.
+
+      File: crates/aether-terminal/src/main.rs (modify)
+      - Add to Cli struct:
+        - web: Option<Option<u16>> — --web [PORT], None = not set, Some(None) = default 8080, Some(Some(port)) = custom
+        - Use clap: #[arg(long, num_args = 0..=1, default_missing_value = "8080")]
+      - In main(), after creating world graph and arbiter:
+        - If cli.web is Some:
+          - Create SharedState from existing Arc<RwLock<WorldGraph>> and Arc<Mutex<ArbiterQueue>>
+          - Determine port (default 8080)
+          - Spawn WebServer::serve(state, port, cancel.child_token()) as tokio task
+          - Log: "Web UI available at http://localhost:{port}"
+
+      COMMIT: feat(terminal): wire web UI server with --web flag
+    test: "cargo run -p aether-terminal -- --help"
+    depends_on: [websocket-handler]

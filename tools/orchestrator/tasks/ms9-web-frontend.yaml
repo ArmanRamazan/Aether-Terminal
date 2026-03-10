@@ -1,0 +1,232 @@
+phase: "ms9-web-frontend"
+description: "Web UI frontend: React/TypeScript SPA with 3D graph, process table, dashboard"
+
+tasks:
+  - id: frontend-scaffold
+    title: "Scaffold React/TypeScript frontend with Vite"
+    agent: rust-engineer
+    scope: web
+    type: feat
+    context: |
+      CRITICAL: This task creates a React/TypeScript frontend inside the Rust workspace.
+      The frontend lives in crates/aether-web/frontend/.
+
+      EXISTING CODE (from ms9-web-backend):
+      - aether-web crate with axum server on --web [PORT]
+      - REST API: /api/processes, /api/connections, /api/stats, /api/arbiter/*
+      - WebSocket: /ws pushes WorldUpdate every 500ms
+      - WebServer serves static files from embedded assets or filesystem
+
+      Frontend will be built with Vite and embedded into the Rust binary via rust-embed.
+    prompt: |
+      Create React frontend scaffold.
+
+      Directory: crates/aether-web/frontend/
+
+      File: package.json
+      - name: "aether-web-ui"
+      - scripts: dev, build, preview
+      - dependencies: react, react-dom, react-router-dom, zustand, recharts,
+        @react-three/fiber, @react-three/drei, @react-three/postprocessing, three
+      - devDependencies: typescript, @types/react, @types/react-dom, @types/three,
+        vite, @vitejs/plugin-react
+
+      File: vite.config.ts
+      - React plugin
+      - Server proxy: /api → http://localhost:8080, /ws → ws://localhost:8080
+      - Build output: dist/
+
+      File: tsconfig.json — strict mode, JSX react-jsx
+
+      File: index.html — minimal HTML with <div id="root">
+
+      File: src/main.tsx — ReactDOM.createRoot, render <App />
+
+      File: src/App.tsx
+      - React Router with routes: / (Overview), /graph (3D), /network, /arbiter
+      - Wrap in Layout component
+      - Initialize WebSocket connection on mount
+
+      File: src/types/index.ts
+      - TypeScript interfaces matching Rust API:
+        Process { pid, ppid, name, cpu_percent, mem_bytes, state, hp, xp, position: [number,number,number] }
+        Connection { from_pid, to_pid, protocol, bytes_per_sec }
+        SystemStats { process_count, total_cpu_percent, total_memory_bytes, total_memory_used, uptime_seconds }
+        WorldUpdate { type: string, processes: Process[], connections: Connection[], stats: SystemStats, timestamp: number }
+
+      File: src/hooks/useWorldState.ts
+      - WebSocket hook: connects to ws://host/ws
+      - On message: parse WorldUpdate, update zustand store
+      - Auto-reconnect on disconnect (1s delay)
+
+      File: src/stores/worldStore.ts
+      - Zustand store: processes, connections, stats, selectedPid, lastUpdate
+      - Actions: setWorldState(), selectProcess(), clearSelection()
+
+      File: src/components/Layout.tsx
+      - Sidebar (left): nav links with icons for Overview, 3D Graph, Network, Arbiter
+      - Top bar: StatsBar component
+      - Main area: <Outlet /> for page content
+      - Dark theme (bg: #0a0a0f, text: #e0e0e0)
+
+      File: src/components/StatsBar.tsx
+      - Horizontal bar: CPU %, Memory usage, Process count, Uptime
+      - Color-coded: green < 50%, yellow < 80%, red > 80%
+      - Updates from zustand store
+
+      Run: cd crates/aether-web/frontend && npm install
+
+      COMMIT: feat(web): scaffold React/TypeScript frontend with Vite
+    test: "cd crates/aether-web/frontend && npm run build"
+    depends_on: []
+
+  - id: process-table
+    title: "Implement process table page with sorting and detail panel"
+    agent: rust-engineer
+    scope: web
+    type: feat
+    context: |
+      EXISTING CODE (from frontend-scaffold):
+      - src/stores/worldStore.ts: zustand store with processes[], selectedPid
+      - src/types/index.ts: Process interface
+      - src/components/Layout.tsx: page layout with sidebar + main area
+      - Data arrives via WebSocket every 500ms
+
+      Overview page = main dashboard with interactive process table.
+    prompt: |
+      Implement Overview page with process table.
+
+      File: src/pages/OverviewPage.tsx
+      - Split layout: process table (left 70%) + detail panel (right 30%)
+      - If no process selected, detail panel shows system-wide sparklines
+
+      File: src/components/ProcessTable.tsx
+      - Columns: PID, Name, CPU%, Memory, State, HP, XP
+      - Click header to sort (asc/desc toggle)
+      - Search/filter input at top
+      - Click row to select process → updates selectedPid in store
+      - Row coloring: HP-based (green→red gradient on HP column)
+      - State badges: Running (green), Sleeping (grey), Zombie (red), Stopped (yellow)
+      - CPU and Memory columns: mini inline bar chart
+      - Style: dark theme table, hover highlight, selected row accent border
+
+      File: src/components/ProcessDetail.tsx
+      - Shown when a process is selected
+      - Large process name + PID header
+      - Stats grid: CPU, Memory, HP, XP, State, PPID
+      - Sparkline charts: CPU over time, Memory over time (from last 60 WebSocket updates)
+      - Connections list: other processes this one connects to
+      - Close button (X) or click outside to deselect
+
+      File: src/components/SparklineChart.tsx
+      - recharts AreaChart, small (200x60px)
+      - Props: data (number[]), color, label
+      - Gradient fill under line
+      - No axes labels (mini chart)
+
+      COMMIT: feat(web): implement process table with sorting and detail panel
+    test: "cd crates/aether-web/frontend && npm run build"
+    depends_on: [frontend-scaffold]
+
+  - id: graph-3d
+    title: "Implement 3D process graph with react-three-fiber"
+    agent: rust-engineer
+    scope: web
+    type: feat
+    context: |
+      EXISTING CODE (from process-table):
+      - src/stores/worldStore.ts: zustand store with processes[], connections[]
+      - src/types/index.ts: Process with position: [number,number,number], Connection
+      - Processes have: pid, name, cpu_percent, mem_bytes, hp, xp, state, position
+
+      3D Graph is the flagship visualization:
+      - Nodes = processes (spheres)
+      - Edges = connections (lines between nodes)
+      - Camera: orbit controls (mouse drag, scroll zoom)
+      - Effects: bloom glow, billboard labels
+    prompt: |
+      Implement 3D graph page.
+
+      File: src/pages/Graph3DPage.tsx
+      - Full page Canvas from @react-three/fiber
+      - Overlay UI: selected process info (top-right), legend (bottom-left)
+      - Controls info text: "Drag: rotate, Scroll: zoom, Right-drag: pan"
+
+      File: src/components/Graph3D.tsx
+      - <Canvas> with camera, lights, controls, effects, nodes, edges
+      - OrbitControls from @react-three/drei (enableDamping, dampingFactor 0.05)
+      - Lights: ambientLight (0.4), pointLight at (10,10,10), pointLight at (-10,-5,-10)
+      - Background: dark gradient or color #0a0a1a
+      - Stars from @react-three/drei as background decoration
+      - Grid helper: subtle grid at y=0 for spatial reference
+      - Map processes → <ProcessNode> components
+      - Map connections → <ConnectionEdge> components
+      - EffectComposer + Bloom (intensity 0.5, luminanceThreshold 0.6)
+
+      File: src/components/ProcessNode.tsx
+      - Props: process (Process), selected (boolean), onClick
+      - Sphere geometry:
+        - radius: map mem_bytes to 0.3-2.0 range (log scale)
+        - color: HP gradient — hp>70 green, hp>40 yellow, hp<=40 red
+          - Use HSL: hue = hp/100 * 120 (0=red, 120=green)
+      - MeshStandardMaterial with emissive for glow:
+        - emissiveIntensity = cpu_percent / 100 (brighter = more CPU)
+      - Pulsation: useFrame(() => { scale = 1 + sin(time * cpu/50) * 0.1 })
+      - Billboard text label (drei <Text>): process name, white, small font
+        - Position slightly above sphere
+      - onClick: select this process
+      - Hover: pointer cursor, slight scale up (1.1x)
+      - Selected: white outline ring (drei <Ring> or wireframe sphere)
+
+      File: src/components/ConnectionEdge.tsx
+      - Props: from (position), to (position), connection (Connection)
+      - Line from start to end (drei <Line>)
+      - Color by protocol: TCP=#4488ff, UDP=#44ff88, HTTP=#44ffff, default=#888888
+      - lineWidth: map bytes_per_sec to 1-5 range
+      - Opacity: 0.6 (semi-transparent to not clutter)
+
+      COMMIT: feat(web): implement 3D process graph with react-three-fiber
+    test: "cd crates/aether-web/frontend && npm run build"
+    depends_on: [process-table]
+
+  - id: network-arbiter-pages
+    title: "Implement Network and Arbiter pages"
+    agent: rust-engineer
+    scope: web
+    type: feat
+    context: |
+      EXISTING CODE (from graph-3d):
+      - All previous pages: OverviewPage, Graph3DPage
+      - src/stores/worldStore.ts: processes, connections, stats
+      - src/types/index.ts: Connection, Process
+      - REST API: /api/arbiter/pending, POST /api/arbiter/:id/approve|deny
+    prompt: |
+      Implement remaining pages.
+
+      File: src/pages/NetworkPage.tsx
+      - Connection table: From (process name), To (process name), Protocol, Bandwidth
+      - Sort by bandwidth (descending default)
+      - Protocol filter buttons: All, TCP, UDP, HTTP
+      - Click row: highlight both processes
+
+      File: src/components/NetworkTable.tsx
+      - Columns: Source (name + pid), Destination (name + pid), Protocol (badge), Bytes/sec (formatted)
+      - Bandwidth formatting: "1.2 MB/s", "340 KB/s", "12 B/s"
+      - Protocol badges: colored labels (TCP=blue, UDP=green, HTTP=cyan)
+
+      File: src/pages/ArbiterPage.tsx
+      - List of pending arbiter actions
+      - Each action: type (Kill/Renice/Suspend/Resume), target process, status
+      - Approve (green button) and Deny (red button)
+      - On click: POST to /api/arbiter/:id/approve or /deny
+      - Empty state: "No pending actions" message
+
+      File: src/components/ArbiterQueue.tsx
+      - Card-style layout for each action
+      - Action type icon/badge
+      - Target process name + PID
+      - Approve/Deny buttons with confirmation
+
+      COMMIT: feat(web): implement Network and Arbiter pages
+    test: "cd crates/aether-web/frontend && npm run build"
+    depends_on: [graph-3d]

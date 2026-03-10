@@ -1,0 +1,88 @@
+phase: "ms9-web-embed"
+description: "Embed frontend into Rust binary via rust-embed, production build"
+
+tasks:
+  - id: rust-embed-setup
+    title: "Embed built frontend assets into Rust binary"
+    agent: rust-engineer
+    scope: web
+    type: feat
+    context: |
+      CRITICAL: Follow Architecture Principles and Rust Best Practices from root CLAUDE.md strictly.
+
+      EXISTING CODE (from ms9-web-backend + ms9-web-frontend):
+      - aether-web/server.rs: WebServer with axum Router serving REST + WS
+      - aether-web/frontend/: React app, npm run build outputs to frontend/dist/
+      - rust-embed is already in Cargo.toml dependencies
+      - Currently server serves placeholder text at GET /
+
+      Goal: Embed frontend/dist/* into Rust binary so `cargo build --release` produces
+      a single executable that serves the entire Web UI without external files.
+    prompt: |
+      Set up rust-embed to serve frontend from binary.
+
+      File: crates/aether-web/src/embedded.rs
+      - Use rust-embed derive macro:
+        #[derive(rust_embed::RustEmbed)]
+        #[folder = "frontend/dist"]
+        struct FrontendAssets;
+      - pub async fn static_handler(uri: axum::http::Uri) -> impl IntoResponse
+        - Extract path from URI (strip leading /)
+        - Look up in FrontendAssets::get(path)
+        - If found: return with correct Content-Type (html, js, css, wasm, svg, png, ico)
+        - If not found: serve index.html (SPA fallback for client-side routing)
+        - Content-Type detection: match on file extension
+      - Helper: fn content_type(path: &str) -> &str
+
+      File: crates/aether-web/src/server.rs (modify)
+      - Replace placeholder GET / with static_handler as fallback route
+      - Route order: /api/* first, /ws second, /* fallback to static_handler
+      - Add CORS middleware from tower-http (allow localhost origins for dev)
+
+      File: crates/aether-web/build.rs (create)
+      - Check if frontend/dist/ exists
+      - If not: print cargo:warning about running npm build first
+      - Don't fail build — allow development without frontend built
+      - Touch a sentinel file so cargo rebuilds when dist/ changes
+
+      Update lib.rs: add pub mod embedded;
+
+      Tests:
+      - test_static_handler_serves_index_html — if dist exists
+      - test_spa_fallback_returns_index — request /graph returns index.html
+      - test_content_type_js — verify .js → application/javascript
+      - test_content_type_css — verify .css → text/css
+
+      COMMIT: feat(web): embed frontend assets into Rust binary via rust-embed
+    test: "cargo check -p aether-web"
+    depends_on: []
+
+  - id: web-polish
+    title: "Auto-open browser and final integration test"
+    agent: rust-engineer
+    scope: terminal
+    type: feat
+    context: |
+      EXISTING CODE:
+      - main.rs: spawns WebServer when --web flag set, logs URL
+      - aether-web: full REST + WS + embedded frontend
+      - All pages: Overview, 3D Graph, Network, Arbiter
+
+      Final polish: auto-open browser, verify full flow.
+    prompt: |
+      Polish web UI integration.
+
+      File: crates/aether-terminal/src/main.rs (modify)
+      - After spawning web server, auto-open browser:
+        - Use open::that(format!("http://localhost:{port}")) — add `open` crate to Cargo.toml
+        - Only open if stdout is a terminal (not in CI/headless)
+        - Log info: "Opening browser at http://localhost:{port}"
+        - Don't fail if browser can't open (just log warning)
+
+      File: crates/aether-web/src/server.rs (modify)
+      - Add /api/health endpoint: returns { status: "ok", version: env!("CARGO_PKG_VERSION") }
+      - Log on startup: "Web UI server listening on http://0.0.0.0:{port}"
+
+      COMMIT: feat(terminal): auto-open browser on --web and add health endpoint
+    test: "cargo run -p aether-terminal -- --help"
+    depends_on: [rust-embed-setup]
