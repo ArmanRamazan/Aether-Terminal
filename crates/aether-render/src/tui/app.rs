@@ -9,6 +9,7 @@ use ratatui::Frame;
 
 use aether_core::WorldGraph;
 
+use crate::effects::StartupAnimation;
 use crate::RenderError;
 
 use super::arbiter::{ArbiterKeyResult, ArbiterTab};
@@ -79,6 +80,8 @@ pub struct App {
     input: InputHandler,
     /// Help overlay toggled with `?`.
     help: HelpOverlay,
+    /// Cinematic boot sequence played on launch.
+    startup: StartupAnimation,
 }
 
 impl App {
@@ -98,6 +101,7 @@ impl App {
             sparkline_tick: 0,
             input: InputHandler::default(),
             help: HelpOverlay::default(),
+            startup: StartupAnimation::new(),
         }
     }
 
@@ -112,7 +116,27 @@ impl App {
         /// Approximate frames per sparkline sample (~1 second at 60fps).
         const SPARKLINE_INTERVAL: u32 = 60;
 
+        let dt = self.tick_rate.as_secs_f32();
+
         while !self.should_quit {
+            // Advance startup animation if still playing.
+            if !self.startup.is_done() {
+                self.startup.update(dt);
+                terminal.draw(|frame| {
+                    let area = frame.area();
+                    let buf = frame.buffer_mut();
+                    self.startup.render(area, buf);
+                })?;
+
+                // During startup, any key skips the animation.
+                if event::poll(self.tick_rate)? {
+                    if let Event::Key(_) = event::read()? {
+                        while !self.startup.update(dt) {}
+                    }
+                }
+                continue;
+            }
+
             // Sample sparkline history approximately once per second.
             self.sparkline_tick += 1;
             if self.sparkline_tick >= SPARKLINE_INTERVAL {
