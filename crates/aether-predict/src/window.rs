@@ -72,8 +72,7 @@ impl SlidingWindow {
 
     /// Removes windows for PIDs not present in `alive_pids`.
     pub fn cleanup(&mut self, alive_pids: &[u32]) {
-        self.windows
-            .retain(|pid, _| alive_pids.contains(pid));
+        self.windows.retain(|pid, _| alive_pids.contains(pid));
     }
 }
 

@@ -3,6 +3,7 @@
 //! Runs ONNX models via tract (pure-Rust) on sliding windows of process metrics.
 //! Feature-gated behind `predict` — compiles as no-op without it.
 
+pub mod engine;
 pub mod error;
 pub mod features;
 #[cfg(feature = "predict")]
