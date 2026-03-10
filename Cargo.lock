@@ -41,6 +41,7 @@ name = "aether-ingestion"
 version = "0.1.0"
 dependencies = [
  "aether-core",
+ "aether-ebpf",
  "glam",
  "sysinfo",
  "thiserror 2.0.18",
