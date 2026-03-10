@@ -27,12 +27,19 @@ pub struct RuleAction {
 ///
 /// Key is `(rule_name, pid)`, value is the instant when the condition first matched.
 /// Timer resets when the condition becomes false.
-struct DurationTracker {
+pub struct DurationTracker {
     timers: HashMap<(String, u32), Instant>,
 }
 
+impl Default for DurationTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DurationTracker {
-    fn new() -> Self {
+    /// Create an empty duration tracker.
+    pub fn new() -> Self {
         Self {
             timers: HashMap::new(),
         }
@@ -42,7 +49,7 @@ impl DurationTracker {
     ///
     /// Returns `true` if the condition has been continuously met for at least `required`.
     /// Starts or resets the timer based on `condition_met`.
-    fn check_duration(
+    pub fn check_duration(
         &mut self,
         rule_name: &str,
         pid: u32,
@@ -122,6 +129,48 @@ impl CompiledRuleSet {
                     condition_met,
                     *required,
                 ),
+                None => condition_met,
+            };
+
+            if should_fire {
+                actions.push(RuleAction {
+                    rule_name: rule.name.clone(),
+                    action: result.action_type,
+                    target_pid: result.target_pid,
+                    severity: result.severity,
+                });
+            }
+        }
+
+        actions
+    }
+
+    /// Evaluate rules using an external duration tracker.
+    ///
+    /// Same as [`evaluate`](Self::evaluate) but uses the provided tracker instead
+    /// of the internal one. Useful when the ruleset is shared (via `ArcSwap`) and
+    /// the caller owns the duration state.
+    ///
+    /// # Safety
+    /// `state` must point to a valid, initialized `WorldStateFFI`.
+    pub fn evaluate_with_tracker(
+        &self,
+        state: &WorldStateFFI,
+        tracker: &mut DurationTracker,
+    ) -> Vec<RuleAction> {
+        let state_ptr: *const WorldStateFFI = state;
+        let mut actions = Vec::new();
+
+        for (rule, duration) in &self.rules {
+            // SAFETY: state_ptr points to a valid WorldStateFFI (borrow above),
+            // and self._jit is alive so compiled function pointers are valid.
+            let result = unsafe { rule.call(state_ptr) };
+            let condition_met = result.matched != 0;
+
+            let should_fire = match duration {
+                Some(required) => {
+                    tracker.check_duration(&rule.name, state.pid, condition_met, *required)
+                }
                 None => condition_met,
             };
 
