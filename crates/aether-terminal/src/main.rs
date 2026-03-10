@@ -6,9 +6,10 @@ use tokio_util::sync::CancellationToken;
 
 use aether_core::events::SystemEvent;
 use aether_core::{AgentAction, WorldGraph};
-use aether_mcp::arbiter::ArbiterQueue;
+use aether_ingestion::ebpf_bridge::EbpfBridge;
 use aether_ingestion::pipeline::IngestionPipeline;
 use aether_ingestion::sysinfo_probe::SysinfoProbe;
+use aether_mcp::arbiter::ArbiterQueue;
 use aether_mcp::McpServer;
 use aether_render::tui::app::App;
 
@@ -83,8 +84,21 @@ async fn main() -> anyhow::Result<()> {
     let (event_tx, event_rx) = mpsc::channel::<SystemEvent>(256);
     let cancel = CancellationToken::new();
 
-    // Spawn ingestion pipeline
-    let mut pipeline = IngestionPipeline::new(probe, event_tx);
+    // Spawn ingestion pipeline (optionally with eBPF hybrid mode)
+    let mut pipeline = IngestionPipeline::new(probe, event_tx.clone());
+
+    if cli.ebpf {
+        match try_init_ebpf(&event_tx, &cancel).await {
+            Ok(bridge) => {
+                pipeline = pipeline.with_ebpf(bridge);
+                tracing::info!("eBPF telemetry enabled (hybrid mode)");
+            }
+            Err(e) => {
+                tracing::warn!("eBPF init failed: {e}, continuing with sysinfo-only");
+            }
+        }
+    }
+
     let pipeline_cancel = cancel.child_token();
     tokio::spawn(async move {
         if let Err(e) = pipeline.run(pipeline_cancel).await {
@@ -241,4 +255,74 @@ fn execute_action(action: &AgentAction) {
             tracing::info!("custom script '{command}' requested (not yet implemented)");
         }
     }
+}
+
+/// Attempt to initialize eBPF telemetry: load BPF programs, create ring buffer
+/// reader, and return an EbpfBridge for the ingestion pipeline.
+#[cfg(all(target_os = "linux", feature = "ebpf"))]
+async fn try_init_ebpf(
+    event_tx: &mpsc::Sender<SystemEvent>,
+    cancel: &CancellationToken,
+) -> anyhow::Result<EbpfBridge> {
+    use aether_ebpf::events::RawKernelEvent;
+    use aether_ebpf::ring_buffer::RingBufferReader;
+    use aether_ebpf::ProbeManager;
+
+    // BPF bytecodes compiled from bpf/*.bpf.c — expected alongside the binary or
+    // at a well-known path. The build step produces these ELF objects.
+    let exe_dir = std::env::current_exe()?
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let bpf_dir = exe_dir.join("bpf");
+
+    let process_bytes = std::fs::read(bpf_dir.join("process_monitor.o"))?;
+    let net_bytes = std::fs::read(bpf_dir.join("net_monitor.o"))?;
+    let syscall_bytes = std::fs::read(bpf_dir.join("syscall_monitor.o"))?;
+
+    let mut manager =
+        ProbeManager::attach_all(&process_bytes, &net_bytes, &syscall_bytes).await?;
+
+    let process_prog = manager
+        .process_mut()
+        .ok_or_else(|| anyhow::anyhow!("process monitor program not loaded"))?;
+    let mut reader = RingBufferReader::new(process_prog.bpf_mut())?;
+
+    let (raw_tx, raw_rx) = mpsc::channel::<RawKernelEvent>(256);
+    let bridge = EbpfBridge::new(raw_rx, event_tx.clone());
+
+    let reader_cancel = cancel.child_token();
+    tokio::spawn(async move {
+        let _manager = manager; // keep BPF programs attached
+        loop {
+            tokio::select! {
+                _ = reader_cancel.cancelled() => break,
+                result = reader.poll() => {
+                    match result {
+                        Ok(events) => {
+                            for event in events {
+                                if raw_tx.send(event).await.is_err() {
+                                    return;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!("ring buffer poll error: {e}");
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    Ok(bridge)
+}
+
+#[cfg(not(all(target_os = "linux", feature = "ebpf")))]
+async fn try_init_ebpf(
+    _event_tx: &mpsc::Sender<SystemEvent>,
+    _cancel: &CancellationToken,
+) -> anyhow::Result<EbpfBridge> {
+    anyhow::bail!("eBPF requires Linux with the 'ebpf' feature enabled")
 }
