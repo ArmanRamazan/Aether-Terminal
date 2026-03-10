@@ -344,6 +344,7 @@ mod tests {
                 op: CompareOp::Gt,
                 value: Value::Float(90.0),
             },
+            duration: None,
             then_clause: Action::Alert {
                 severity: Severity::Warning,
             },
@@ -382,6 +383,7 @@ mod tests {
     fn test_generate_ir_compound_conditions() {
         let rule = Rule {
             name: "compound".to_string(),
+            duration: None,
             when_clause: Expr::And(
                 Box::new(Expr::Comparison {
                     field: Field::CpuPercent,

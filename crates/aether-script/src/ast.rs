@@ -5,11 +5,13 @@
 use cranelift_codegen::ir::types;
 use cranelift_codegen::ir::Type;
 
-/// A single rule definition: `rule <name> { when <expr> then <action> }`.
+/// A single rule definition: `rule <name> { when <expr> [for <duration>] then <action> }`.
 #[derive(Debug, Clone)]
 pub struct Rule {
     pub name: String,
     pub when_clause: Expr,
+    /// Condition must hold continuously for this duration before firing.
+    pub duration: Option<std::time::Duration>,
     pub then_clause: Action,
 }
 
