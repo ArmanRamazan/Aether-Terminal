@@ -102,6 +102,7 @@ dependencies = [
  "cranelift-frontend",
  "cranelift-jit",
  "cranelift-module",
+ "glam",
  "logos",
  "notify",
  "thiserror 2.0.18",
