@@ -1,5 +1,6 @@
 //! TUI application struct and main event loop.
 
+use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -10,6 +11,7 @@ use ratatui::Frame;
 use aether_core::WorldGraph;
 
 use crate::effects::StartupAnimation;
+use crate::PredictionDisplay;
 use crate::RenderError;
 
 use super::arbiter::{ArbiterKeyResult, ArbiterTab};
@@ -94,6 +96,8 @@ pub struct App {
     help: HelpOverlay,
     /// Cinematic boot sequence played on launch.
     startup: StartupAnimation,
+    /// Active anomaly predictions for visualization.
+    predictions: Vec<PredictionDisplay>,
 }
 
 impl App {
@@ -115,7 +119,13 @@ impl App {
             input: InputHandler::default(),
             help: HelpOverlay::default(),
             startup: StartupAnimation::new(),
+            predictions: Vec::new(),
         }
+    }
+
+    /// Replace the current predictions for visualization.
+    pub fn set_predictions(&mut self, predictions: Vec<PredictionDisplay>) {
+        self.predictions = predictions;
     }
 
     /// Run the main event loop until the user quits.
@@ -388,13 +398,16 @@ impl App {
 
                     let buf = frame.buffer_mut();
                     self.sparklines.render(chunks[0], buf);
-                    self.overview.render(chunks[1], buf, &world);
+                    self.overview
+                        .render(chunks[1], buf, &world, &self.predictions);
                 }
             }
             Tab::World3D => {
                 if let Ok(world) = self.world.read() {
+                    let predicted_pids: HashSet<u32> =
+                        self.predictions.iter().map(|p| p.pid).collect();
                     let buf = frame.buffer_mut();
-                    self.world3d.render(area, buf, &world);
+                    self.world3d.render(area, buf, &world, &predicted_pids);
                 }
             }
             Tab::Network => {
