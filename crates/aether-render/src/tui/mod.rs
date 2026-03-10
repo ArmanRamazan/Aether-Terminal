@@ -6,6 +6,7 @@ pub(crate) mod help;
 pub(crate) mod input;
 pub(crate) mod network;
 pub(crate) mod overview;
+pub mod rules;
 pub(crate) mod tabs;
 pub(crate) mod widgets;
 pub(crate) mod world3d;

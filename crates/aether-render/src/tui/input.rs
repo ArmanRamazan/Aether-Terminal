@@ -142,6 +142,7 @@ impl InputHandler {
             KeyCode::F(2) => InputAction::SwitchTab(Tab::World3D),
             KeyCode::F(3) => InputAction::SwitchTab(Tab::Network),
             KeyCode::F(4) => InputAction::SwitchTab(Tab::Arbiter),
+            KeyCode::F(5) => InputAction::SwitchTab(Tab::Rules),
             KeyCode::Enter => InputAction::Select,
             KeyCode::Esc => InputAction::Deselect,
             KeyCode::Char('s') => InputAction::EnterSort,
@@ -311,6 +312,10 @@ mod tests {
         assert_eq!(
             handler.handle_key(key(KeyCode::F(4))),
             InputAction::SwitchTab(Tab::Arbiter)
+        );
+        assert_eq!(
+            handler.handle_key(key(KeyCode::F(5))),
+            InputAction::SwitchTab(Tab::Rules)
         );
     }
 
