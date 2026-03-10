@@ -9,5 +9,11 @@ pub mod events;
 #[cfg(all(target_os = "linux", feature = "ebpf"))]
 pub mod loader;
 
+#[cfg(all(target_os = "linux", feature = "ebpf"))]
+pub mod ring_buffer;
+
 pub use error::EbpfError;
 pub use events::{ProcessExitEvent, ProcessForkEvent};
+
+#[cfg(all(target_os = "linux", feature = "ebpf"))]
+pub use ring_buffer::RawKernelEvent;
