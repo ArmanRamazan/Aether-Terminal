@@ -11,3 +11,4 @@ pub mod hot_reload;
 pub mod lexer;
 pub mod parser;
 pub mod runtime;
+pub mod types;
