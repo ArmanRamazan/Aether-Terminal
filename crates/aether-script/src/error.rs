@@ -3,13 +3,13 @@
 /// Errors produced during script compilation and evaluation.
 #[derive(Debug, thiserror::Error)]
 pub enum ScriptError {
-    /// Lexer or parser error with source location.
-    #[error("parse error at {line}:{col}: {message}")]
-    Parse {
-        line: usize,
-        col: usize,
-        message: String,
-    },
+    /// Lexer encountered an unexpected character or invalid token.
+    #[error("lex error: {0}")]
+    Lex(String),
+
+    /// Parser encountered unexpected token or malformed syntax.
+    #[error("parse error: {0}")]
+    Parse(String),
 
     /// Type checking failed.
     #[error("type error: {0}")]
