@@ -8,4 +8,5 @@ pub mod codegen;
 pub mod engine;
 pub mod error;
 pub mod hot_reload;
+pub mod lexer;
 pub mod runtime;
