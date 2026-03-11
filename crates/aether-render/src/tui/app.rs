@@ -450,7 +450,7 @@ impl App {
                     let buf = frame.buffer_mut();
                     self.sparklines.render(chunks[0], buf);
                     self.overview
-                        .render(chunks[1], buf, &world, &self.predictions);
+                        .render(chunks[1], buf, &world, &self.predictions, &self.diagnostics);
                 }
             }
             Tab::World3D => {

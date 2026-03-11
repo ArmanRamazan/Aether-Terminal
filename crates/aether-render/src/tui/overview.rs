@@ -12,8 +12,8 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Gauge, Paragraph, Row, Table, Widget, Wrap};
 
-use aether_core::models::ProcessState;
-use aether_core::WorldGraph;
+use aether_core::models::{DiagTarget, ProcessState, Severity};
+use aether_core::{Diagnostic, WorldGraph};
 
 use crate::palette::{self, Palette};
 use crate::PredictionDisplay;
@@ -135,6 +135,7 @@ impl OverviewTab {
         buf: &mut Buffer,
         world: &WorldGraph,
         predictions: &[PredictionDisplay],
+        diagnostics: &[Diagnostic],
     ) {
         // Split off a predictions panel at the bottom when predictions exist.
         let (main_area, predictions_area) = if predictions.is_empty() {
@@ -158,7 +159,7 @@ impl OverviewTab {
             (main_area, None)
         };
 
-        self.render_table(table_area, buf, world, predictions);
+        self.render_table(table_area, buf, world, predictions, diagnostics);
 
         if let (Some(pid), Some(panel_area)) = (self.detail_pid, detail_area) {
             render_detail_panel(panel_area, buf, world, pid);
@@ -176,6 +177,7 @@ impl OverviewTab {
         buf: &mut Buffer,
         world: &WorldGraph,
         predictions: &[PredictionDisplay],
+        diagnostics: &[Diagnostic],
     ) {
         let predicted_pids: HashSet<u32> = predictions.iter().map(|p| p.pid).collect();
         let mut rows = collect_sorted_rows(world, self.sort_column, self.sort_ascending);
@@ -205,6 +207,10 @@ impl OverviewTab {
 
                 let mut cells: Vec<Cell> =
                     cols.iter().map(|c| Cell::from(c.as_str())).collect();
+
+                // Diag column: show highest-severity diagnostic for this PID.
+                cells.push(format_diag_cell(pid, diagnostics));
+
                 if predicted_pids.contains(&pid) {
                     cells.push(
                         Cell::from("⚠").style(Style::default().fg(Palette::PREDICTION)),
@@ -240,18 +246,20 @@ impl OverviewTab {
             Cell::from(format!("MEM{}", sort_indicator(SortColumn::Mem))),
             Cell::from(format!("State{}", sort_indicator(SortColumn::State))),
             Cell::from(format!("HP{}", sort_indicator(SortColumn::Hp))),
+            Cell::from("Diag"),
             Cell::from("Pred").style(Style::default().fg(Palette::PREDICTION)),
         ])
         .style(header_style);
 
         let widths = [
+            Constraint::Percentage(8),
+            Constraint::Percentage(20),
             Constraint::Percentage(9),
-            Constraint::Percentage(26),
-            Constraint::Percentage(11),
-            Constraint::Percentage(16),
             Constraint::Percentage(13),
-            Constraint::Percentage(13),
-            Constraint::Percentage(12),
+            Constraint::Percentage(10),
+            Constraint::Percentage(8),
+            Constraint::Percentage(22),
+            Constraint::Percentage(10),
         ];
 
         let title = format!("Overview [F1] — {} processes", total);
@@ -300,6 +308,33 @@ impl OverviewTab {
         // We don't know the visible height here; a generous window keeps it usable.
         // The actual clamp happens in render().
     }
+}
+
+/// Build a [`Cell`] for the Diag column showing the highest-severity diagnostic for `pid`.
+fn format_diag_cell(pid: u32, diagnostics: &[Diagnostic]) -> Cell<'static> {
+    let best = diagnostics
+        .iter()
+        .filter(|d| matches!(&d.target, DiagTarget::Process { pid: p, .. } if *p == pid))
+        .max_by_key(|d| d.severity);
+
+    let Some(diag) = best else {
+        return Cell::from("");
+    };
+
+    let (icon, color) = match diag.severity {
+        Severity::Critical => ("\u{25a0}", Palette::DIAGNOSTIC_CRITICAL),
+        Severity::Warning => ("\u{25a0}", Palette::DIAGNOSTIC_WARNING),
+        Severity::Info => ("\u{25cf}", Palette::DIAGNOSTIC_INFO),
+    };
+
+    let summary: String = if diag.summary.chars().count() > 15 {
+        let truncated: String = diag.summary.chars().take(15).collect();
+        format!("{truncated}\u{2026}")
+    } else {
+        diag.summary.clone()
+    };
+
+    Cell::from(format!("{icon} {summary}")).style(Style::default().fg(color))
 }
 
 /// Collect process data from the world graph, sort it, and return as string rows.
@@ -838,7 +873,7 @@ mod tests {
 
         let area = Rect::new(0, 0, 80, 24);
         let mut buf = Buffer::empty(area);
-        tab.render(area, &mut buf, &world, &predictions);
+        tab.render(area, &mut buf, &world, &predictions, &[]);
     }
 
     #[test]
@@ -849,7 +884,91 @@ mod tests {
 
         let area = Rect::new(0, 0, 80, 24);
         let mut buf = Buffer::empty(area);
-        tab.render(area, &mut buf, &world, &[]);
+        tab.render(area, &mut buf, &world, &[], &[]);
+    }
+
+    fn make_diagnostic(pid: u32, severity: Severity, summary: &str) -> Diagnostic {
+        use aether_core::models::{
+            DiagCategory, Evidence, Recommendation, RecommendedAction, Urgency,
+        };
+        use aether_core::metrics::HostId;
+        Diagnostic {
+            id: 1,
+            host: HostId::default(),
+            target: DiagTarget::Process {
+                pid,
+                name: "test".to_string(),
+            },
+            severity,
+            category: DiagCategory::CpuSaturation,
+            summary: summary.to_string(),
+            evidence: vec![Evidence {
+                metric: "cpu".to_string(),
+                current: 95.0,
+                threshold: 90.0,
+                trend: None,
+                context: String::new(),
+            }],
+            recommendation: Recommendation {
+                action: RecommendedAction::Investigate {
+                    what: "high cpu".to_string(),
+                },
+                reason: "test".to_string(),
+                urgency: Urgency::Soon,
+                auto_executable: false,
+            },
+            detected_at: std::time::Instant::now(),
+            resolved_at: None,
+        }
+    }
+
+    /// Render a single [`Cell`] into a buffer and return its text content.
+    fn cell_text(cell: Cell) -> String {
+        let row = Row::new(vec![cell]);
+        let widths = [Constraint::Length(40)];
+        let table = Table::new(vec![row], widths);
+        let area = Rect::new(0, 0, 40, 2);
+        let mut buf = Buffer::empty(area);
+        Widget::render(table, area, &mut buf);
+        (0..40u16)
+            .map(|x| buf[(x, 0u16)].symbol().to_string())
+            .collect::<String>()
+            .trim()
+            .to_string()
+    }
+
+    #[test]
+    fn test_diag_cell_empty_when_no_diagnostics() {
+        let cell = format_diag_cell(42, &[]);
+        assert_eq!(cell_text(cell), "");
+    }
+
+    #[test]
+    fn test_diag_cell_shows_highest_severity() {
+        let diags = vec![
+            make_diagnostic(1, Severity::Info, "info msg"),
+            make_diagnostic(1, Severity::Critical, "crit msg"),
+            make_diagnostic(1, Severity::Warning, "warn msg"),
+        ];
+        let cell = format_diag_cell(1, &diags);
+        let text = cell_text(cell);
+        assert!(text.contains("crit msg"), "should show critical: {text}");
+    }
+
+    #[test]
+    fn test_diag_cell_truncates_long_summary() {
+        let diags = vec![make_diagnostic(1, Severity::Warning, "this is a very long summary text")];
+        let cell = format_diag_cell(1, &diags);
+        let text = cell_text(cell);
+        assert!(text.contains('\u{2026}'), "should contain ellipsis: {text}");
+        assert!(!text.contains("summary text"), "should be truncated: {text}");
+    }
+
+    #[test]
+    fn test_diag_cell_no_match_for_different_pid() {
+        let diags = vec![make_diagnostic(1, Severity::Critical, "crit")];
+        let cell = format_diag_cell(99, &diags);
+        assert_eq!(cell_text(cell), "");
     }
 
     #[test]
