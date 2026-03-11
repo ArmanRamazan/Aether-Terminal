@@ -6,6 +6,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::api;
 use crate::state::SharedState;
+use crate::ws;
 
 /// Build the axum router with all routes and shared state.
 pub fn router(state: SharedState) -> Router {
@@ -18,6 +19,7 @@ pub fn router(state: SharedState) -> Router {
         .route("/api/arbiter/pending", get(api::list_pending_actions))
         .route("/api/arbiter/{id}/approve", post(api::approve_action))
         .route("/api/arbiter/{id}/deny", post(api::deny_action))
+        .route("/ws", get(ws::ws_handler))
         .with_state(state)
 }
 

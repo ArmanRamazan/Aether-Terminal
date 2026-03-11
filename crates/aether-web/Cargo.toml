@@ -15,7 +15,9 @@ thiserror = "2"
 tracing = "0.1"
 rust-embed = "8"
 tokio-util = "0.7"
+futures-util = "0.3"
 
 [dev-dependencies]
 tower = "0.5"
 glam = "0.29"
+tokio-tungstenite = "0.28"
