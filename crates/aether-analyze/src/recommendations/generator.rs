@@ -45,7 +45,7 @@ impl RecommendationGenerator {
             host: host.clone(),
             target: finding.target.clone(),
             severity: finding.severity,
-            category: finding.category.clone(),
+            category: finding.category,
             summary,
             evidence,
             recommendation: Recommendation {
