@@ -73,9 +73,7 @@ impl TrendAnalyzer {
         }
 
         if slope < 0.0 && r_squared > 0.5 {
-            return TrendClass::Declining {
-                rate: slope.abs(),
-            };
+            return TrendClass::Declining { rate: slope.abs() };
         }
 
         TrendClass::Stable
@@ -184,10 +182,7 @@ mod tests {
         let series = make_series(&points);
         let analyzer = TrendAnalyzer;
         let slope = analyzer.slope(&series, Duration::from_secs(120));
-        assert!(
-            (slope - 1.0).abs() < 1e-10,
-            "expected ~1.0, got {slope}"
-        );
+        assert!((slope - 1.0).abs() < 1e-10, "expected ~1.0, got {slope}");
     }
 
     #[test]
@@ -197,10 +192,7 @@ mod tests {
         let analyzer = TrendAnalyzer;
         let ttl = analyzer.time_to_threshold(&series, 160.0).unwrap();
         let secs = ttl.as_secs_f64();
-        assert!(
-            (secs - 51.0).abs() < 1.0,
-            "expected ~51s, got {secs}"
-        );
+        assert!((secs - 51.0).abs() < 1.0, "expected ~51s, got {secs}");
     }
 
     #[test]

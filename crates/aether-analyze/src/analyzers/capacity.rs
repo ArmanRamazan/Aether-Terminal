@@ -135,18 +135,29 @@ mod tests {
 
         let report = analyzer.analyze(50.0, 100.0, &trend, &series);
 
-        assert!((report.usage_percent - 50.0).abs() < 1e-10, "usage should be 50%");
-        assert!((report.headroom - 50.0).abs() < 1e-10, "headroom should be 50");
+        assert!(
+            (report.usage_percent - 50.0).abs() < 1e-10,
+            "usage should be 50%"
+        );
+        assert!(
+            (report.headroom - 50.0).abs() < 1e-10,
+            "headroom should be 50"
+        );
         assert!(matches!(report.trend, TrendClass::Stable));
-        assert!(report.time_to_exhaustion.is_none(), "stable trend should not exhaust");
-        assert!(report.recommended_limit.is_none(), "healthy usage needs no recommendation");
+        assert!(
+            report.time_to_exhaustion.is_none(),
+            "stable trend should not exhaust"
+        );
+        assert!(
+            report.recommended_limit.is_none(),
+            "healthy usage needs no recommendation"
+        );
     }
 
     #[test]
     fn test_analyze_critical_usage() {
         // 93% usage with growing trend — series values stay below limit
-        let points: Vec<(f64, f64)> =
-            (0..60).map(|i| (i as f64, 80.0 + i as f64 * 0.2)).collect();
+        let points: Vec<(f64, f64)> = (0..60).map(|i| (i as f64, 80.0 + i as f64 * 0.2)).collect();
         let series = make_series(&points);
         let analyzer = CapacityAnalyzer;
         let trend = TrendAnalyzer;
@@ -156,8 +167,14 @@ mod tests {
         let report = analyzer.analyze(current, limit, &trend, &series);
 
         assert!(report.usage_percent > 80.0, "usage should be critical");
-        assert!(report.time_to_exhaustion.is_some(), "growing trend should have exhaustion time");
-        assert!(report.recommended_limit.is_some(), "critical usage should recommend higher limit");
+        assert!(
+            report.time_to_exhaustion.is_some(),
+            "growing trend should have exhaustion time"
+        );
+        assert!(
+            report.recommended_limit.is_some(),
+            "critical usage should recommend higher limit"
+        );
     }
 
     #[test]
@@ -184,7 +201,13 @@ mod tests {
 
         let report = analyzer.analyze(100.0, 0.0, &trend, &series);
 
-        assert!((report.usage_percent - 0.0).abs() < 1e-10, "zero limit should yield 0% usage");
-        assert!((report.headroom - 0.0).abs() < 1e-10, "zero limit should yield 0 headroom");
+        assert!(
+            (report.usage_percent - 0.0).abs() < 1e-10,
+            "zero limit should yield 0% usage"
+        );
+        assert!(
+            (report.headroom - 0.0).abs() < 1e-10,
+            "zero limit should yield 0 headroom"
+        );
     }
 }
