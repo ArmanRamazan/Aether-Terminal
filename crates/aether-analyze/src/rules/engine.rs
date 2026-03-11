@@ -32,9 +32,11 @@ impl RuleEngine {
         }
     }
 
-    /// Load built-in rules. Placeholder — will be filled in the builtin task.
+    /// Load built-in rules into the engine.
     pub fn load_builtin(&mut self) {
-        // Will be populated in a future task.
+        for rule in super::builtin::builtin_rules() {
+            self.rules.push(rule);
+        }
     }
 
     /// Add a rule to the engine.
