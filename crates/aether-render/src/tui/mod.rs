@@ -2,6 +2,7 @@
 
 pub mod app;
 pub(crate) mod arbiter;
+pub(crate) mod diagnostics;
 pub(crate) mod help;
 pub(crate) mod input;
 pub(crate) mod network;
