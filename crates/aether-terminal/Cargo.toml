@@ -16,6 +16,7 @@ aether-ebpf = { path = "../aether-ebpf" }
 aether-predict = { path = "../aether-predict" }
 aether-script = { path = "../aether-script" }
 aether-web = { path = "../aether-web" }
+aether-analyze = { path = "../aether-analyze" }
 arc-swap = "1"
 clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }

@@ -1,0 +1,11 @@
+[package]
+name = "aether-analyze"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+aether-core = { path = "../aether-core" }
+tokio = { version = "1", features = ["full"] }
+thiserror = "2"
+tracing = "0.1"
+serde = { version = "1", features = ["derive"] }
