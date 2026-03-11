@@ -8,7 +8,6 @@ use aether_core::{ArbiterQueue, WorldGraph};
 ///
 /// All fields are `Arc`-wrapped, so cloning is cheap.
 #[derive(Clone)]
-#[allow(dead_code)] // Fields used by axum handlers (added in subsequent tasks)
 pub struct SharedState {
     pub(crate) world: Arc<RwLock<WorldGraph>>,
     pub(crate) arbiter: Arc<Mutex<ArbiterQueue>>,
