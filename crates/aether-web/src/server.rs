@@ -46,9 +46,7 @@ pub async fn serve(state: SharedState, port: u16, cancel: CancellationToken) {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use tokio::sync::{Mutex, RwLock};
+    use std::sync::{Arc, Mutex, RwLock};
 
     use aether_core::{ArbiterQueue, WorldGraph};
 

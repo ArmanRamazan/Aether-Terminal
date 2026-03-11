@@ -66,6 +66,10 @@ struct Cli {
     /// Enable eBPF telemetry (Linux only, requires CAP_BPF)
     #[arg(long)]
     ebpf: bool,
+
+    /// Start web UI server on optional port (default: 8080)
+    #[arg(long, num_args = 0..=1, default_missing_value = "8080")]
+    web: Option<u16>,
 }
 
 #[tokio::main]
@@ -281,6 +285,19 @@ async fn main() -> anyhow::Result<()> {
                 tracing::error!("MCP SSE server error: {e}");
             }
         });
+    }
+
+    // Web UI server
+    if let Some(port) = cli.web {
+        let web_state = aether_web::SharedState::new(
+            Arc::clone(&world),
+            Arc::new(Mutex::new(aether_core::ArbiterQueue::default())),
+        );
+        let web_cancel = cancel.child_token();
+        tokio::spawn(async move {
+            aether_web::serve(web_state, port, web_cancel).await;
+        });
+        tracing::info!("Web UI available at http://localhost:{port}");
     }
 
     // Initialize terminal
