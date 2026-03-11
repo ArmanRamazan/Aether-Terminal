@@ -1,0 +1,5 @@
+# Ignore all build artifacts
+*
+# But keep this directory (needed for rust-embed to compile)
+!.gitignore
+!.gitkeep
