@@ -63,7 +63,7 @@ pub struct ArbiterActionResponse {
 
 /// GET /api/processes — all processes as JSON array.
 pub async fn list_processes(State(state): State<SharedState>) -> Json<Vec<ProcessResponse>> {
-    let world = state.world.read().await;
+    let world = state.world.read().expect("world lock poisoned");
     let processes = world.processes().map(process_to_response).collect();
     Json(processes)
 }
@@ -73,7 +73,7 @@ pub async fn get_process(
     State(state): State<SharedState>,
     Path(pid): Path<u32>,
 ) -> Result<Json<ProcessDetailResponse>, StatusCode> {
-    let world = state.world.read().await;
+    let world = state.world.read().expect("world lock poisoned");
 
     let node = world.find_by_pid(pid).ok_or(StatusCode::NOT_FOUND)?;
     let process = process_to_response(node);
@@ -100,7 +100,7 @@ pub async fn get_process(
 pub async fn list_connections(
     State(state): State<SharedState>,
 ) -> Json<Vec<ConnectionResponse>> {
-    let world = state.world.read().await;
+    let world = state.world.read().expect("world lock poisoned");
     let connections = world
         .edge_pairs_with_data()
         .into_iter()
@@ -116,7 +116,7 @@ pub async fn list_connections(
 
 /// GET /api/stats — aggregate system statistics.
 pub async fn get_stats(State(state): State<SharedState>) -> Json<StatsResponse> {
-    let world = state.world.read().await;
+    let world = state.world.read().expect("world lock poisoned");
     let count = world.process_count();
 
     let (total_cpu, total_memory, total_hp) =
@@ -144,7 +144,7 @@ pub async fn get_stats(State(state): State<SharedState>) -> Json<StatsResponse> 
 pub async fn list_pending_actions(
     State(state): State<SharedState>,
 ) -> Json<Vec<ArbiterActionResponse>> {
-    let arbiter = state.arbiter.lock().await;
+    let arbiter = state.arbiter.lock().expect("arbiter lock poisoned");
     let actions = arbiter
         .pending()
         .enumerate()
@@ -162,7 +162,7 @@ pub async fn approve_action(
     State(state): State<SharedState>,
     Path(id): Path<usize>,
 ) -> StatusCode {
-    let mut arbiter = state.arbiter.lock().await;
+    let mut arbiter = state.arbiter.lock().expect("arbiter lock poisoned");
     if arbiter.approve(id) {
         StatusCode::OK
     } else {
@@ -175,7 +175,7 @@ pub async fn deny_action(
     State(state): State<SharedState>,
     Path(id): Path<usize>,
 ) -> StatusCode {
-    let mut arbiter = state.arbiter.lock().await;
+    let mut arbiter = state.arbiter.lock().expect("arbiter lock poisoned");
     if arbiter.deny(id) {
         StatusCode::OK
     } else {
@@ -211,11 +211,10 @@ fn format_action(action: &AgentAction) -> String {
 #[cfg(test)]
 mod tests {
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex, RwLock};
 
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
-    use tokio::sync::{Mutex, RwLock};
     use tower::ServiceExt;
 
     use aether_core::models::{
@@ -262,7 +261,7 @@ mod tests {
     async fn test_processes_endpoint_returns_json() {
         let state = test_state();
         {
-            let mut world = state.world.write().await;
+            let mut world = state.world.write().unwrap();
             world.add_process(make_process(1, 10.0, 1024, 100.0));
             world.add_process(make_process(2, 20.0, 2048, 80.0));
         }
@@ -293,7 +292,7 @@ mod tests {
     async fn test_process_by_pid_found() {
         let state = test_state();
         {
-            let mut world = state.world.write().await;
+            let mut world = state.world.write().unwrap();
             world.add_process(make_process(42, 50.0, 4096, 90.0));
         }
 
@@ -341,7 +340,7 @@ mod tests {
     async fn test_stats_endpoint_returns_aggregates() {
         let state = test_state();
         {
-            let mut world = state.world.write().await;
+            let mut world = state.world.write().unwrap();
             world.add_process(make_process(1, 10.0, 1000, 80.0));
             world.add_process(make_process(2, 30.0, 2000, 60.0));
         }
@@ -373,7 +372,7 @@ mod tests {
     async fn test_connections_endpoint_returns_array() {
         let state = test_state();
         {
-            let mut world = state.world.write().await;
+            let mut world = state.world.write().unwrap();
             world.add_process(make_process(1, 10.0, 1024, 100.0));
             world.add_process(make_process(2, 20.0, 2048, 80.0));
             world.add_connection(1, 2, make_edge(1));

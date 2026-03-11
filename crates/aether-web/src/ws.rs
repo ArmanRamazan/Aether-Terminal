@@ -49,7 +49,7 @@ async fn handle_socket(socket: WebSocket, state: SharedState) {
         let mut interval = tokio::time::interval(PUSH_INTERVAL);
         loop {
             interval.tick().await;
-            let update = build_world_update(&push_state).await;
+            let update = build_world_update(&push_state);
             let json = match serde_json::to_string(&update) {
                 Ok(j) => j,
                 Err(e) => {
@@ -72,7 +72,7 @@ async fn handle_socket(socket: WebSocket, state: SharedState) {
                 _ => continue,
             };
             match serde_json::from_str::<ClientMessage>(&text) {
-                Ok(client_msg) => handle_client_message(client_msg, &recv_state).await,
+                Ok(client_msg) => handle_client_message(client_msg, &recv_state),
                 Err(e) => tracing::warn!("invalid client message: {e}"),
             }
         }
@@ -84,8 +84,8 @@ async fn handle_socket(socket: WebSocket, state: SharedState) {
     }
 }
 
-async fn build_world_update(state: &SharedState) -> WorldUpdate {
-    let world = state.world.read().await;
+fn build_world_update(state: &SharedState) -> WorldUpdate {
+    let world = state.world.read().expect("world lock poisoned");
 
     let processes = world
         .processes()
@@ -145,7 +145,7 @@ async fn build_world_update(state: &SharedState) -> WorldUpdate {
     }
 }
 
-async fn handle_client_message(msg: ClientMessage, state: &SharedState) {
+fn handle_client_message(msg: ClientMessage, state: &SharedState) {
     match msg {
         ClientMessage::SelectProcess { pid } => {
             tracing::debug!("client selected process {pid}");
@@ -158,7 +158,7 @@ async fn handle_client_message(msg: ClientMessage, state: &SharedState) {
                     return;
                 }
             };
-            let mut arbiter = state.arbiter.lock().await;
+            let mut arbiter = state.arbiter.lock().expect("arbiter lock poisoned");
             let result = match action.as_str() {
                 "approve" => arbiter.approve(id),
                 "deny" => arbiter.deny(id),
@@ -178,9 +178,8 @@ async fn handle_client_message(msg: ClientMessage, state: &SharedState) {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex, RwLock};
 
-    use tokio::sync::{Mutex, RwLock};
     use tokio_tungstenite::tungstenite;
 
     use aether_core::models::{ProcessNode, ProcessState};
@@ -238,12 +237,12 @@ mod tests {
     async fn test_world_update_serializes() {
         let state = test_state();
         {
-            let mut world = state.world.write().await;
+            let mut world = state.world.write().unwrap();
             world.add_process(make_process(1));
             world.add_process(make_process(2));
         }
 
-        let update = build_world_update(&state).await;
+        let update = build_world_update(&state);
         let json = serde_json::to_value(&update).unwrap();
 
         assert_eq!(json["type"], "world_state");
