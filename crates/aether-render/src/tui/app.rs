@@ -107,6 +107,8 @@ pub struct App {
     predictions: Vec<PredictionDisplay>,
     /// External source of predictions, polled each tick.
     predictions_source: Option<Arc<Mutex<Vec<PredictionDisplay>>>>,
+    /// External diagnostics source (populated by AnalyzeEngine).
+    diagnostics_source: Option<Arc<Mutex<Vec<Diagnostic>>>>,
     /// State for the Diagnostics (F6) tab.
     diagnostics_tab: DiagnosticsTab,
     /// Current diagnostic findings to display.
@@ -134,6 +136,7 @@ impl App {
             startup: StartupAnimation::new(),
             predictions: Vec::new(),
             predictions_source: None,
+            diagnostics_source: None,
             diagnostics_tab: DiagnosticsTab::default(),
             diagnostics: Vec::new(),
         }
@@ -152,6 +155,11 @@ impl App {
     /// Replace the current diagnostics for the Diagnostics tab.
     pub fn set_diagnostics(&mut self, diagnostics: Vec<Diagnostic>) {
         self.diagnostics = diagnostics;
+    }
+
+    /// Set an external diagnostics source polled each render tick.
+    pub fn set_diagnostics_source(&mut self, source: Arc<Mutex<Vec<Diagnostic>>>) {
+        self.diagnostics_source = Some(source);
     }
 
     /// Run the main event loop until the user quits.
@@ -198,6 +206,12 @@ impl App {
                 if let Some(ref source) = self.predictions_source {
                     if let Ok(preds) = source.lock() {
                         self.predictions = preds.clone();
+                    }
+                }
+                // Poll diagnostics from external source
+                if let Some(ref source) = self.diagnostics_source {
+                    if let Ok(diags) = source.lock() {
+                        self.diagnostics = diags.clone();
                     }
                 }
             }

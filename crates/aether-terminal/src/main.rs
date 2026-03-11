@@ -4,7 +4,10 @@ use clap::Parser;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+use aether_analyze::engine::{AnalyzeConfig, AnalyzeEngine};
 use aether_core::events::SystemEvent;
+use aether_core::models::Diagnostic;
+use aether_core::metrics::HostId;
 use aether_core::{AgentAction, WorldGraph};
 use aether_ingestion::ebpf_bridge::EbpfBridge;
 use aether_ingestion::pipeline::IngestionPipeline;
@@ -70,6 +73,14 @@ struct Cli {
     /// Start web UI server on optional port (default: 8080)
     #[arg(long, num_args = 0..=1, default_missing_value = "8080")]
     web: Option<u16>,
+
+    /// Disable diagnostic engine
+    #[arg(long)]
+    no_analyze: bool,
+
+    /// Diagnostic analysis interval in seconds
+    #[arg(long, value_name = "SECS")]
+    analyze_interval: Option<u64>,
 }
 
 #[tokio::main]
@@ -255,6 +266,52 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!("prediction engine enabled");
     }
 
+    // Shared diagnostics state (populated by AnalyzeEngine, read by TUI)
+    let diagnostics: Arc<Mutex<Vec<Diagnostic>>> = Arc::new(Mutex::new(Vec::new()));
+
+    // Spawn diagnostic engine unless --no-analyze
+    if !cli.no_analyze {
+        let interval_secs = cli.analyze_interval.unwrap_or(5);
+        let config = AnalyzeConfig {
+            interval: std::time::Duration::from_secs(interval_secs),
+            host: HostId::new("local"),
+            ..Default::default()
+        };
+        let engine = AnalyzeEngine::new(config);
+        let (diag_tx, mut diag_rx) = mpsc::channel::<Vec<Diagnostic>>(32);
+        let analyze_cancel = cancel.child_token();
+        let analyze_world = Arc::clone(&world);
+        tokio::spawn(async move {
+            engine.run(analyze_world, diag_tx, analyze_cancel).await;
+        });
+
+        let collector_diags = Arc::clone(&diagnostics);
+        let collector_cancel = cancel.child_token();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = collector_cancel.cancelled() => break,
+                    batch = diag_rx.recv() => {
+                        match batch {
+                            Some(new_diags) => {
+                                if let Ok(mut diags) = collector_diags.lock() {
+                                    diags.extend(new_diags);
+                                    if diags.len() > 200 {
+                                        let excess = diags.len() - 200;
+                                        diags.drain(..excess);
+                                    }
+                                }
+                            }
+                            None => break,
+                        }
+                    }
+                }
+            }
+        });
+
+        tracing::info!("diagnostic engine enabled (interval: {interval_secs}s)");
+    }
+
     // Mode handling
     if cli.mcp_stdio {
         // Stdio MCP mode: no TUI, no crossterm
@@ -319,6 +376,7 @@ async fn main() -> anyhow::Result<()> {
     if cli.rules.is_some() {
         app.set_rules_display_state(Arc::clone(&rules_display));
     }
+    app.set_diagnostics_source(Arc::clone(&diagnostics));
 
     // Feed predictions into the TUI app on a timer
     if cli.predict {
