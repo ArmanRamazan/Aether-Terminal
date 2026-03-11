@@ -3,15 +3,21 @@ use std::net::SocketAddr;
 use axum::routing::{get, post};
 use axum::Router;
 use tokio_util::sync::CancellationToken;
+use tower_http::cors::{Any, CorsLayer};
 
 use crate::api;
+use crate::embedded;
 use crate::state::SharedState;
 use crate::ws;
 
 /// Build the axum router with all routes and shared state.
 pub fn router(state: SharedState) -> Router {
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any);
+
     Router::new()
-        .route("/", get(|| async { "Aether Web UI" }))
         .route("/api/processes", get(api::list_processes))
         .route("/api/processes/{pid}", get(api::get_process))
         .route("/api/connections", get(api::list_connections))
@@ -20,6 +26,8 @@ pub fn router(state: SharedState) -> Router {
         .route("/api/arbiter/{id}/approve", post(api::approve_action))
         .route("/api/arbiter/{id}/deny", post(api::deny_action))
         .route("/ws", get(ws::ws_handler))
+        .fallback(embedded::static_handler)
+        .layer(cors)
         .with_state(state)
 }
 
