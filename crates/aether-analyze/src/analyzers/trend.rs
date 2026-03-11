@@ -31,7 +31,7 @@ impl TrendAnalyzer {
     /// Returns `None` if the slope is non-positive or the current value already
     /// exceeds the threshold.
     pub fn time_to_threshold(&self, series: &TimeSeries, threshold: f64) -> Option<Duration> {
-        let current = series.last_value()?;
+        let current = series.last().map(|s| s.value)?;
         let slope = self.slope(series, Duration::from_secs(300));
 
         if slope <= 0.0 || current >= threshold {
@@ -161,7 +161,7 @@ mod tests {
         let mut ts = TimeSeries::new("test", values.len() + 10);
         let base = Instant::now();
         for &(secs, value) in values {
-            ts.push(MetricSample {
+            ts.push_sample(MetricSample {
                 timestamp: base + Duration::from_secs_f64(secs),
                 value,
             });
