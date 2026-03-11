@@ -3,14 +3,8 @@ import { useWorldState } from "./hooks/useWorldState";
 import { Layout } from "./components/Layout";
 import { OverviewPage } from "./pages/OverviewPage";
 import { Graph3DPage } from "./pages/Graph3DPage";
-
-function Network() {
-  return <div>Network — coming soon</div>;
-}
-
-function Arbiter() {
-  return <div>Arbiter — coming soon</div>;
-}
+import { NetworkPage } from "./pages/NetworkPage";
+import { ArbiterPage } from "./pages/ArbiterPage";
 
 function AppRoutes() {
   useWorldState();
@@ -20,8 +14,8 @@ function AppRoutes() {
       <Route element={<Layout />}>
         <Route path="/" element={<OverviewPage />} />
         <Route path="/graph" element={<Graph3DPage />} />
-        <Route path="/network" element={<Network />} />
-        <Route path="/arbiter" element={<Arbiter />} />
+        <Route path="/network" element={<NetworkPage />} />
+        <Route path="/arbiter" element={<ArbiterPage />} />
       </Route>
     </Routes>
   );
