@@ -118,7 +118,7 @@ mod tests {
         let mut ts = TimeSeries::new("test", values.len() + 10);
         let base = Instant::now();
         for &(secs, value) in values {
-            ts.push(MetricSample {
+            ts.push_sample(MetricSample {
                 timestamp: base + Duration::from_secs_f64(secs),
                 value,
             });

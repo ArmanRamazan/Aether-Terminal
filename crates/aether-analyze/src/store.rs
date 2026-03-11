@@ -85,7 +85,7 @@ impl MetricStore {
                 .entry(key)
                 .or_insert_with(|| TimeSeries::new(&ts.name, self.capacity));
             for sample in &ts.samples {
-                dest.push(*sample);
+                dest.push_sample(*sample);
             }
         }
     }
@@ -163,7 +163,7 @@ impl MetricStore {
             .series
             .entry(key)
             .or_insert_with(|| TimeSeries::new(metric, self.capacity));
-        ts.push(MetricSample { timestamp, value });
+        ts.push_sample(MetricSample { timestamp, value });
     }
 }
 
@@ -216,7 +216,7 @@ mod tests {
         assert!(store.get(&host, None, "process_count").is_some());
 
         let cpu = store.get(&host, Some(100), "cpu_percent").unwrap();
-        assert_eq!(cpu.last_value(), Some(25.0));
+        assert_eq!(cpu.last().map(|s| s.value), Some(25.0));
     }
 
     #[test]
@@ -273,12 +273,12 @@ mod tests {
         assert!(names.contains("process_count"));
 
         let total_cpu = store.get(&host, None, "total_cpu").unwrap();
-        assert_eq!(total_cpu.last_value(), Some(30.0));
+        assert_eq!(total_cpu.last().map(|s| s.value), Some(30.0));
 
         let total_mem = store.get(&host, None, "total_memory").unwrap();
-        assert_eq!(total_mem.last_value(), Some(300.0));
+        assert_eq!(total_mem.last().map(|s| s.value), Some(300.0));
 
         let count = store.get(&host, None, "process_count").unwrap();
-        assert_eq!(count.last_value(), Some(2.0));
+        assert_eq!(count.last().map(|s| s.value), Some(2.0));
     }
 }

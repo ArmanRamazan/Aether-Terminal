@@ -1,8 +1,12 @@
 //! Core data models for process nodes, network edges, and system snapshots.
 
+use std::time::Instant;
+
 use glam::Vec3;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
+
+use crate::metrics::HostId;
 
 /// A process represented as a node in the 3D world graph.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,6 +68,136 @@ pub struct SystemSnapshot {
     pub processes: Vec<ProcessNode>,
     pub edges: Vec<NetworkEdge>,
     pub timestamp: std::time::SystemTime,
+}
+
+// ---------------------------------------------------------------------------
+// Diagnostic types
+// ---------------------------------------------------------------------------
+
+/// Target of a diagnostic finding.
+#[derive(Debug, Clone, Serialize)]
+#[non_exhaustive]
+pub enum DiagTarget {
+    /// A specific OS process.
+    Process { pid: u32, name: String },
+    /// An entire host machine.
+    Host(HostId),
+    /// A container (Docker, podman, etc.).
+    Container { id: String, name: String },
+    /// A disk / mount point.
+    Disk { mount: String },
+    /// A network interface.
+    Network { interface: String },
+}
+
+/// Severity of a diagnostic finding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum Severity {
+    /// Informational, no action needed.
+    Info,
+    /// Potential issue, investigate soon.
+    Warning,
+    /// Immediate attention required.
+    Critical,
+}
+
+/// Category describing the root cause of a diagnostic.
+#[derive(Debug, Clone, Serialize)]
+#[non_exhaustive]
+pub enum DiagCategory {
+    MemoryLeak,
+    MemoryPressure,
+    CpuSaturation,
+    CpuSpike,
+    DiskPressure,
+    DiskIoHeavy,
+    FdExhaustion,
+    ConnectionSurge,
+    ZombieAccumulation,
+    ThreadExplosion,
+    CrashLoop,
+    ConfigMismatch,
+    CapacityRisk,
+    CorrelatedAnomaly,
+}
+
+/// A piece of evidence supporting a diagnostic finding.
+#[derive(Debug, Clone, Serialize)]
+pub struct Evidence {
+    /// Name of the metric (e.g. "cpu_percent", "mem_rss").
+    pub metric: String,
+    /// Current observed value.
+    pub current: f64,
+    /// Threshold that was breached.
+    pub threshold: f64,
+    /// Optional trend (rate of change).
+    pub trend: Option<f64>,
+    /// Human-readable context.
+    pub context: String,
+}
+
+/// A concrete action recommendation.
+#[derive(Debug, Clone, Serialize)]
+#[non_exhaustive]
+pub enum RecommendedAction {
+    ScaleUp { resource: String, from: String, to: String },
+    Restart { reason: String },
+    RaiseLimits { limit_name: String, from: String, to: String },
+    ReduceLoad { suggestion: String },
+    Investigate { what: String },
+    KillProcess { pid: u32, reason: String },
+    NoAction { reason: String },
+}
+
+/// How urgently a recommendation should be acted upon.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Urgency {
+    /// Act now.
+    Immediate,
+    /// Act within minutes.
+    Soon,
+    /// Schedule for later.
+    Planning,
+    /// FYI only.
+    Informational,
+}
+
+/// A recommendation attached to a diagnostic.
+#[derive(Debug, Clone, Serialize)]
+pub struct Recommendation {
+    /// What to do.
+    pub action: RecommendedAction,
+    /// Why this action is recommended.
+    pub reason: String,
+    /// How urgently to act.
+    pub urgency: Urgency,
+    /// Whether this can be executed automatically.
+    pub auto_executable: bool,
+}
+
+/// A complete diagnostic finding.
+#[derive(Debug, Clone)]
+pub struct Diagnostic {
+    /// Unique identifier.
+    pub id: u64,
+    /// Host where the issue was detected.
+    pub host: HostId,
+    /// What is affected.
+    pub target: DiagTarget,
+    /// How severe the issue is.
+    pub severity: Severity,
+    /// Root-cause category.
+    pub category: DiagCategory,
+    /// One-line human-readable summary.
+    pub summary: String,
+    /// Supporting evidence.
+    pub evidence: Vec<Evidence>,
+    /// What to do about it.
+    pub recommendation: Recommendation,
+    /// When the diagnostic was first detected.
+    pub detected_at: Instant,
+    /// When it was resolved, if ever.
+    pub resolved_at: Option<Instant>,
 }
 
 #[cfg(test)]
@@ -193,5 +327,46 @@ mod tests {
             let restored: ConnectionState = serde_json::from_str(&json).unwrap();
             assert_eq!(restored, state);
         }
+    }
+
+    #[test]
+    fn test_diagnostic_severity_ordering() {
+        assert!(Severity::Critical > Severity::Warning);
+        assert!(Severity::Warning > Severity::Info);
+        assert!(Severity::Critical > Severity::Info);
+    }
+
+    #[test]
+    fn test_diagnostic_construction() {
+        let diag = Diagnostic {
+            id: 1,
+            host: HostId::default(),
+            target: DiagTarget::Process {
+                pid: 42,
+                name: "nginx".to_string(),
+            },
+            severity: Severity::Warning,
+            category: DiagCategory::MemoryLeak,
+            summary: "RSS growing steadily".to_string(),
+            evidence: vec![Evidence {
+                metric: "mem_rss".to_string(),
+                current: 512.0,
+                threshold: 400.0,
+                trend: Some(10.0),
+                context: "grew 10 MB/min over last 30 min".to_string(),
+            }],
+            recommendation: Recommendation {
+                action: RecommendedAction::Restart {
+                    reason: "memory leak detected".to_string(),
+                },
+                reason: "RSS exceeds threshold with positive trend".to_string(),
+                urgency: Urgency::Soon,
+                auto_executable: false,
+            },
+            detected_at: std::time::Instant::now(),
+            resolved_at: None,
+        };
+        assert_eq!(diag.id, 1);
+        assert_eq!(diag.evidence.len(), 1);
     }
 }
