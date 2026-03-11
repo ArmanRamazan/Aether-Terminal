@@ -41,6 +41,15 @@ impl Palette {
 
     /// Prediction Orange for anomaly indicators — `#FF6600`.
     pub const PREDICTION: Color = Color::Rgb(255, 102, 0);
+
+    /// Diagnostic Critical — bright red for immediate-attention findings.
+    pub const DIAGNOSTIC_CRITICAL: Color = Color::Rgb(255, 60, 60);
+
+    /// Diagnostic Warning — amber for investigate-soon findings.
+    pub const DIAGNOSTIC_WARNING: Color = Color::Rgb(255, 200, 50);
+
+    /// Diagnostic Info — soft blue for informational findings.
+    pub const DIAGNOSTIC_INFO: Color = Color::Rgb(100, 200, 255);
 }
 
 /// Returns a color that represents the given CPU/memory load percentage.

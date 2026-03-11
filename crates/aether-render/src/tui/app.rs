@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
-use crossterm::event::{self, Event, KeyEvent};
+use crossterm::event::{self, Event, KeyCode, KeyEvent};
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::Frame;
 
@@ -14,7 +14,10 @@ use crate::effects::StartupAnimation;
 use crate::PredictionDisplay;
 use crate::RenderError;
 
+use aether_core::Diagnostic;
+
 use super::arbiter::{ArbiterKeyResult, ArbiterTab};
+use super::diagnostics::DiagnosticsTab;
 use super::help::HelpOverlay;
 use super::input::{InputAction, InputHandler, InputMode};
 use super::network::NetworkTab;
@@ -37,16 +40,19 @@ pub enum Tab {
     Arbiter,
     /// F5: JIT rule engine monitor.
     Rules,
+    /// F6: Diagnostic findings viewer.
+    Diagnostics,
 }
 
 impl Tab {
     /// All tabs in display order.
-    pub(crate) const ALL: [Tab; 5] = [
+    pub(crate) const ALL: [Tab; 6] = [
         Tab::Overview,
         Tab::World3D,
         Tab::Network,
         Tab::Arbiter,
         Tab::Rules,
+        Tab::Diagnostics,
     ];
 
     /// Human-readable label for the tab bar.
@@ -57,6 +63,7 @@ impl Tab {
             Tab::Network => "Network [F3]",
             Tab::Arbiter => "Arbiter [F4]",
             Tab::Rules => "Rules [F5]",
+            Tab::Diagnostics => "Diagnostics [F6]",
         }
     }
 }
@@ -100,6 +107,10 @@ pub struct App {
     predictions: Vec<PredictionDisplay>,
     /// External source of predictions, polled each tick.
     predictions_source: Option<Arc<Mutex<Vec<PredictionDisplay>>>>,
+    /// State for the Diagnostics (F6) tab.
+    diagnostics_tab: DiagnosticsTab,
+    /// Current diagnostic findings to display.
+    diagnostics: Vec<Diagnostic>,
 }
 
 impl App {
@@ -123,6 +134,8 @@ impl App {
             startup: StartupAnimation::new(),
             predictions: Vec::new(),
             predictions_source: None,
+            diagnostics_tab: DiagnosticsTab::default(),
+            diagnostics: Vec::new(),
         }
     }
 
@@ -134,6 +147,11 @@ impl App {
     /// Set an external predictions source to poll each frame.
     pub fn set_predictions_source(&mut self, source: Arc<Mutex<Vec<PredictionDisplay>>>) {
         self.predictions_source = Some(source);
+    }
+
+    /// Replace the current diagnostics for the Diagnostics tab.
+    pub fn set_diagnostics(&mut self, diagnostics: Vec<Diagnostic>) {
+        self.diagnostics = diagnostics;
     }
 
     /// Run the main event loop until the user quits.
@@ -232,6 +250,25 @@ impl App {
             && self.rules.handle_key(key.code) == RulesKeyResult::Consumed
         {
             return;
+        }
+
+        // Diagnostics tab-specific keys (j/k/Enter/d/m) intercepted before
+        // the global InputHandler to avoid conflicts.
+        if self.current_tab == Tab::Diagnostics && self.input.mode() == InputMode::Normal {
+            // handle_key returns Option<DiagnosticAction>; we consume the key
+            // regardless (navigation keys should not fall through).
+            let _action = self.diagnostics_tab.handle_key(key.code, &self.diagnostics);
+            // TODO: dispatch DiagnosticAction to orchestrator
+            match key.code {
+                KeyCode::Char('j')
+                | KeyCode::Char('k')
+                | KeyCode::Down
+                | KeyCode::Up
+                | KeyCode::Enter
+                | KeyCode::Char('d')
+                | KeyCode::Char('m') => return,
+                _ => {}
+            }
         }
 
         // Arbiter tab-specific keys (Y/N/I, j/k) are intercepted before
@@ -438,6 +475,10 @@ impl App {
                 let buf = frame.buffer_mut();
                 self.rules.render(area, buf);
             }
+            Tab::Diagnostics => {
+                let buf = frame.buffer_mut();
+                self.diagnostics_tab.render(area, buf, &self.diagnostics);
+            }
         }
     }
 
@@ -510,6 +551,9 @@ mod tests {
 
         app.handle_key(KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE));
         assert_eq!(app.current_tab, Tab::Rules);
+
+        app.handle_key(KeyEvent::new(KeyCode::F(6), KeyModifiers::NONE));
+        assert_eq!(app.current_tab, Tab::Diagnostics);
 
         app.handle_key(KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE));
         assert_eq!(app.current_tab, Tab::Overview);

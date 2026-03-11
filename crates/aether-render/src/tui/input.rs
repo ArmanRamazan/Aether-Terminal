@@ -143,6 +143,7 @@ impl InputHandler {
             KeyCode::F(3) => InputAction::SwitchTab(Tab::Network),
             KeyCode::F(4) => InputAction::SwitchTab(Tab::Arbiter),
             KeyCode::F(5) => InputAction::SwitchTab(Tab::Rules),
+            KeyCode::F(6) => InputAction::SwitchTab(Tab::Diagnostics),
             KeyCode::Enter => InputAction::Select,
             KeyCode::Esc => InputAction::Deselect,
             KeyCode::Char('s') => InputAction::EnterSort,
