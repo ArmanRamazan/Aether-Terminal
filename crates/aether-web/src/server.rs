@@ -10,6 +10,14 @@ use crate::embedded;
 use crate::state::SharedState;
 use crate::ws;
 
+/// Health check response.
+async fn health() -> axum::Json<serde_json::Value> {
+    axum::Json(serde_json::json!({
+        "status": "ok",
+        "version": env!("CARGO_PKG_VERSION"),
+    }))
+}
+
 /// Build the axum router with all routes and shared state.
 pub fn router(state: SharedState) -> Router {
     let cors = CorsLayer::new()
@@ -18,6 +26,7 @@ pub fn router(state: SharedState) -> Router {
         .allow_headers(Any);
 
     Router::new()
+        .route("/api/health", get(health))
         .route("/api/processes", get(api::list_processes))
         .route("/api/processes/{pid}", get(api::get_process))
         .route("/api/connections", get(api::list_connections))
@@ -36,7 +45,7 @@ pub async fn serve(state: SharedState, port: u16, cancel: CancellationToken) {
     let app = router(state);
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
 
-    tracing::info!("aether-web listening on {addr}");
+    tracing::info!("Web UI server listening on http://0.0.0.0:{port}");
 
     let listener = match tokio::net::TcpListener::bind(addr).await {
         Ok(l) => l,

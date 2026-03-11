@@ -297,7 +297,14 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(async move {
             aether_web::serve(web_state, port, web_cancel).await;
         });
-        tracing::info!("Web UI available at http://localhost:{port}");
+
+        let url = format!("http://localhost:{port}");
+        tracing::info!("Opening browser at {url}");
+        if std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+            if let Err(e) = open::that(&url) {
+                tracing::warn!("failed to open browser: {e}");
+            }
+        }
     }
 
     // Initialize terminal
