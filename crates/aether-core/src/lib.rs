@@ -14,7 +14,7 @@ pub mod traits;
 // Re-export key types for convenience.
 pub use arbiter::ArbiterQueue;
 pub use error::CoreError;
-pub use events::{AgentAction, GameEvent, SystemEvent};
+pub use events::{AgentAction, DiagnosticEvent, GameEvent, SystemEvent};
 pub use graph::WorldGraph;
 pub use metrics::{HostId, MetricSample, TimeSeries};
 pub use models::{
