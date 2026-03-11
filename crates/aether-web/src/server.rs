@@ -1,14 +1,23 @@
 use std::net::SocketAddr;
 
-use axum::{Router, routing::get};
+use axum::routing::{get, post};
+use axum::Router;
 use tokio_util::sync::CancellationToken;
 
+use crate::api;
 use crate::state::SharedState;
 
 /// Build the axum router with all routes and shared state.
 pub fn router(state: SharedState) -> Router {
     Router::new()
         .route("/", get(|| async { "Aether Web UI" }))
+        .route("/api/processes", get(api::list_processes))
+        .route("/api/processes/{pid}", get(api::get_process))
+        .route("/api/connections", get(api::list_connections))
+        .route("/api/stats", get(api::get_stats))
+        .route("/api/arbiter/pending", get(api::list_pending_actions))
+        .route("/api/arbiter/{id}/approve", post(api::approve_action))
+        .route("/api/arbiter/{id}/deny", post(api::deny_action))
         .with_state(state)
 }
 
