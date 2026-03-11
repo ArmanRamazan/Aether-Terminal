@@ -65,21 +65,14 @@ impl MetricStore {
                 .get("host")
                 .map(|h| HostId::new(h.as_str()))
                 .unwrap_or_default();
-            let pid = ts
-                .labels
-                .get("pid")
-                .and_then(|p| p.parse::<u32>().ok());
+            let pid = ts.labels.get("pid").and_then(|p| p.parse::<u32>().ok());
             let metric = ts
                 .labels
                 .get("__name__")
                 .cloned()
                 .unwrap_or_else(|| ts.name.clone());
 
-            let key = MetricKey {
-                host,
-                pid,
-                metric,
-            };
+            let key = MetricKey { host, pid, metric };
             let dest = self
                 .series
                 .entry(key)
@@ -115,6 +108,15 @@ impl MetricStore {
             .iter()
             .filter(|(k, _)| &k.host == host && k.pid.is_none())
             .map(|(k, v)| (k.metric.as_str(), v))
+            .collect()
+    }
+
+    /// Returns all distinct process IDs for a given host.
+    pub fn process_pids(&self, host: &HostId) -> HashSet<u32> {
+        self.series
+            .keys()
+            .filter(|k| &k.host == host)
+            .filter_map(|k| k.pid)
             .collect()
     }
 
@@ -258,10 +260,7 @@ mod tests {
     #[test]
     fn test_host_metrics_returns_aggregates() {
         let host = HostId::new("local");
-        let world = make_world(vec![
-            make_process(1, 10.0, 100),
-            make_process(2, 20.0, 200),
-        ]);
+        let world = make_world(vec![make_process(1, 10.0, 100), make_process(2, 20.0, 200)]);
 
         let mut store = MetricStore::new(100);
         store.ingest_world_state(&host, &world);

@@ -106,20 +106,12 @@ impl AnalyzeEngine {
         diagnostics
     }
 
-    fn check_cpu(
-        &mut self,
-        pid: u32,
-        name: &str,
-        cpu: f32,
-        out: &mut Vec<Diagnostic>,
-    ) {
+    fn check_cpu(&mut self, pid: u32, name: &str, cpu: f32, out: &mut Vec<Diagnostic>) {
         if cpu < 90.0 {
             return;
         }
 
-        let series = self
-            .store
-            .get(&self.config.host, Some(pid), "cpu_percent");
+        let series = self.store.get(&self.config.host, Some(pid), "cpu_percent");
         let trend_info = series.map(|s| self.trend.classify(s, Duration::from_secs(60)));
 
         let severity = if cpu >= 99.0 {
@@ -171,22 +163,14 @@ impl AnalyzeEngine {
         });
     }
 
-    fn check_memory(
-        &mut self,
-        pid: u32,
-        name: &str,
-        mem_bytes: u64,
-        out: &mut Vec<Diagnostic>,
-    ) {
+    fn check_memory(&mut self, pid: u32, name: &str, mem_bytes: u64, out: &mut Vec<Diagnostic>) {
         const HIGH_MEM: u64 = 1_073_741_824; // 1 GB
 
         if mem_bytes < HIGH_MEM {
             return;
         }
 
-        let series = self
-            .store
-            .get(&self.config.host, Some(pid), "mem_bytes");
+        let series = self.store.get(&self.config.host, Some(pid), "mem_bytes");
         let trend_info = series.map(|s| self.trend.classify(s, Duration::from_secs(300)));
 
         let is_growing = matches!(&trend_info, Some(TrendClass::Growing { .. }));
@@ -246,10 +230,7 @@ impl AnalyzeEngine {
     }
 
     fn check_host_cpu(&mut self, out: &mut Vec<Diagnostic>) {
-        let series = match self
-            .store
-            .get(&self.config.host, None, "total_cpu")
-        {
+        let series = match self.store.get(&self.config.host, None, "total_cpu") {
             Some(s) => s,
             None => return,
         };
@@ -260,9 +241,7 @@ impl AnalyzeEngine {
         };
 
         // Host total CPU > 400% (equivalent to 4 fully loaded cores) with growing trend.
-        let report = self
-            .capacity
-            .analyze(current, 800.0, &self.trend, series);
+        let report = self.capacity.analyze(current, 800.0, &self.trend, series);
 
         if report.usage_percent > 80.0 {
             out.push(Diagnostic {
@@ -344,7 +323,10 @@ mod tests {
         let mut engine = AnalyzeEngine::new(config);
         let world = make_world(vec![make_process(1, "idle", 5.0, 1024)]);
         let diagnostics = engine.analyze_once(&world);
-        assert!(diagnostics.is_empty(), "healthy process should produce no diagnostics");
+        assert!(
+            diagnostics.is_empty(),
+            "healthy process should produce no diagnostics"
+        );
     }
 
     #[test]
@@ -354,7 +336,10 @@ mod tests {
         let world = make_world(vec![make_process(42, "busy", 95.0, 1024)]);
         let diagnostics = engine.analyze_once(&world);
         assert_eq!(diagnostics.len(), 1, "should detect high CPU");
-        assert!(matches!(diagnostics[0].category, DiagCategory::CpuSaturation));
+        assert!(matches!(
+            diagnostics[0].category,
+            DiagCategory::CpuSaturation
+        ));
     }
 
     #[test]
@@ -365,7 +350,10 @@ mod tests {
         let diagnostics = engine.analyze_once(&world);
         assert_eq!(diagnostics.len(), 1, "should detect high memory");
         assert!(
-            matches!(diagnostics[0].category, DiagCategory::MemoryPressure | DiagCategory::MemoryLeak),
+            matches!(
+                diagnostics[0].category,
+                DiagCategory::MemoryPressure | DiagCategory::MemoryLeak
+            ),
             "category should be memory-related"
         );
     }
