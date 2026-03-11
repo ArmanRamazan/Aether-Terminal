@@ -1,20 +1,22 @@
 //! AnalyzeEngine — orchestrates periodic diagnostic analysis.
 
+use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
+use tracing::{debug, warn};
 
 use aether_core::metrics::HostId;
-use aether_core::models::{
-    DiagCategory, DiagTarget, Diagnostic, Evidence, Recommendation, RecommendedAction, Severity,
-    Urgency,
-};
+use aether_core::models::{Diagnostic, Severity};
 use aether_core::WorldGraph;
 
 use crate::analyzers::capacity::CapacityAnalyzer;
-use crate::analyzers::trend::{TrendAnalyzer, TrendClass};
+use crate::analyzers::trend::TrendAnalyzer;
+use crate::recommendations::generator::RecommendationGenerator;
+use crate::rules::engine::RuleEngine;
+use crate::rules::types::ProcessLimits;
 use crate::store::MetricStore;
 
 /// Configuration for the diagnostic engine.
@@ -38,46 +40,60 @@ impl Default for AnalyzeConfig {
     }
 }
 
-/// Orchestrates metric collection, trend/capacity analysis, and diagnostic generation.
+/// Runtime statistics for the engine.
+#[derive(Debug, Clone, Default)]
+pub struct AnalyzeStats {
+    pub evaluations: u64,
+    pub rules_fired: u64,
+    pub active_critical: u32,
+    pub active_warning: u32,
+    pub active_info: u32,
+}
+
+/// Orchestrates metric collection, rule evaluation, and diagnostic generation.
 pub struct AnalyzeEngine {
-    config: AnalyzeConfig,
     store: MetricStore,
+    rule_engine: RuleEngine,
     trend: TrendAnalyzer,
     capacity: CapacityAnalyzer,
-    next_diag_id: u64,
+    generator: RecommendationGenerator,
+    config: AnalyzeConfig,
+    active_diagnostics: Vec<Diagnostic>,
+    stats: AnalyzeStats,
 }
 
 impl AnalyzeEngine {
     pub fn new(config: AnalyzeConfig) -> Self {
         let store = MetricStore::new(config.history_capacity);
+        let mut rule_engine = RuleEngine::new();
+        rule_engine.load_builtin();
+
         Self {
-            config,
             store,
+            rule_engine,
             trend: TrendAnalyzer,
             capacity: CapacityAnalyzer,
-            next_diag_id: 1,
+            generator: RecommendationGenerator::new(),
+            config,
+            active_diagnostics: Vec::new(),
+            stats: AnalyzeStats::default(),
         }
     }
 
-    /// Run the analysis loop, sending batches of diagnostics on each tick.
+    /// Run the analysis loop, sending diagnostics on each tick.
     pub async fn run(
-        mut self,
+        &mut self,
         world: Arc<RwLock<WorldGraph>>,
         diag_tx: mpsc::Sender<Vec<Diagnostic>>,
         cancel: CancellationToken,
     ) {
-        let mut interval = tokio::time::interval(self.config.interval);
-        // First tick fires immediately — skip it to let metrics accumulate.
-        interval.tick().await;
-
         loop {
             tokio::select! {
                 _ = cancel.cancelled() => break,
-                _ = interval.tick() => {
-                    let diagnostics = self.analyze_once(&world);
-                    if !diagnostics.is_empty()
-                        && diag_tx.send(diagnostics).await.is_err()
-                    {
+                _ = tokio::time::sleep(self.config.interval) => {
+                    self.tick(&world);
+                    if diag_tx.send(self.active_diagnostics.clone()).await.is_err() {
+                        warn!("diagnostic receiver dropped, stopping engine");
                         break;
                     }
                 }
@@ -85,214 +101,104 @@ impl AnalyzeEngine {
         }
     }
 
-    fn analyze_once(&mut self, world: &Arc<RwLock<WorldGraph>>) -> Vec<Diagnostic> {
+    /// Execute a single analysis cycle.
+    fn tick(&mut self, world: &Arc<RwLock<WorldGraph>>) {
         let graph = match world.read() {
             Ok(g) => g,
-            Err(_) => return Vec::new(),
+            Err(_) => {
+                warn!("WorldGraph lock poisoned, skipping tick");
+                return;
+            }
         };
 
+        // 1. Ingest current state
         self.store.ingest_world_state(&self.config.host, &graph);
-        let mut diagnostics = Vec::new();
 
-        // Analyze each process for CPU and memory issues.
-        for proc in graph.processes() {
-            self.check_cpu(proc.pid, &proc.name, proc.cpu_percent, &mut diagnostics);
-            self.check_memory(proc.pid, &proc.name, proc.mem_bytes, &mut diagnostics);
-        }
+        // 2. Evaluate rules
+        let empty_limits: HashMap<u32, ProcessLimits> = HashMap::new();
+        let findings = self.rule_engine.evaluate(&self.store, &self.config.host, &empty_limits);
 
-        // Host-level capacity checks.
-        self.check_host_cpu(&mut diagnostics);
+        // 3. Generate diagnostics from findings
+        let new_diags: Vec<Diagnostic> = findings
+            .iter()
+            .map(|f| {
+                self.generator
+                    .generate(f, &self.store, &self.trend, &self.capacity, &self.config.host)
+            })
+            .collect();
 
-        diagnostics
-    }
+        debug!(
+            findings = findings.len(),
+            new_diags = new_diags.len(),
+            "tick complete"
+        );
 
-    fn check_cpu(&mut self, pid: u32, name: &str, cpu: f32, out: &mut Vec<Diagnostic>) {
-        if cpu < 90.0 {
-            return;
-        }
-
-        let series = self.store.get(&self.config.host, Some(pid), "cpu_percent");
-        let trend_info = series.map(|s| self.trend.classify(s, Duration::from_secs(60)));
-
-        let severity = if cpu >= 99.0 {
-            Severity::Critical
-        } else {
-            Severity::Warning
-        };
-
-        out.push(Diagnostic {
-            id: self.next_id(),
-            host: self.config.host.clone(),
-            target: DiagTarget::Process {
-                pid,
-                name: name.to_string(),
-            },
-            severity,
-            category: DiagCategory::CpuSaturation,
-            summary: format!("{name} (pid {pid}) CPU at {cpu:.1}%"),
-            evidence: vec![Evidence {
-                metric: "cpu_percent".into(),
-                current: cpu as f64,
-                threshold: 90.0,
-                trend: match &trend_info {
-                    Some(TrendClass::Growing { rate }) => Some(*rate),
-                    _ => None,
-                },
-                context: format!("Process CPU usage: {cpu:.1}%"),
-            }],
-            recommendation: Recommendation {
-                action: if cpu >= 99.0 {
-                    RecommendedAction::Investigate {
-                        what: format!("Process {name} (pid {pid}) is saturating CPU"),
-                    }
-                } else {
-                    RecommendedAction::NoAction {
-                        reason: "Monitor for sustained high CPU".into(),
-                    }
-                },
-                reason: "High CPU usage detected".into(),
-                urgency: if cpu >= 99.0 {
-                    Urgency::Soon
-                } else {
-                    Urgency::Informational
-                },
-                auto_executable: false,
-            },
-            detected_at: Instant::now(),
-            resolved_at: None,
+        // 4. Resolve: remove active diagnostics no longer present
+        self.active_diagnostics.retain(|active| {
+            new_diags.iter().any(|new| same_target_category(active, new))
         });
-    }
 
-    fn check_memory(&mut self, pid: u32, name: &str, mem_bytes: u64, out: &mut Vec<Diagnostic>) {
-        const HIGH_MEM: u64 = 1_073_741_824; // 1 GB
-
-        if mem_bytes < HIGH_MEM {
-            return;
+        // 5. Merge: add new diagnostics not already active, update existing
+        for new in new_diags {
+            if let Some(existing) = self
+                .active_diagnostics
+                .iter_mut()
+                .find(|a| same_target_category(a, &new))
+            {
+                // Update evidence and severity for existing diagnostic
+                existing.evidence = new.evidence;
+                existing.severity = new.severity;
+                existing.recommendation = new.recommendation;
+            } else {
+                self.active_diagnostics.push(new);
+            }
         }
 
-        let series = self.store.get(&self.config.host, Some(pid), "mem_bytes");
-        let trend_info = series.map(|s| self.trend.classify(s, Duration::from_secs(300)));
-
-        let is_growing = matches!(&trend_info, Some(TrendClass::Growing { .. }));
-        let severity = if is_growing {
-            Severity::Warning
-        } else {
-            Severity::Info
-        };
-        let category = if is_growing {
-            DiagCategory::MemoryLeak
-        } else {
-            DiagCategory::MemoryPressure
-        };
-
-        let mb = mem_bytes as f64 / 1_048_576.0;
-        out.push(Diagnostic {
-            id: self.next_id(),
-            host: self.config.host.clone(),
-            target: DiagTarget::Process {
-                pid,
-                name: name.to_string(),
-            },
-            severity,
-            category,
-            summary: format!("{name} (pid {pid}) using {mb:.0} MB"),
-            evidence: vec![Evidence {
-                metric: "mem_bytes".into(),
-                current: mem_bytes as f64,
-                threshold: HIGH_MEM as f64,
-                trend: match &trend_info {
-                    Some(TrendClass::Growing { rate }) => Some(*rate),
-                    _ => None,
-                },
-                context: format!("Process memory: {mb:.0} MB"),
-            }],
-            recommendation: Recommendation {
-                action: if is_growing {
-                    RecommendedAction::Investigate {
-                        what: format!("Possible memory leak in {name} (pid {pid})"),
-                    }
-                } else {
-                    RecommendedAction::NoAction {
-                        reason: "High but stable memory usage".into(),
-                    }
-                },
-                reason: "High memory usage detected".into(),
-                urgency: if is_growing {
-                    Urgency::Soon
-                } else {
-                    Urgency::Informational
-                },
-                auto_executable: false,
-            },
-            detected_at: Instant::now(),
-            resolved_at: None,
-        });
+        // 6. Update stats
+        self.stats.evaluations += 1;
+        self.stats.rules_fired += findings.len() as u64;
+        self.update_severity_counts();
     }
 
-    fn check_host_cpu(&mut self, out: &mut Vec<Diagnostic>) {
-        let series = match self.store.get(&self.config.host, None, "total_cpu") {
-            Some(s) => s,
-            None => return,
-        };
+    fn update_severity_counts(&mut self) {
+        let mut critical = 0u32;
+        let mut warning = 0u32;
+        let mut info = 0u32;
 
-        let current = match series.last() {
-            Some(s) => s.value,
-            None => return,
-        };
-
-        // Host total CPU > 400% (equivalent to 4 fully loaded cores) with growing trend.
-        let report = self.capacity.analyze(current, 800.0, &self.trend, series);
-
-        if report.usage_percent > 80.0 {
-            out.push(Diagnostic {
-                id: self.next_id(),
-                host: self.config.host.clone(),
-                target: DiagTarget::Host(self.config.host.clone()),
-                severity: Severity::Warning,
-                category: DiagCategory::CapacityRisk,
-                summary: format!("Host CPU load at {current:.0}% aggregate"),
-                evidence: vec![Evidence {
-                    metric: "total_cpu".into(),
-                    current,
-                    threshold: 800.0,
-                    trend: match &report.trend {
-                        TrendClass::Growing { rate } => Some(*rate),
-                        _ => None,
-                    },
-                    context: format!(
-                        "Aggregate CPU: {current:.0}%, headroom: {:.0}",
-                        report.headroom
-                    ),
-                }],
-                recommendation: Recommendation {
-                    action: RecommendedAction::ReduceLoad {
-                        suggestion: "Consider reducing concurrent workloads".into(),
-                    },
-                    reason: "Host approaching CPU capacity".into(),
-                    urgency: if report.time_to_exhaustion.is_some() {
-                        Urgency::Soon
-                    } else {
-                        Urgency::Planning
-                    },
-                    auto_executable: false,
-                },
-                detected_at: Instant::now(),
-                resolved_at: None,
-            });
+        for d in &self.active_diagnostics {
+            match d.severity {
+                Severity::Critical => critical += 1,
+                Severity::Warning => warning += 1,
+                Severity::Info => info += 1,
+            }
         }
+
+        self.stats.active_critical = critical;
+        self.stats.active_warning = warning;
+        self.stats.active_info = info;
     }
 
-    fn next_id(&mut self) -> u64 {
-        let id = self.next_diag_id;
-        self.next_diag_id += 1;
-        id
+    /// Current active diagnostics.
+    pub fn active_diagnostics(&self) -> &[Diagnostic] {
+        &self.active_diagnostics
     }
+
+    /// Current engine statistics.
+    pub fn stats(&self) -> &AnalyzeStats {
+        &self.stats
+    }
+}
+
+/// Two diagnostics match the same issue if they share target and category.
+fn same_target_category(a: &Diagnostic, b: &Diagnostic) -> bool {
+    a.target == b.target && a.category == b.category
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aether_core::models::{ProcessNode, ProcessState};
+    use aether_core::models::{DiagCategory, ProcessNode, ProcessState, Severity};
+    use crate::rules::types::{CompareOp, Rule, RuleCondition};
     use glam::Vec3;
 
     fn make_world(processes: Vec<ProcessNode>) -> Arc<RwLock<WorldGraph>> {
@@ -317,60 +223,87 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_analyze_once_no_issues() {
-        let config = AnalyzeConfig::default();
-        let mut engine = AnalyzeEngine::new(config);
-        let world = make_world(vec![make_process(1, "idle", 5.0, 1024)]);
-        let diagnostics = engine.analyze_once(&world);
-        assert!(
-            diagnostics.is_empty(),
-            "healthy process should produce no diagnostics"
-        );
-    }
-
-    #[test]
-    fn test_analyze_once_high_cpu() {
-        let config = AnalyzeConfig::default();
-        let mut engine = AnalyzeEngine::new(config);
-        let world = make_world(vec![make_process(42, "busy", 95.0, 1024)]);
-        let diagnostics = engine.analyze_once(&world);
-        assert_eq!(diagnostics.len(), 1, "should detect high CPU");
-        assert!(matches!(
-            diagnostics[0].category,
-            DiagCategory::CpuSaturation
-        ));
-    }
-
-    #[test]
-    fn test_analyze_once_high_memory() {
-        let config = AnalyzeConfig::default();
-        let mut engine = AnalyzeEngine::new(config);
-        let world = make_world(vec![make_process(7, "hungry", 10.0, 2_000_000_000)]);
-        let diagnostics = engine.analyze_once(&world);
-        assert_eq!(diagnostics.len(), 1, "should detect high memory");
-        assert!(
-            matches!(
-                diagnostics[0].category,
-                DiagCategory::MemoryPressure | DiagCategory::MemoryLeak
-            ),
-            "category should be memory-related"
-        );
-    }
-
-    #[test]
-    fn test_diag_ids_increment() {
-        let config = AnalyzeConfig::default();
-        let mut engine = AnalyzeEngine::new(config);
-        let world = make_world(vec![
-            make_process(1, "a", 95.0, 2_000_000_000),
-            make_process(2, "b", 99.0, 1024),
-        ]);
-        let diagnostics = engine.analyze_once(&world);
-        let ids: Vec<u64> = diagnostics.iter().map(|d| d.id).collect();
-        for w in ids.windows(2) {
-            assert!(w[1] > w[0], "IDs should be monotonically increasing");
+    /// Instant-fire rule (no sustained condition) for testing.
+    fn cpu_test_rule() -> Rule {
+        Rule {
+            id: "test_cpu_high",
+            name: "Test CPU High",
+            category: DiagCategory::CpuSaturation,
+            default_severity: Severity::Critical,
+            condition: RuleCondition::Threshold {
+                metric: "cpu_percent",
+                op: CompareOp::Gt,
+                value: 90.0,
+                sustained: None,
+            },
+            enabled: true,
         }
+    }
+
+    /// Create an engine with builtin rules + an instant-fire CPU test rule.
+    fn test_engine() -> AnalyzeEngine {
+        let mut engine = AnalyzeEngine::new(AnalyzeConfig::default());
+        engine.rule_engine.add_rule(cpu_test_rule());
+        engine
+    }
+
+    #[test]
+    fn test_engine_produces_diagnostics() {
+        let mut engine = test_engine();
+        let world = make_world(vec![make_process(42, "hot", 99.0, 1024)]);
+
+        engine.tick(&world);
+
+        assert!(
+            !engine.active_diagnostics().is_empty(),
+            "cpu=99% should trigger at least one diagnostic"
+        );
+    }
+
+    #[test]
+    fn test_engine_resolves_cleared() {
+        let mut engine = test_engine();
+
+        // First tick: high CPU triggers diagnostic
+        let world_hot = make_world(vec![make_process(42, "hot", 99.0, 1024)]);
+        engine.tick(&world_hot);
+        let count_after_hot = engine.active_diagnostics().len();
+        assert!(count_after_hot > 0, "should have diagnostics for hot CPU");
+
+        // Second tick: CPU back to normal — diagnostics should resolve
+        let world_cool = make_world(vec![make_process(42, "hot", 5.0, 1024)]);
+        engine.tick(&world_cool);
+        assert_eq!(
+            engine.active_diagnostics().len(),
+            0,
+            "diagnostics should resolve when CPU drops"
+        );
+    }
+
+    #[test]
+    fn test_engine_stats_count() {
+        let mut engine = test_engine();
+        let world = make_world(vec![make_process(1, "idle", 5.0, 1024)]);
+
+        assert_eq!(engine.stats().evaluations, 0);
+        engine.tick(&world);
+        assert_eq!(engine.stats().evaluations, 1, "evaluations should increment per tick");
+        engine.tick(&world);
+        assert_eq!(engine.stats().evaluations, 2);
+    }
+
+    #[test]
+    fn test_engine_empty_world_no_crash() {
+        let mut engine = test_engine();
+        let world = make_world(vec![]);
+
+        engine.tick(&world);
+
+        assert!(
+            engine.active_diagnostics().is_empty(),
+            "empty world should produce no diagnostics"
+        );
+        assert_eq!(engine.stats().evaluations, 1);
     }
 
     #[tokio::test]
@@ -379,7 +312,9 @@ mod tests {
             interval: Duration::from_millis(50),
             ..Default::default()
         };
-        let engine = AnalyzeEngine::new(config);
+        let mut engine = AnalyzeEngine::new(config);
+        engine.rule_engine.add_rule(cpu_test_rule());
+
         let world = make_world(vec![make_process(1, "hot", 99.0, 1024)]);
         let (tx, mut rx) = mpsc::channel(32);
         let cancel = CancellationToken::new();

@@ -96,7 +96,7 @@ impl RuleEngine {
                             name: String::new(),
                         },
                         severity: rule.default_severity,
-                        category: rule.category.clone(),
+                        category: rule.category,
                         matched_values,
                     });
                 }

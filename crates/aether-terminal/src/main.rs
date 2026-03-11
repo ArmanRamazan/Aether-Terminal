@@ -277,7 +277,7 @@ async fn main() -> anyhow::Result<()> {
             host: HostId::new("local"),
             ..Default::default()
         };
-        let engine = AnalyzeEngine::new(config);
+        let mut engine = AnalyzeEngine::new(config);
         let (diag_tx, mut diag_rx) = mpsc::channel::<Vec<Diagnostic>>(32);
         let analyze_cancel = cancel.child_token();
         let analyze_world = Arc::clone(&world);

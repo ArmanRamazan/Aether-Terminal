@@ -75,7 +75,7 @@ pub struct SystemSnapshot {
 // ---------------------------------------------------------------------------
 
 /// Target of a diagnostic finding.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[non_exhaustive]
 pub enum DiagTarget {
     /// A specific OS process.
@@ -102,7 +102,7 @@ pub enum Severity {
 }
 
 /// Category describing the root cause of a diagnostic.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[non_exhaustive]
 pub enum DiagCategory {
     MemoryLeak,
