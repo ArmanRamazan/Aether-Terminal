@@ -8,6 +8,7 @@ const NAV_ITEMS = [
   { to: "/network", label: "Network", icon: "\u2B95" },
   { to: "/arbiter", label: "Arbiter", icon: "\u2696" },
   { to: "/diagnostics", label: "Diagnostics", icon: "\u2695" },
+  { to: "/metrics", label: "Metrics", icon: "\u2261" },
 ] as const;
 
 const linkStyle = (isActive: boolean): React.CSSProperties => ({

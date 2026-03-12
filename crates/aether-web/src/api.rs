@@ -107,6 +107,60 @@ pub struct DiagnosticFilter {
     pub host: Option<String>,
 }
 
+/// Top CPU process entry.
+#[derive(Debug, Serialize)]
+pub struct TopCpuProcess {
+    pub pid: u32,
+    pub name: String,
+    pub cpu: f32,
+}
+
+/// Active diagnostic counts by severity.
+#[derive(Debug, Serialize)]
+pub struct DiagnosticsActive {
+    pub critical: u32,
+    pub warning: u32,
+    pub info: u32,
+}
+
+/// GET /api/metrics/summary response.
+#[derive(Debug, Serialize)]
+pub struct MetricsSummaryResponse {
+    pub cpu_percent: f64,
+    pub memory_used_bytes: u64,
+    pub memory_total_bytes: u64,
+    pub load_avg: [f64; 3],
+    pub diagnostics_active: DiagnosticsActive,
+    pub process_count: u32,
+    pub top_cpu_processes: Vec<TopCpuProcess>,
+}
+
+/// Query parameters for metrics history.
+#[derive(Debug, Deserialize)]
+pub struct MetricsHistoryQuery {
+    pub metric: String,
+    #[serde(default = "default_duration")]
+    pub duration: u64,
+}
+
+fn default_duration() -> u64 {
+    300
+}
+
+/// A single time-series sample in API responses.
+#[derive(Debug, Serialize)]
+pub struct SampleResponse {
+    pub timestamp: u64,
+    pub value: f64,
+}
+
+/// GET /api/metrics/history response.
+#[derive(Debug, Serialize)]
+pub struct MetricsHistoryResponse {
+    pub metric: String,
+    pub samples: Vec<SampleResponse>,
+}
+
 // ── Handlers ──────────────────────────────────────────────────────────
 
 /// GET /api/processes — all processes as JSON array.
@@ -312,6 +366,73 @@ pub async fn execute_diagnostic(
     let mut arbiter = state.arbiter.lock().expect("arbiter lock poisoned");
     arbiter.submit("diagnostic-engine".to_string(), action);
     StatusCode::OK
+}
+
+// ── Metrics Handlers ─────────────────────────────────────────────────
+
+/// GET /api/metrics/summary — current metric values.
+pub async fn get_metrics_summary(State(state): State<SharedState>) -> Json<MetricsSummaryResponse> {
+    let world = state.world.read().expect("world lock poisoned");
+
+    let count = world.process_count();
+    let (total_cpu, total_memory) =
+        world
+            .processes()
+            .fold((0.0_f64, 0_u64), |(cpu, mem), p| {
+                (cpu + p.cpu_percent as f64, mem + p.mem_bytes)
+            });
+
+    let mut top_cpu: Vec<TopCpuProcess> = world
+        .processes()
+        .map(|p| TopCpuProcess {
+            pid: p.pid,
+            name: p.name.clone(),
+            cpu: p.cpu_percent,
+        })
+        .collect();
+    top_cpu.sort_by(|a, b| b.cpu.partial_cmp(&a.cpu).unwrap_or(std::cmp::Ordering::Equal));
+    top_cpu.truncate(5);
+
+    drop(world);
+
+    let diags = state.diagnostics.lock().expect("diagnostics lock poisoned");
+    let diag_stats = compute_diagnostic_stats(&diags);
+    drop(diags);
+
+    Json(MetricsSummaryResponse {
+        cpu_percent: total_cpu,
+        memory_used_bytes: total_memory,
+        memory_total_bytes: 0,
+        load_avg: [0.0; 3],
+        diagnostics_active: DiagnosticsActive {
+            critical: diag_stats.critical,
+            warning: diag_stats.warning,
+            info: diag_stats.info,
+        },
+        process_count: count as u32,
+        top_cpu_processes: top_cpu,
+    })
+}
+
+/// GET /api/metrics/history — time-series data for a named metric.
+pub async fn get_metrics_history(
+    State(state): State<SharedState>,
+    Query(query): Query<MetricsHistoryQuery>,
+) -> Json<MetricsHistoryResponse> {
+    let store = state.metrics.lock().expect("metrics lock poisoned");
+    let samples = store
+        .history(&query.metric, query.duration)
+        .into_iter()
+        .map(|s| SampleResponse {
+            timestamp: s.timestamp_ms,
+            value: s.value,
+        })
+        .collect();
+
+    Json(MetricsHistoryResponse {
+        metric: query.metric,
+        samples,
+    })
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────
