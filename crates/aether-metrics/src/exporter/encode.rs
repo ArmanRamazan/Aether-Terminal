@@ -52,7 +52,10 @@ mod tests {
         let snap = reg.snapshot();
         let encoded = encode_openmetrics(&snap);
 
-        assert!(encoded.contains("# TYPE up gauge"), "should contain TYPE line");
+        assert!(
+            encoded.contains("# TYPE up gauge"),
+            "should contain TYPE line"
+        );
         assert!(encoded.contains("up 1"), "should contain metric value line");
     }
 
