@@ -518,13 +518,26 @@ fn init_rules_engine(
     display: Arc<Mutex<RulesDisplayState>>,
     diag_bridge: Option<Arc<Mutex<Vec<Diagnostic>>>>,
 ) -> anyhow::Result<mpsc::Sender<SystemEvent>> {
-    // Load rule file (parsing is a TODO — compile empty set if parser unavailable)
-    let _content = std::fs::read_to_string(rules_path)?;
-    // TODO: connect lexer → parser → type-checker pipeline
-    // For now, compile an empty ruleset so the infrastructure works end-to-end.
-    let rules: Vec<aether_script::ast::Rule> = Vec::new();
-    tracing::warn!("rule parser not yet connected — loaded 0 rules from {}", rules_path.display());
-    let compiled = CompiledRuleSet::compile(&rules)?;
+    // Load and compile rule file: lexer → parser → type-check → compile
+    let source = std::fs::read_to_string(rules_path)?;
+    let tokens = aether_script::lexer::tokenize(&source)?;
+    let rule_file = aether_script::parser::parse(tokens).map_err(|errs| {
+        anyhow::anyhow!(
+            "parse errors in {}: {}",
+            rules_path.display(),
+            errs.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; ")
+        )
+    })?;
+    aether_script::types::TypeChecker::new()
+        .check(&rule_file)
+        .map_err(|errs| {
+            anyhow::anyhow!(
+                "type errors in {}: {}",
+                rules_path.display(),
+                errs.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; ")
+            )
+        })?;
+    let compiled = CompiledRuleSet::compile(&rule_file.rules)?;
 
     // Populate initial display state
     let names = compiled.rule_names();
@@ -600,7 +613,11 @@ fn init_rules_engine(
         }
     });
 
-    tracing::info!("rules engine initialized from {}", rules_path.display());
+    tracing::info!(
+        "rules engine initialized: {} rules from {}",
+        names.len(),
+        rules_path.display()
+    );
     Ok(engine_event_tx)
 }
 

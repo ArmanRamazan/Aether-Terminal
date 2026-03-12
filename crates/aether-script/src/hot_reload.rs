@@ -137,12 +137,27 @@ impl HotReloader {
 /// Parse rule source text through the compilation pipeline.
 ///
 /// Runs: tokenize -> parse -> type-check, returning parsed AST rules.
-/// Will be connected to the lexer/parser/typechecker modules once implemented.
-fn parse_rules(_source: &str) -> Result<Vec<crate::ast::Rule>, ScriptError> {
-    // TODO: connect to lexer → parser → type-checker pipeline
-    Err(ScriptError::Compile(
-        "rule parser not yet implemented".into(),
-    ))
+fn parse_rules(source: &str) -> Result<Vec<crate::ast::Rule>, ScriptError> {
+    let tokens = crate::lexer::tokenize(source)?;
+    let rule_file = crate::parser::parse(tokens).map_err(|errs| {
+        ScriptError::Parse(
+            errs.iter()
+                .map(|e| e.to_string())
+                .collect::<Vec<_>>()
+                .join("; "),
+        )
+    })?;
+    crate::types::TypeChecker::new()
+        .check(&rule_file)
+        .map_err(|errs| {
+            ScriptError::Type(
+                errs.iter()
+                    .map(|e| e.to_string())
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            )
+        })?;
+    Ok(rule_file.rules)
 }
 
 #[cfg(test)]
