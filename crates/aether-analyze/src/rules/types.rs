@@ -56,6 +56,9 @@ pub enum CounterType {
     RestartCount,
     OpenFds,
     ThreadCount,
+    OomKills,
+    DStateProcesses,
+    ListenQueueOverflows,
 }
 
 /// A composable condition tree for rule evaluation.
