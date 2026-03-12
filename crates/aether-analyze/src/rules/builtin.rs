@@ -152,6 +152,287 @@ pub fn builtin_rules() -> Vec<Rule> {
             },
             enabled: true,
         },
+        // 11. Swap growing (>10MB/min sustained 5min).
+        Rule {
+            id: "mem_swap_growing",
+            name: "Swap usage growing",
+            category: DiagCategory::MemoryPressure,
+            default_severity: Severity::Warning,
+            condition: RuleCondition::RateOfChange {
+                metric: "swap_bytes",
+                // 10MB/min = 10_485_760 / 60 ≈ 174762.7 bytes/sec
+                rate_per_sec: 10_485_760.0 / 60.0,
+                sustained: Some(Duration::from_secs(5 * 60)),
+            },
+            enabled: true,
+        },
+        // 12. RSS doubled (growth ratio > 2.0).
+        Rule {
+            id: "mem_rss_doubled",
+            name: "RSS memory doubled",
+            category: DiagCategory::MemoryLeak,
+            default_severity: Severity::Warning,
+            condition: RuleCondition::Threshold {
+                metric: "mem_growth_ratio",
+                op: CompareOp::Gt,
+                value: 2.0,
+                sustained: None,
+            },
+            enabled: true,
+        },
+        // 13. CPU cgroup throttled.
+        Rule {
+            id: "cpu_cgroup_throttled",
+            name: "CPU cgroup throttled",
+            category: DiagCategory::CpuSaturation,
+            default_severity: Severity::Warning,
+            condition: RuleCondition::RateOfChange {
+                metric: "cpu_throttled_count",
+                rate_per_sec: 0.0,
+                sustained: Some(Duration::from_secs(60)),
+            },
+            enabled: true,
+        },
+        // 14. High involuntary context switches (>10000/s).
+        Rule {
+            id: "cpu_context_switches",
+            name: "High involuntary context switches",
+            category: DiagCategory::CpuSpike,
+            default_severity: Severity::Info,
+            condition: RuleCondition::Threshold {
+                metric: "nonvoluntary_ctxt_switches",
+                op: CompareOp::Gt,
+                value: 10_000.0,
+                sustained: None,
+            },
+            enabled: true,
+        },
+        // 15. Heavy disk writes (>100MB/s sustained 5min).
+        Rule {
+            id: "disk_heavy_write",
+            name: "Heavy disk writes",
+            category: DiagCategory::DiskIoHeavy,
+            default_severity: Severity::Warning,
+            condition: RuleCondition::Threshold {
+                metric: "disk_write_bytes_per_sec",
+                op: CompareOp::Gt,
+                value: 100.0 * 1_048_576.0,
+                sustained: Some(Duration::from_secs(5 * 60)),
+            },
+            enabled: true,
+        },
+        // 16. Heavy disk reads (>100MB/s sustained 5min).
+        Rule {
+            id: "disk_heavy_read",
+            name: "Heavy disk reads",
+            category: DiagCategory::DiskIoHeavy,
+            default_severity: Severity::Info,
+            condition: RuleCondition::Threshold {
+                metric: "disk_read_bytes_per_sec",
+                op: CompareOp::Gt,
+                value: 100.0 * 1_048_576.0,
+                sustained: Some(Duration::from_secs(5 * 60)),
+            },
+            enabled: true,
+        },
+        // 17. Inode exhaustion (>90% of disk inodes).
+        Rule {
+            id: "disk_inode_exhaustion",
+            name: "Inode exhaustion",
+            category: DiagCategory::DiskPressure,
+            default_severity: Severity::Critical,
+            condition: RuleCondition::CapacityPercent {
+                metric: "inode_usage",
+                limit_source: LimitSource::DiskTotal,
+                percent: 90.0,
+            },
+            enabled: true,
+        },
+        // 18. TCP retransmit rate high (>5.0/s).
+        Rule {
+            id: "net_tcp_retransmits",
+            name: "High TCP retransmit rate",
+            category: DiagCategory::ConnectionSurge,
+            default_severity: Severity::Warning,
+            condition: RuleCondition::Threshold {
+                metric: "tcp_retransmit_rate",
+                op: CompareOp::Gt,
+                value: 5.0,
+                sustained: None,
+            },
+            enabled: true,
+        },
+        // 19. Too many established connections (>10000).
+        Rule {
+            id: "net_established_high",
+            name: "High established connections",
+            category: DiagCategory::ConnectionSurge,
+            default_severity: Severity::Warning,
+            condition: RuleCondition::Threshold {
+                metric: "established_connections",
+                op: CompareOp::Gt,
+                value: 10_000.0,
+                sustained: None,
+            },
+            enabled: true,
+        },
+        // 20. Process stuck in D state (>30s).
+        Rule {
+            id: "proc_state_d_stuck",
+            name: "Process stuck in D state",
+            category: DiagCategory::CapacityRisk,
+            default_severity: Severity::Warning,
+            condition: RuleCondition::Threshold {
+                metric: "d_state_seconds",
+                op: CompareOp::Gt,
+                value: 30.0,
+                sustained: None,
+            },
+            enabled: true,
+        },
+        // 21. Extreme system load (>4x cores).
+        Rule {
+            id: "system_load_extreme",
+            name: "Extreme system load",
+            category: DiagCategory::CpuSaturation,
+            default_severity: Severity::Critical,
+            condition: RuleCondition::Threshold {
+                metric: "load_avg_1m_per_core",
+                op: CompareOp::Gt,
+                value: 4.0,
+                sustained: None,
+            },
+            enabled: true,
+        },
+        // 22. System memory pressure (>90% host memory).
+        Rule {
+            id: "system_memory_pressure",
+            name: "System memory pressure",
+            category: DiagCategory::MemoryPressure,
+            default_severity: Severity::Critical,
+            condition: RuleCondition::CapacityPercent {
+                metric: "host_mem_used",
+                limit_source: LimitSource::Custom(100.0),
+                percent: 90.0,
+            },
+            enabled: true,
+        },
+        // 23. OOM kills detected.
+        Rule {
+            id: "system_oom_kills",
+            name: "OOM kills detected",
+            category: DiagCategory::MemoryPressure,
+            default_severity: Severity::Critical,
+            condition: RuleCondition::Count {
+                counter: CounterType::OomKills,
+                op: CompareOp::Gt,
+                value: 0,
+            },
+            enabled: true,
+        },
+        // 24. CPU underprovisioned (>90% of cgroup CPU quota).
+        Rule {
+            id: "config_cpu_underprovisioned",
+            name: "CPU underprovisioned",
+            category: DiagCategory::ConfigMismatch,
+            default_severity: Severity::Warning,
+            condition: RuleCondition::CapacityPercent {
+                metric: "cpu_usage",
+                limit_source: LimitSource::CgroupCpuQuota,
+                percent: 90.0,
+            },
+            enabled: true,
+        },
+        // 25. Cgroup memory headroom tight (<50MB).
+        Rule {
+            id: "config_memory_tight",
+            name: "Memory headroom tight",
+            category: DiagCategory::ConfigMismatch,
+            default_severity: Severity::Warning,
+            condition: RuleCondition::Threshold {
+                metric: "cgroup_memory_headroom_bytes",
+                op: CompareOp::Lt,
+                // 50MB
+                value: 52_428_800.0,
+                sustained: None,
+            },
+            enabled: true,
+        },
+        // 26. PIDs approaching cgroup limit (>80%).
+        Rule {
+            id: "config_pids_approaching",
+            name: "PIDs approaching cgroup limit",
+            category: DiagCategory::ConfigMismatch,
+            default_severity: Severity::Warning,
+            condition: RuleCondition::CapacityPercent {
+                metric: "pids_current",
+                limit_source: LimitSource::CgroupPidsMax,
+                percent: 80.0,
+            },
+            enabled: true,
+        },
+        // 27. High IO wait (>30% sustained 2min).
+        Rule {
+            id: "io_wait_high",
+            name: "High IO wait",
+            category: DiagCategory::DiskIoHeavy,
+            default_severity: Severity::Warning,
+            condition: RuleCondition::Threshold {
+                metric: "io_wait_percent",
+                op: CompareOp::Gt,
+                value: 30.0,
+                sustained: Some(Duration::from_secs(2 * 60)),
+            },
+            enabled: true,
+        },
+        // 28. Listen queue full (backlog overflows detected).
+        Rule {
+            id: "net_listen_backlog",
+            name: "Listen queue backlog overflow",
+            category: DiagCategory::ConnectionSurge,
+            default_severity: Severity::Warning,
+            condition: RuleCondition::Count {
+                counter: CounterType::ListenQueueOverflows,
+                op: CompareOp::Gt,
+                value: 0,
+            },
+            enabled: true,
+        },
+        // 29. Short-lived process with restart indicators.
+        Rule {
+            id: "proc_uptime_short",
+            name: "Short-lived process restarting",
+            category: DiagCategory::CrashLoop,
+            default_severity: Severity::Info,
+            condition: RuleCondition::All(vec![
+                RuleCondition::Threshold {
+                    metric: "uptime_seconds",
+                    op: CompareOp::Lt,
+                    value: 10.0,
+                    sustained: None,
+                },
+                RuleCondition::Count {
+                    counter: CounterType::RestartCount,
+                    op: CompareOp::Gt,
+                    value: 0,
+                },
+            ]),
+            enabled: true,
+        },
+        // 30. Placeholder for correlation-triggered alerts.
+        Rule {
+            id: "correlated_anomaly",
+            name: "Correlated anomaly detected",
+            category: DiagCategory::CorrelatedAnomaly,
+            default_severity: Severity::Info,
+            condition: RuleCondition::Threshold {
+                metric: "correlation_score",
+                op: CompareOp::Gt,
+                value: 0.9,
+                sustained: None,
+            },
+            enabled: true,
+        },
     ]
 }
 
@@ -159,20 +440,66 @@ pub fn builtin_rules() -> Vec<Rule> {
 mod tests {
     use std::collections::HashSet;
 
-    use aether_core::models::Severity;
+    use aether_core::models::{DiagCategory, Severity};
 
     use super::*;
 
     #[test]
-    fn test_builtin_count_is_10() {
-        assert_eq!(builtin_rules().len(), 10);
+    fn test_builtin_count_gte_30() {
+        assert!(
+            builtin_rules().len() >= 30,
+            "expected at least 30 rules, got {}",
+            builtin_rules().len()
+        );
     }
 
     #[test]
-    fn test_all_ids_unique() {
+    fn test_no_duplicate_ids() {
         let rules = builtin_rules();
         let ids: HashSet<&str> = rules.iter().map(|r| r.id).collect();
         assert_eq!(ids.len(), rules.len(), "duplicate rule IDs found");
+    }
+
+    #[test]
+    fn test_all_have_nonempty_names() {
+        for rule in builtin_rules() {
+            assert!(!rule.id.is_empty(), "rule has empty id");
+            assert!(!rule.name.is_empty(), "rule '{}' has empty name", rule.id);
+        }
+    }
+
+    #[test]
+    fn test_all_categories_covered() {
+        let rules = builtin_rules();
+        let categories: HashSet<_> = rules
+            .iter()
+            .map(|r| std::mem::discriminant(&r.category))
+            .collect();
+
+        let required = [
+            DiagCategory::MemoryLeak,
+            DiagCategory::MemoryPressure,
+            DiagCategory::CpuSaturation,
+            DiagCategory::CpuSpike,
+            DiagCategory::DiskPressure,
+            DiagCategory::DiskIoHeavy,
+            DiagCategory::FdExhaustion,
+            DiagCategory::ConnectionSurge,
+            DiagCategory::ZombieAccumulation,
+            DiagCategory::ThreadExplosion,
+            DiagCategory::CrashLoop,
+            DiagCategory::ConfigMismatch,
+            DiagCategory::CapacityRisk,
+            DiagCategory::CorrelatedAnomaly,
+        ];
+
+        for cat in &required {
+            assert!(
+                categories.contains(&std::mem::discriminant(cat)),
+                "missing rule for category {:?}",
+                cat
+            );
+        }
     }
 
     #[test]
