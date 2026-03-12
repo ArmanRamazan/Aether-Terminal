@@ -1,6 +1,7 @@
 //! Achievement definitions and unlock tracking.
 
 use std::collections::HashSet;
+use std::time::Duration;
 
 use aether_core::events::GameEvent;
 
@@ -22,6 +23,9 @@ pub struct GameState {
     pub zombie_kills: u32,
     pub arbiter_approvals: u32,
     pub dpi_analyses: u32,
+    pub diagnostic_resolved_count: u32,
+    pub critical_resolved_count: u32,
+    pub time_without_critical: Duration,
 }
 
 /// Tracks achievement definitions and which ones have been unlocked.
@@ -61,6 +65,21 @@ impl AchievementTracker {
                 name: "AI Whisperer".into(),
                 description: "Approve 100 AI agent actions".into(),
             },
+            AchievementDef {
+                id: "first_responder".into(),
+                name: "First Responder".into(),
+                description: "Resolve your first diagnostic".into(),
+            },
+            AchievementDef {
+                id: "firefighter".into(),
+                name: "Firefighter".into(),
+                description: "Resolve 10 Critical diagnostics".into(),
+            },
+            AchievementDef {
+                id: "stability_master".into(),
+                name: "Stability Master".into(),
+                description: "Run 1 hour with 0 active Critical diagnostics".into(),
+            },
         ];
 
         Self {
@@ -86,6 +105,9 @@ impl AchievementTracker {
                 "network_oracle" => state.dpi_analyses > 100,
                 "zombie_hunter" => state.zombie_kills > 50,
                 "ai_whisperer" => state.arbiter_approvals > 100,
+                "first_responder" => state.diagnostic_resolved_count > 0,
+                "firefighter" => state.critical_resolved_count >= 10,
+                "stability_master" => state.time_without_critical >= Duration::from_secs(3600),
                 _ => false,
             };
 
@@ -143,13 +165,16 @@ mod tests {
             zombie_kills: 0,
             arbiter_approvals: 0,
             dpi_analyses: 0,
+            diagnostic_resolved_count: 0,
+            critical_resolved_count: 0,
+            time_without_critical: Duration::ZERO,
         }
     }
 
     #[test]
-    fn test_initial_count_is_five() {
+    fn test_initial_count_is_eight() {
         let tracker = AchievementTracker::new();
-        assert_eq!(tracker.total_count(), 5);
+        assert_eq!(tracker.total_count(), 8);
         assert_eq!(tracker.unlocked_count(), 0);
     }
 
@@ -201,11 +226,14 @@ mod tests {
             zombie_kills: 100,
             arbiter_approvals: 200,
             dpi_analyses: 200,
+            diagnostic_resolved_count: 50,
+            critical_resolved_count: 10,
+            time_without_critical: Duration::from_secs(7200),
         };
 
         let unlocked = tracker.check(&state);
-        assert_eq!(unlocked.len(), 5, "all achievements should unlock");
-        assert_eq!(tracker.unlocked_count(), 5);
+        assert_eq!(unlocked.len(), 8, "all achievements should unlock");
+        assert_eq!(tracker.unlocked_count(), 8);
     }
 
     #[test]
@@ -223,6 +251,48 @@ mod tests {
             }
             _ => panic!("expected AchievementUnlocked event"),
         }
+    }
+
+    #[test]
+    fn test_first_responder_achievement_unlocks() {
+        let mut tracker = AchievementTracker::new();
+        let state = GameState {
+            diagnostic_resolved_count: 1,
+            ..base_state()
+        };
+
+        let unlocked = tracker.check(&state);
+        assert_eq!(unlocked.len(), 1);
+        assert_eq!(unlocked[0].id, "first_responder");
+        assert!(tracker.is_unlocked("first_responder"));
+    }
+
+    #[test]
+    fn test_firefighter_achievement_unlocks() {
+        let mut tracker = AchievementTracker::new();
+        let state = GameState {
+            diagnostic_resolved_count: 10,
+            critical_resolved_count: 10,
+            ..base_state()
+        };
+
+        let unlocked = tracker.check(&state);
+        assert!(unlocked.iter().any(|a| a.id == "firefighter"));
+        assert!(tracker.is_unlocked("firefighter"));
+    }
+
+    #[test]
+    fn test_stability_master_achievement_unlocks() {
+        let mut tracker = AchievementTracker::new();
+        let state = GameState {
+            time_without_critical: Duration::from_secs(3600),
+            ..base_state()
+        };
+
+        let unlocked = tracker.check(&state);
+        assert_eq!(unlocked.len(), 1);
+        assert_eq!(unlocked[0].id, "stability_master");
+        assert!(tracker.is_unlocked("stability_master"));
     }
 
     #[test]
