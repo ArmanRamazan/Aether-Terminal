@@ -232,19 +232,25 @@ impl AnalyzeEngine {
         match self.procfs.host_profile() {
             Ok(hp) => {
                 self.store
-                    .push_sample(host, None, "loadavg_1", now, hp.loadavg_1);
+                    .push_sample(host, None, "loadavg_1", now, hp.loadavg.0);
                 self.store
-                    .push_sample(host, None, "loadavg_5", now, hp.loadavg_5);
+                    .push_sample(host, None, "loadavg_5", now, hp.loadavg.1);
                 self.store
-                    .push_sample(host, None, "loadavg_15", now, hp.loadavg_15);
+                    .push_sample(host, None, "loadavg_15", now, hp.loadavg.2);
                 self.store
-                    .push_sample(host, None, "mem_total", now, hp.mem_total as f64);
+                    .push_sample(host, None, "mem_total", now, hp.meminfo.total as f64);
+                self.store.push_sample(
+                    host,
+                    None,
+                    "mem_available",
+                    now,
+                    hp.meminfo.available as f64,
+                );
                 self.store
-                    .push_sample(host, None, "mem_available", now, hp.mem_available as f64);
+                    .push_sample(host, None, "swap_total", now, hp.meminfo.swap_total as f64);
+                let swap_free = hp.meminfo.swap_total.saturating_sub(hp.meminfo.swap_used);
                 self.store
-                    .push_sample(host, None, "swap_total", now, hp.swap_total as f64);
-                self.store
-                    .push_sample(host, None, "swap_free", now, hp.swap_free as f64);
+                    .push_sample(host, None, "swap_free", now, swap_free as f64);
             }
             Err(e) => {
                 warn!("host profile collection failed: {e}");
@@ -262,29 +268,36 @@ impl AnalyzeEngine {
             match self.procfs.process_profile(pid) {
                 Ok(profile) => {
                     // Feed process-level metrics into store.
-                    self.store
-                        .push_sample(host, Some(pid), "threads", now, profile.threads as f64);
+                    self.store.push_sample(
+                        host,
+                        Some(pid),
+                        "threads",
+                        now,
+                        profile.status.threads as f64,
+                    );
                     self.store.push_sample(
                         host,
                         Some(pid),
                         "open_fds",
                         now,
-                        profile.open_fds as f64,
+                        profile.fds.count as f64,
                     );
-                    self.store.push_sample(
-                        host,
-                        Some(pid),
-                        "io_read_bytes",
-                        now,
-                        profile.io_read_bytes as f64,
-                    );
-                    self.store.push_sample(
-                        host,
-                        Some(pid),
-                        "io_write_bytes",
-                        now,
-                        profile.io_write_bytes as f64,
-                    );
+                    if let Some(ref io) = profile.io {
+                        self.store.push_sample(
+                            host,
+                            Some(pid),
+                            "io_read_bytes",
+                            now,
+                            io.read_bytes as f64,
+                        );
+                        self.store.push_sample(
+                            host,
+                            Some(pid),
+                            "io_write_bytes",
+                            now,
+                            io.write_bytes as f64,
+                        );
+                    }
                     self.profiles.insert(pid, profile);
                 }
                 Err(e) => {
@@ -509,7 +522,7 @@ mod tests {
         std::fs::write(pid_dir.join("fd/1"), "").unwrap();
         std::fs::write(
             pid_dir.join("status"),
-            "Name:\tfake\nThreads:\t8\nvoluntary_ctxt_switches:\t50\nnonvoluntary_ctxt_switches:\t5\n",
+            "Name:\tfake\nState:\tS (sleeping)\nThreads:\t8\nvoluntary_ctxt_switches:\t50\nnonvoluntary_ctxt_switches:\t5\n",
         )
         .unwrap();
         std::fs::write(
@@ -564,8 +577,11 @@ mod tests {
             "process 42 should have a profile"
         );
         let profile = &engine.profiles()[&42];
-        assert_eq!(profile.threads, 8, "threads from fake /proc/42/status");
-        assert_eq!(profile.open_fds, 2, "fds from fake /proc/42/fd");
+        assert_eq!(
+            profile.status.threads, 8,
+            "threads from fake /proc/42/status"
+        );
+        assert_eq!(profile.fds.count, 2, "fds from fake /proc/42/fd");
 
         // Process-level metrics should be in the store.
         assert!(
