@@ -17,7 +17,7 @@ use crate::RenderError;
 use aether_core::Diagnostic;
 
 use super::arbiter::{ArbiterKeyResult, ArbiterTab};
-use super::diagnostics::DiagnosticsTab;
+use super::diagnostics::{diagnostic_to_agent_action, DiagnosticAction, DiagnosticsTab};
 use super::help::HelpOverlay;
 use super::input::{InputAction, InputHandler, InputMode};
 use super::network::NetworkTab;
@@ -162,6 +162,16 @@ impl App {
         self.diagnostics_source = Some(source);
     }
 
+    /// Look up a diagnostic by ID and submit its recommendation to the arbiter queue.
+    fn submit_diagnostic_to_arbiter(&mut self, diagnostic_id: u64) {
+        let diag = self.diagnostics.iter().find(|d| d.id == diagnostic_id);
+        if let Some(diag) = diag {
+            if let Some(action) = diagnostic_to_agent_action(diag) {
+                self.arbiter.queue_mut().submit("[diag]".into(), action);
+            }
+        }
+    }
+
     /// Run the main event loop until the user quits.
     ///
     /// Polls crossterm events with `tick_rate` timeout, handles input,
@@ -269,10 +279,10 @@ impl App {
         // Diagnostics tab-specific keys (j/k/Enter/d/m) intercepted before
         // the global InputHandler to avoid conflicts.
         if self.current_tab == Tab::Diagnostics && self.input.mode() == InputMode::Normal {
-            // handle_key returns Option<DiagnosticAction>; we consume the key
-            // regardless (navigation keys should not fall through).
-            let _action = self.diagnostics_tab.handle_key(key.code, &self.diagnostics);
-            // TODO: dispatch DiagnosticAction to orchestrator
+            let action = self.diagnostics_tab.handle_key(key.code, &self.diagnostics);
+            if let Some(DiagnosticAction::Execute(id)) = action {
+                self.submit_diagnostic_to_arbiter(id);
+            }
             match key.code {
                 KeyCode::Char('j')
                 | KeyCode::Char('k')
