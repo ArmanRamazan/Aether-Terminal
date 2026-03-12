@@ -35,7 +35,8 @@ impl RecommendationGenerator {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
 
         let evidence = self.build_evidence(finding, store, trend, host);
-        let (action, urgency, auto_executable) = self.rule_action(finding, store, capacity, trend, host);
+        let (action, urgency, auto_executable) =
+            self.rule_action(finding, store, capacity, trend, host);
 
         let target_name = target_display(&finding.target);
         let summary = format!("{target_name}: {}", finding.rule_name);
@@ -188,7 +189,8 @@ impl RecommendationGenerator {
             }
             "thread_explosion" => (
                 RecommendedAction::Investigate {
-                    what: "thread count exceeds 1000, check for thread pool misconfiguration".into(),
+                    what: "thread count exceeds 1000, check for thread pool misconfiguration"
+                        .into(),
                 },
                 Urgency::Soon,
                 false,
@@ -329,7 +331,10 @@ mod tests {
         let diag = gen.generate(&finding, &store, &trend, &cap, &host);
 
         assert!(
-            matches!(diag.recommendation.action, RecommendedAction::ScaleUp { .. }),
+            matches!(
+                diag.recommendation.action,
+                RecommendedAction::ScaleUp { .. }
+            ),
             "expected ScaleUp action"
         );
         assert_eq!(diag.recommendation.urgency, Urgency::Immediate);
@@ -358,7 +363,10 @@ mod tests {
 
         assert_eq!(diag.recommendation.urgency, Urgency::Informational);
         assert!(
-            matches!(diag.recommendation.action, RecommendedAction::NoAction { .. }),
+            matches!(
+                diag.recommendation.action,
+                RecommendedAction::NoAction { .. }
+            ),
             "expected NoAction"
         );
     }
@@ -383,10 +391,7 @@ mod tests {
         let gen = RecommendationGenerator::new();
         let (store, trend, cap, host) = test_deps();
         let mut finding = make_finding("cpu_saturated", Severity::Critical);
-        finding.matched_values = vec![
-            ("cpu_percent".into(), 97.5),
-            ("thread_count".into(), 42.0),
-        ];
+        finding.matched_values = vec![("cpu_percent".into(), 97.5), ("thread_count".into(), 42.0)];
 
         let diag = gen.generate(&finding, &store, &trend, &cap, &host);
 
