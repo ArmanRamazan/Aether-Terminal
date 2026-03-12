@@ -19,6 +19,7 @@ use serde_json::json;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+use aether_core::models::Diagnostic;
 use aether_core::{AgentAction, WorldGraph};
 use aether_predict::models::PredictedAnomaly;
 
@@ -32,6 +33,7 @@ const TOOL_INSPECT_PROCESS: &str = "inspect_process";
 const TOOL_LIST_ANOMALIES: &str = "list_anomalies";
 const TOOL_EXECUTE_ACTION: &str = "execute_action";
 const TOOL_PREDICT_ANOMALIES: &str = "predict_anomalies";
+const TOOL_GET_DIAGNOSTICS: &str = "get_diagnostics";
 
 /// MCP server exposing system data as tools for AI agents.
 #[allow(dead_code)]
@@ -40,6 +42,7 @@ pub struct McpServer {
     arbiter: Arc<Mutex<ArbiterQueue>>,
     action_tx: mpsc::Sender<AgentAction>,
     predictions: Arc<Mutex<Vec<PredictedAnomaly>>>,
+    diagnostics: Arc<Mutex<Vec<Diagnostic>>>,
 }
 
 impl McpServer {
@@ -49,12 +52,14 @@ impl McpServer {
         arbiter: Arc<Mutex<ArbiterQueue>>,
         action_tx: mpsc::Sender<AgentAction>,
         predictions: Arc<Mutex<Vec<PredictedAnomaly>>>,
+        diagnostics: Arc<Mutex<Vec<Diagnostic>>>,
     ) -> Self {
         Self {
             world,
             arbiter,
             action_tx,
             predictions,
+            diagnostics,
         }
     }
 
@@ -133,6 +138,11 @@ pub(crate) fn tool_definitions() -> Vec<Tool> {
             "Get AI-predicted anomalies with confidence scores and ETAs",
             empty_schema(),
         ),
+        Tool::new(
+            TOOL_GET_DIAGNOSTICS,
+            "Get system diagnostics with optional filtering by host, severity, and category",
+            diagnostics_schema(),
+        ),
     ]
 }
 
@@ -205,6 +215,23 @@ pub(crate) fn dispatch_tool(
                 result.to_string(),
             )]))
         }
+        TOOL_GET_DIAGNOSTICS => {
+            let args = request.arguments.as_ref();
+            let host = args
+                .and_then(|a| a.get("host"))
+                .and_then(|v| v.as_str());
+            let severity = args
+                .and_then(|a| a.get("severity"))
+                .and_then(|v| v.as_str());
+            let category = args
+                .and_then(|a| a.get("category"))
+                .and_then(|v| v.as_str());
+            let result =
+                crate::tools::get_diagnostics(&server.diagnostics, host, severity, category);
+            Ok(CallToolResult::success(vec![Content::text(
+                result.to_string(),
+            )]))
+        }
         other => Err(RmcpError::new(
             rmcp::model::ErrorCode::METHOD_NOT_FOUND,
             format!("unknown tool: {other}"),
@@ -227,6 +254,31 @@ fn pid_schema() -> serde_json::Map<String, serde_json::Value> {
             json!({"pid": {"type": "integer", "description": "Process ID"}}),
         ),
         ("required".to_owned(), json!(["pid"])),
+    ])
+}
+
+/// JSON Schema for get_diagnostics: optional host, severity, category filters.
+fn diagnostics_schema() -> serde_json::Map<String, serde_json::Value> {
+    serde_json::Map::from_iter([
+        ("type".to_owned(), json!("object")),
+        (
+            "properties".to_owned(),
+            json!({
+                "host": {
+                    "type": "string",
+                    "description": "Filter by host identifier"
+                },
+                "severity": {
+                    "type": "string",
+                    "enum": ["critical", "warning", "info"],
+                    "description": "Filter by severity level"
+                },
+                "category": {
+                    "type": "string",
+                    "description": "Filter by diagnostic category (e.g. MemoryLeak, CpuSpike)"
+                }
+            }),
+        ),
     ])
 }
 
@@ -261,7 +313,8 @@ mod tests {
         let arbiter = Arc::new(Mutex::new(ArbiterQueue::default()));
         let (action_tx, _rx) = mpsc::channel(16);
         let predictions = Arc::new(Mutex::new(Vec::new()));
-        McpServer::new(world, arbiter, action_tx, predictions)
+        let diagnostics = Arc::new(Mutex::new(Vec::new()));
+        McpServer::new(world, arbiter, action_tx, predictions, diagnostics)
     }
 
     fn make_call(name: &'static str) -> CallToolRequestParams {
@@ -283,12 +336,13 @@ mod tests {
     fn test_tool_list_includes_all_tools() {
         let tools = tool_definitions();
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
-        assert_eq!(names.len(), 5);
+        assert_eq!(names.len(), 6);
         assert!(names.contains(&"get_system_topology"));
         assert!(names.contains(&"inspect_process"));
         assert!(names.contains(&"list_anomalies"));
         assert!(names.contains(&"execute_action"));
         assert!(names.contains(&"predict_anomalies"));
+        assert!(names.contains(&"get_diagnostics"));
     }
 
     #[test]

@@ -4,7 +4,7 @@ use std::sync::{Mutex, RwLock};
 
 use serde_json::{json, Value};
 
-use aether_core::models::ProcessState;
+use aether_core::models::{Diagnostic, ProcessState, Severity};
 use aether_core::{AgentAction, WorldGraph};
 use aether_predict::models::PredictedAnomaly;
 
@@ -286,6 +286,116 @@ pub(crate) fn predict_anomalies(predictions: &Mutex<Vec<PredictedAnomaly>>) -> V
         "total": total,
         "model_status": model_status,
     })
+}
+
+/// Return diagnostics filtered by optional host, severity, and category.
+///
+/// Serializes each `Diagnostic` to JSON, converting `Instant` fields to
+/// elapsed-seconds strings. Includes per-severity stats.
+pub(crate) fn get_diagnostics(
+    diagnostics: &Mutex<Vec<Diagnostic>>,
+    host: Option<&str>,
+    severity: Option<&str>,
+    category: Option<&str>,
+) -> Value {
+    let diags = diagnostics.lock().expect("diagnostics lock poisoned");
+
+    let parsed_severity = severity.and_then(parse_severity);
+
+    let items: Vec<Value> = diags
+        .iter()
+        .filter(|d| {
+            if let Some(h) = host {
+                if d.host.as_str() != h {
+                    return false;
+                }
+            }
+            if let Some(sev) = parsed_severity {
+                if d.severity != sev {
+                    return false;
+                }
+            }
+            if let Some(cat) = category {
+                if !format!("{:?}", d.category).eq_ignore_ascii_case(cat) {
+                    return false;
+                }
+            }
+            true
+        })
+        .map(serialize_diagnostic)
+        .collect();
+
+    let (critical, warning, info) = count_severities(&items);
+    let total = items.len();
+
+    json!({
+        "diagnostics": items,
+        "stats": {
+            "critical": critical,
+            "warning": warning,
+            "info": info,
+            "total": total,
+        }
+    })
+}
+
+/// Parse a severity filter string into a `Severity` variant.
+fn parse_severity(s: &str) -> Option<Severity> {
+    match s.to_ascii_lowercase().as_str() {
+        "critical" => Some(Severity::Critical),
+        "warning" => Some(Severity::Warning),
+        "info" => Some(Severity::Info),
+        _ => None,
+    }
+}
+
+/// Serialize a single `Diagnostic` to JSON.
+fn serialize_diagnostic(d: &Diagnostic) -> Value {
+    let elapsed = d.detected_at.elapsed();
+    let elapsed_str = format!("{:.1}s ago", elapsed.as_secs_f64());
+
+    let target_str = format!("{:?}", d.target);
+
+    let evidence: Vec<Value> = d
+        .evidence
+        .iter()
+        .map(|e| {
+            json!({
+                "metric": e.metric,
+                "current": e.current,
+                "threshold": e.threshold,
+                "context": e.context,
+            })
+        })
+        .collect();
+
+    json!({
+        "id": d.id,
+        "host": d.host.as_str(),
+        "target": target_str,
+        "severity": format!("{:?}", d.severity),
+        "category": format!("{:?}", d.category),
+        "summary": d.summary,
+        "evidence": evidence,
+        "recommendation": format!("{:?}", d.recommendation.action),
+        "detected": elapsed_str,
+    })
+}
+
+/// Count diagnostics by severity from serialized items.
+fn count_severities(items: &[Value]) -> (usize, usize, usize) {
+    let mut critical = 0;
+    let mut warning = 0;
+    let mut info = 0;
+    for item in items {
+        match item["severity"].as_str() {
+            Some("Critical") => critical += 1,
+            Some("Warning") => warning += 1,
+            Some("Info") => info += 1,
+            _ => {}
+        }
+    }
+    (critical, warning, info)
 }
 
 #[cfg(test)]
@@ -690,5 +800,123 @@ mod tests {
             assert_eq!(result["status"], "pending_approval");
         }
         assert_eq!(queue.lock().unwrap().pending().len(), 3);
+    }
+
+    // --- get_diagnostics tests ---
+
+    use aether_core::models::{
+        DiagCategory, DiagTarget, Evidence, Recommendation, RecommendedAction, Severity, Urgency,
+    };
+    use aether_core::metrics::HostId;
+    use std::time::Instant;
+
+    fn make_diagnostic(id: u64, host: &str, severity: Severity, category: DiagCategory) -> Diagnostic {
+        Diagnostic {
+            id,
+            host: HostId::new(host),
+            target: DiagTarget::Host(HostId::new(host)),
+            severity,
+            category,
+            summary: format!("test diagnostic {id}"),
+            evidence: vec![Evidence {
+                metric: "cpu_percent".into(),
+                current: 95.0,
+                threshold: 80.0,
+                trend: None,
+                context: "high cpu".into(),
+            }],
+            recommendation: Recommendation {
+                action: RecommendedAction::Investigate {
+                    what: "cpu usage".into(),
+                },
+                reason: "cpu too high".into(),
+                urgency: Urgency::Soon,
+                auto_executable: false,
+            },
+            detected_at: Instant::now(),
+            resolved_at: None,
+        }
+    }
+
+    #[test]
+    fn test_get_diagnostics_returns_all_unfiltered() {
+        let diags = Mutex::new(vec![
+            make_diagnostic(1, "host-a", Severity::Critical, DiagCategory::CpuSpike),
+            make_diagnostic(2, "host-b", Severity::Warning, DiagCategory::MemoryLeak),
+        ]);
+
+        let result = get_diagnostics(&diags, None, None, None);
+        let items = result["diagnostics"].as_array().expect("array");
+        assert_eq!(items.len(), 2);
+        assert_eq!(result["stats"]["total"], 2);
+        assert_eq!(result["stats"]["critical"], 1);
+        assert_eq!(result["stats"]["warning"], 1);
+    }
+
+    #[test]
+    fn test_get_diagnostics_filters_by_host() {
+        let diags = Mutex::new(vec![
+            make_diagnostic(1, "host-a", Severity::Critical, DiagCategory::CpuSpike),
+            make_diagnostic(2, "host-b", Severity::Warning, DiagCategory::MemoryLeak),
+        ]);
+
+        let result = get_diagnostics(&diags, Some("host-a"), None, None);
+        let items = result["diagnostics"].as_array().expect("array");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["host"], "host-a");
+    }
+
+    #[test]
+    fn test_get_diagnostics_filters_by_severity() {
+        let diags = Mutex::new(vec![
+            make_diagnostic(1, "local", Severity::Critical, DiagCategory::CpuSpike),
+            make_diagnostic(2, "local", Severity::Warning, DiagCategory::MemoryLeak),
+            make_diagnostic(3, "local", Severity::Info, DiagCategory::CapacityRisk),
+        ]);
+
+        let result = get_diagnostics(&diags, None, Some("warning"), None);
+        let items = result["diagnostics"].as_array().expect("array");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["severity"], "Warning");
+    }
+
+    #[test]
+    fn test_get_diagnostics_filters_by_category() {
+        let diags = Mutex::new(vec![
+            make_diagnostic(1, "local", Severity::Critical, DiagCategory::CpuSpike),
+            make_diagnostic(2, "local", Severity::Warning, DiagCategory::MemoryLeak),
+        ]);
+
+        let result = get_diagnostics(&diags, None, None, Some("CpuSpike"));
+        let items = result["diagnostics"].as_array().expect("array");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["category"], "CpuSpike");
+    }
+
+    #[test]
+    fn test_get_diagnostics_empty_returns_zero_stats() {
+        let diags = Mutex::new(Vec::new());
+        let result = get_diagnostics(&diags, None, None, None);
+        assert_eq!(result["stats"]["total"], 0);
+        assert_eq!(result["stats"]["critical"], 0);
+        assert_eq!(result["stats"]["warning"], 0);
+        assert_eq!(result["stats"]["info"], 0);
+    }
+
+    #[test]
+    fn test_get_diagnostics_serializes_fields() {
+        let diags = Mutex::new(vec![
+            make_diagnostic(42, "prod-1", Severity::Critical, DiagCategory::MemoryPressure),
+        ]);
+
+        let result = get_diagnostics(&diags, None, None, None);
+        let item = &result["diagnostics"][0];
+        assert_eq!(item["id"], 42);
+        assert_eq!(item["host"], "prod-1");
+        assert_eq!(item["severity"], "Critical");
+        assert_eq!(item["category"], "MemoryPressure");
+        assert!(item["summary"].as_str().unwrap().contains("42"));
+        assert!(item["detected"].as_str().unwrap().contains("s ago"));
+        assert!(item["evidence"].is_array());
     }
 }

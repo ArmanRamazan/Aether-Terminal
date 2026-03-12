@@ -392,6 +392,7 @@ async fn main() -> anyhow::Result<()> {
             Arc::clone(&arbiter),
             action_tx,
             Arc::clone(&predictions),
+            Arc::clone(&diagnostics),
         );
         let result = mcp.run_stdio(cancel.child_token()).await;
         cancel.cancel();
@@ -406,6 +407,7 @@ async fn main() -> anyhow::Result<()> {
             Arc::clone(&arbiter),
             action_tx,
             Arc::clone(&predictions),
+            Arc::clone(&diagnostics),
         );
         let sse_cancel = cancel.child_token();
         tokio::spawn(async move {

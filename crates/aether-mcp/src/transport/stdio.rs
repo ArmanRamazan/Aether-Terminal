@@ -67,7 +67,8 @@ mod tests {
         let arbiter = Arc::new(Mutex::new(ArbiterQueue::default()));
         let (action_tx, _rx) = mpsc::channel::<AgentAction>(16);
         let predictions = Arc::new(Mutex::new(Vec::new()));
-        McpServer::new(world, arbiter, action_tx, predictions)
+        let diagnostics = Arc::new(Mutex::new(Vec::new()));
+        McpServer::new(world, arbiter, action_tx, predictions, diagnostics)
     }
 
     /// Send a JSON-RPC line and read the response line.
@@ -184,7 +185,7 @@ mod tests {
         assert_eq!(response["jsonrpc"], "2.0");
         assert_eq!(response["id"], 2);
         let tools = response["result"]["tools"].as_array().expect("tools array");
-        assert_eq!(tools.len(), 5, "expected 5 tools");
+        assert_eq!(tools.len(), 6, "expected 6 tools");
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"get_system_topology"));
         assert!(names.contains(&"inspect_process"));
