@@ -1,5 +1,7 @@
 import { useMemo, useState } from "react";
-import type { Process } from "../types";
+import { useNavigate } from "react-router-dom";
+import type { Diagnostic, Process } from "../types";
+import { useWorldStore } from "../stores/worldStore";
 
 type SortKey = "pid" | "name" | "cpu_percent" | "mem_bytes" | "state" | "hp" | "xp";
 type SortDir = "asc" | "desc";
@@ -11,14 +13,36 @@ interface ProcessTableProps {
 }
 
 const columns: { key: SortKey; label: string; width: string }[] = [
-  { key: "pid", label: "PID", width: "8%" },
-  { key: "name", label: "Name", width: "22%" },
-  { key: "cpu_percent", label: "CPU%", width: "16%" },
-  { key: "mem_bytes", label: "Memory", width: "16%" },
-  { key: "state", label: "State", width: "12%" },
-  { key: "hp", label: "HP", width: "13%" },
-  { key: "xp", label: "XP", width: "13%" },
+  { key: "pid", label: "PID", width: "7%" },
+  { key: "name", label: "Name", width: "19%" },
+  { key: "cpu_percent", label: "CPU%", width: "14%" },
+  { key: "mem_bytes", label: "Memory", width: "14%" },
+  { key: "state", label: "State", width: "10%" },
+  { key: "hp", label: "HP", width: "10%" },
+  { key: "xp", label: "XP", width: "10%" },
 ];
+
+const severityConfig = {
+  critical: { icon: "■", color: "#ef4444" },
+  warning: { icon: "■", color: "#eab308" },
+  info: { icon: "●", color: "#60a5fa" },
+} as const;
+
+const severityRank = { critical: 0, warning: 1, info: 2 } as const;
+
+function matchDiagnostics(diagnostics: Diagnostic[], proc: Process): Diagnostic[] {
+  return diagnostics.filter(
+    (d) =>
+      d.target_type === "process" &&
+      (d.target_name.includes(proc.name) || d.target_name.includes(String(proc.pid))),
+  );
+}
+
+function highestSeverity(diags: Diagnostic[]): Diagnostic {
+  return diags.reduce((best, d) =>
+    severityRank[d.severity] < severityRank[best.severity] ? d : best,
+  );
+}
 
 function stateBadge(state: string): React.CSSProperties {
   const base: React.CSSProperties = {
@@ -89,6 +113,8 @@ function InlineBar({ value, max, color }: { value: number; max: number; color: s
 }
 
 export function ProcessTable({ processes, selectedPid, onSelect }: ProcessTableProps) {
+  const diagnostics = useWorldStore((s) => s.diagnostics);
+  const navigate = useNavigate();
   const [sortKey, setSortKey] = useState<SortKey>("cpu_percent");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [filter, setFilter] = useState("");
@@ -187,12 +213,32 @@ export function ProcessTable({ processes, selectedPid, onSelect }: ProcessTableP
                   )}
                 </th>
               ))}
+              <th
+                style={{
+                  width: "16%",
+                  padding: "8px 12px",
+                  textAlign: "left",
+                  color: "#8b8baf",
+                  borderBottom: "1px solid #1e1e3a",
+                  position: "sticky",
+                  top: 0,
+                  background: "#0d0d18",
+                  fontSize: 11,
+                  fontWeight: 700,
+                  letterSpacing: 1,
+                  textTransform: "uppercase",
+                }}
+              >
+                Diag
+              </th>
             </tr>
           </thead>
           <tbody>
             {sorted.map((proc) => {
               const isSelected = proc.pid === selectedPid;
               const isHovered = proc.pid === hoveredPid;
+              const procDiags = matchDiagnostics(diagnostics, proc);
+              const topDiag = procDiags.length > 0 ? highestSeverity(procDiags) : null;
               return (
                 <tr
                   key={proc.pid}
@@ -239,6 +285,28 @@ export function ProcessTable({ processes, selectedPid, onSelect }: ProcessTableP
                     {proc.hp.toFixed(0)}
                   </td>
                   <td style={cellStyle}>{proc.xp.toFixed(0)}</td>
+                  <td style={cellStyle}>
+                    {topDiag && (
+                      <span
+                        title={topDiag.summary}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          navigate(`/diagnostics?id=${topDiag.id}`);
+                        }}
+                        style={{
+                          cursor: "pointer",
+                          color: severityConfig[topDiag.severity].color,
+                          fontSize: 12,
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {severityConfig[topDiag.severity].icon}{" "}
+                        {topDiag.summary.length > 15
+                          ? topDiag.summary.slice(0, 15) + "…"
+                          : topDiag.summary}
+                      </span>
+                    )}
+                  </td>
                 </tr>
               );
             })}

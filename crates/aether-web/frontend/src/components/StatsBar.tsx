@@ -1,3 +1,4 @@
+import { useNavigate } from "react-router-dom";
 import { useWorldStore } from "../stores/worldStore";
 
 function cpuColor(percent: number): string {
@@ -24,6 +25,8 @@ function formatBytes(bytes: number): string {
 
 export function StatsBar() {
   const stats = useWorldStore((s) => s.stats);
+  const diagStats = useWorldStore((s) => s.diagnosticStats);
+  const navigate = useNavigate();
 
   return (
     <div
@@ -58,6 +61,26 @@ export function StatsBar() {
           {stats.avg_hp.toFixed(1)}
         </span>
       </span>
+      {(diagStats.critical > 0 || diagStats.warning > 0) && (
+        <span
+          onClick={() => navigate("/diagnostics")}
+          style={{ cursor: "pointer", userSelect: "none" }}
+        >
+          {diagStats.critical > 0 && (
+            <span style={{ color: "#ef4444" }}>
+              ■ {diagStats.critical} Critical
+            </span>
+          )}
+          {diagStats.critical > 0 && diagStats.warning > 0 && (
+            <span style={{ color: "#6b728a" }}> </span>
+          )}
+          {diagStats.warning > 0 && (
+            <span style={{ color: "#eab308" }}>
+              ■ {diagStats.warning} Warning
+            </span>
+          )}
+        </span>
+      )}
     </div>
   );
 }
