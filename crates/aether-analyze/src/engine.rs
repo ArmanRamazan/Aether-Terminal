@@ -306,8 +306,17 @@ impl AnalyzeEngine {
             }
 
             match self.cgroup.limits(pid) {
-                Ok(limits) => {
-                    limits_map.insert(pid, limits);
+                Ok(Some(cg_limits)) => {
+                    let fd_info = self
+                        .profiles
+                        .get(&pid)
+                        .map(|p| &p.fds)
+                        .cloned()
+                        .unwrap_or_default();
+                    limits_map.insert(pid, self.cgroup.to_process_limits(&cg_limits, &fd_info));
+                }
+                Ok(None) => {
+                    debug!(pid, "no cgroup path found (bare metal)");
                 }
                 Err(e) => {
                     debug!(pid, "cgroup limits collection failed: {e}");
