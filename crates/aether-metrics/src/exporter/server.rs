@@ -10,6 +10,7 @@ use super::encode::encode_openmetrics;
 use super::registry::{LabelSet, MetricDesc, MetricRegistry, MetricType};
 
 /// Prometheus-compatible metrics exporter with HTTP server.
+#[derive(Clone)]
 pub struct MetricsExporter {
     registry: Arc<RwLock<MetricRegistry>>,
 }
