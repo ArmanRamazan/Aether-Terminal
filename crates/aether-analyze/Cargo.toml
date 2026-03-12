@@ -10,6 +10,7 @@ thiserror = "2"
 tracing = "0.1"
 tokio-util = "0.7"
 serde = { version = "1", features = ["derive"] }
+libc = "0.2"
 
 [dev-dependencies]
 glam = "0.29"
