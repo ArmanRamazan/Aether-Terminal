@@ -55,6 +55,7 @@ async fn handle_socket(socket: WebSocket, state: SharedState) {
         loop {
             interval.tick().await;
             let update = build_world_update(&push_state);
+            record_metrics(&push_state, &update);
             let json = match serde_json::to_string(&update) {
                 Ok(j) => j,
                 Err(e) => {
@@ -155,6 +156,19 @@ fn build_world_update(state: &SharedState) -> WorldUpdate {
         diagnostic_stats,
         timestamp,
     }
+}
+
+/// Record current stats into the metric store for historical queries.
+fn record_metrics(state: &SharedState, update: &WorldUpdate) {
+    let mut store = state.metrics.lock().expect("metrics lock poisoned");
+    let ts = update.timestamp;
+    store.push("cpu", ts, update.stats.total_cpu as f64);
+    store.push("memory", ts, update.stats.total_memory as f64);
+    store.push("process_count", ts, update.stats.process_count as f64);
+    store.push("avg_hp", ts, update.stats.avg_hp as f64);
+    store.push("diagnostics_critical", ts, update.diagnostic_stats.critical as f64);
+    store.push("diagnostics_warning", ts, update.diagnostic_stats.warning as f64);
+    store.push("diagnostics_info", ts, update.diagnostic_stats.info as f64);
 }
 
 fn handle_client_message(msg: ClientMessage, state: &SharedState) {

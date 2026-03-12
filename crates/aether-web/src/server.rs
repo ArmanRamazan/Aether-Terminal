@@ -34,6 +34,8 @@ pub fn router(state: SharedState) -> Router {
         .route("/api/arbiter/pending", get(api::list_pending_actions))
         .route("/api/arbiter/{id}/approve", post(api::approve_action))
         .route("/api/arbiter/{id}/deny", post(api::deny_action))
+        .route("/api/metrics/summary", get(api::get_metrics_summary))
+        .route("/api/metrics/history", get(api::get_metrics_history))
         .route("/api/diagnostics", get(api::list_diagnostics))
         .route("/api/diagnostics/stats", get(api::get_diagnostic_stats))
         .route("/api/diagnostics/{id}", get(api::get_diagnostic))

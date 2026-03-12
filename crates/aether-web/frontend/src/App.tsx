@@ -6,6 +6,7 @@ import { Graph3DPage } from "./pages/Graph3DPage";
 import { NetworkPage } from "./pages/NetworkPage";
 import { ArbiterPage } from "./pages/ArbiterPage";
 import { DiagnosticsPage } from "./pages/DiagnosticsPage";
+import { MetricsPage } from "./pages/MetricsPage";
 
 function AppRoutes() {
   useWorldState();
@@ -18,6 +19,7 @@ function AppRoutes() {
         <Route path="/network" element={<NetworkPage />} />
         <Route path="/arbiter" element={<ArbiterPage />} />
         <Route path="/diagnostics" element={<DiagnosticsPage />} />
+        <Route path="/metrics" element={<MetricsPage />} />
       </Route>
     </Routes>
   );
