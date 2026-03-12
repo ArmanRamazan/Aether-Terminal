@@ -432,6 +432,7 @@ async fn main() -> anyhow::Result<()> {
         let web_state = aether_web::SharedState::new(
             Arc::clone(&world),
             Arc::new(Mutex::new(aether_core::ArbiterQueue::default())),
+            Arc::clone(&diagnostics),
         );
         let web_cancel = cancel.child_token();
         tokio::spawn(async move {

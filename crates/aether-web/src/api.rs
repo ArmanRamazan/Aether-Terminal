@@ -1,10 +1,11 @@
-//! REST API handlers for process, connection, stats, and arbiter endpoints.
+//! REST API handlers for process, connection, stats, arbiter, and diagnostic endpoints.
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
+use aether_core::models::Diagnostic;
 use aether_core::AgentAction;
 
 use crate::state::SharedState;
@@ -57,6 +58,53 @@ pub struct ArbiterActionResponse {
     pub id: usize,
     pub source: String,
     pub action: String,
+}
+
+/// JSON representation of a diagnostic finding.
+#[derive(Debug, Clone, Serialize)]
+pub struct DiagnosticResponse {
+    pub id: u64,
+    pub host: String,
+    pub target_type: String,
+    pub target_name: String,
+    pub severity: String,
+    pub category: String,
+    pub summary: String,
+    pub evidence: Vec<EvidenceResponse>,
+    pub recommendation: RecommendationResponse,
+}
+
+/// A single piece of evidence in a diagnostic.
+#[derive(Debug, Clone, Serialize)]
+pub struct EvidenceResponse {
+    pub metric: String,
+    pub current: f64,
+    pub threshold: f64,
+    pub context: String,
+}
+
+/// Recommended action for a diagnostic.
+#[derive(Debug, Clone, Serialize)]
+pub struct RecommendationResponse {
+    pub action: String,
+    pub reason: String,
+    pub urgency: String,
+}
+
+/// Aggregate diagnostic severity counts.
+#[derive(Debug, Clone, Serialize)]
+pub struct DiagnosticStatsResponse {
+    pub critical: u32,
+    pub warning: u32,
+    pub info: u32,
+    pub total: u32,
+}
+
+/// Query parameters for filtering diagnostics.
+#[derive(Debug, Deserialize)]
+pub struct DiagnosticFilter {
+    pub severity: Option<String>,
+    pub host: Option<String>,
 }
 
 // ── Handlers ──────────────────────────────────────────────────────────
@@ -183,6 +231,89 @@ pub async fn deny_action(
     }
 }
 
+// ── Diagnostic Handlers ──────────────────────────────────────────────
+
+/// GET /api/diagnostics — all diagnostics, optionally filtered.
+pub async fn list_diagnostics(
+    State(state): State<SharedState>,
+    Query(filter): Query<DiagnosticFilter>,
+) -> Json<Vec<DiagnosticResponse>> {
+    let diags = state.diagnostics.lock().expect("diagnostics lock poisoned");
+    let results = diags
+        .iter()
+        .filter(|d| {
+            if let Some(ref sev) = filter.severity {
+                if format!("{:?}", d.severity).to_lowercase() != sev.to_lowercase() {
+                    return false;
+                }
+            }
+            if let Some(ref host) = filter.host {
+                if d.host.as_str() != host {
+                    return false;
+                }
+            }
+            true
+        })
+        .map(diagnostic_to_response)
+        .collect();
+    Json(results)
+}
+
+/// GET /api/diagnostics/stats — severity counts.
+pub async fn get_diagnostic_stats(
+    State(state): State<SharedState>,
+) -> Json<DiagnosticStatsResponse> {
+    let diags = state.diagnostics.lock().expect("diagnostics lock poisoned");
+    Json(compute_diagnostic_stats(&diags))
+}
+
+/// GET /api/diagnostics/:id — single diagnostic detail.
+pub async fn get_diagnostic(
+    State(state): State<SharedState>,
+    Path(id): Path<u64>,
+) -> Result<Json<DiagnosticResponse>, StatusCode> {
+    let diags = state.diagnostics.lock().expect("diagnostics lock poisoned");
+    let diag = diags.iter().find(|d| d.id == id).ok_or(StatusCode::NOT_FOUND)?;
+    Ok(Json(diagnostic_to_response(diag)))
+}
+
+/// POST /api/diagnostics/:id/dismiss — remove a diagnostic.
+pub async fn dismiss_diagnostic(
+    State(state): State<SharedState>,
+    Path(id): Path<u64>,
+) -> StatusCode {
+    let mut diags = state.diagnostics.lock().expect("diagnostics lock poisoned");
+    let before = diags.len();
+    diags.retain(|d| d.id != id);
+    if diags.len() < before {
+        StatusCode::OK
+    } else {
+        StatusCode::NOT_FOUND
+    }
+}
+
+/// POST /api/diagnostics/:id/execute — queue diagnostic action in arbiter.
+pub async fn execute_diagnostic(
+    State(state): State<SharedState>,
+    Path(id): Path<u64>,
+) -> StatusCode {
+    let diags = state.diagnostics.lock().expect("diagnostics lock poisoned");
+    let diag = match diags.iter().find(|d| d.id == id) {
+        Some(d) => d,
+        None => return StatusCode::NOT_FOUND,
+    };
+
+    let agent_action = recommended_to_agent_action(&diag.recommendation.action);
+    let Some(action) = agent_action else {
+        return StatusCode::UNPROCESSABLE_ENTITY;
+    };
+
+    drop(diags);
+    let mut arbiter = state.arbiter.lock().expect("arbiter lock poisoned");
+    arbiter.submit("diagnostic-engine".to_string(), action);
+    StatusCode::OK
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────
 
 fn process_to_response(p: &aether_core::ProcessNode) -> ProcessResponse {
@@ -208,6 +339,83 @@ fn format_action(action: &AgentAction) -> String {
     }
 }
 
+pub(crate) fn diagnostic_to_response(d: &Diagnostic) -> DiagnosticResponse {
+    use aether_core::models::DiagTarget;
+
+    let (target_type, target_name) = match &d.target {
+        DiagTarget::Process { pid, name } => ("process".to_string(), format!("{name} (pid {pid})")),
+        DiagTarget::Host(id) => ("host".to_string(), id.as_str().to_string()),
+        DiagTarget::Container { id, name } => ("container".to_string(), format!("{name} ({id})")),
+        DiagTarget::Disk { mount } => ("disk".to_string(), mount.clone()),
+        DiagTarget::Network { interface } => ("network".to_string(), interface.clone()),
+        _ => ("unknown".to_string(), "unknown".to_string()),
+    };
+
+    DiagnosticResponse {
+        id: d.id,
+        host: d.host.as_str().to_string(),
+        target_type,
+        target_name,
+        severity: format!("{:?}", d.severity).to_lowercase(),
+        category: format!("{:?}", d.category),
+        summary: d.summary.clone(),
+        evidence: d
+            .evidence
+            .iter()
+            .map(|e| EvidenceResponse {
+                metric: e.metric.clone(),
+                current: e.current,
+                threshold: e.threshold,
+                context: e.context.clone(),
+            })
+            .collect(),
+        recommendation: RecommendationResponse {
+            action: format!("{:?}", d.recommendation.action),
+            reason: d.recommendation.reason.clone(),
+            urgency: format!("{:?}", d.recommendation.urgency),
+        },
+    }
+}
+
+pub(crate) fn compute_diagnostic_stats(diags: &[Diagnostic]) -> DiagnosticStatsResponse {
+    use aether_core::models::Severity;
+
+    let mut critical = 0u32;
+    let mut warning = 0u32;
+    let mut info = 0u32;
+    for d in diags {
+        match d.severity {
+            Severity::Critical => critical += 1,
+            Severity::Warning => warning += 1,
+            Severity::Info => info += 1,
+        }
+    }
+    DiagnosticStatsResponse {
+        critical,
+        warning,
+        info,
+        total: critical + warning + info,
+    }
+}
+
+fn recommended_to_agent_action(
+    action: &aether_core::models::RecommendedAction,
+) -> Option<AgentAction> {
+    use aether_core::models::RecommendedAction;
+
+    match action {
+        RecommendedAction::KillProcess { pid, .. } => Some(AgentAction::KillProcess { pid: *pid }),
+        RecommendedAction::Restart { reason } => {
+            Some(AgentAction::RestartService { name: reason.clone() })
+        }
+        RecommendedAction::Investigate { what } => {
+            Some(AgentAction::CustomScript { command: format!("investigate: {what}") })
+        }
+        RecommendedAction::NoAction { .. } => None,
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -217,8 +425,11 @@ mod tests {
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
 
+    use std::time::Instant;
+
     use aether_core::models::{
-        ConnectionState, NetworkEdge, ProcessNode, ProcessState, Protocol,
+        ConnectionState, DiagCategory, DiagTarget, Diagnostic, Evidence, NetworkEdge, ProcessNode,
+        ProcessState, Protocol, RecommendedAction, Recommendation, Severity, Urgency,
     };
     use aether_core::{ArbiterQueue, WorldGraph};
     use glam::Vec3;
@@ -254,6 +465,7 @@ mod tests {
         SharedState::new(
             Arc::new(RwLock::new(WorldGraph::new())),
             Arc::new(Mutex::new(ArbiterQueue::default())),
+            Arc::new(Mutex::new(Vec::new())),
         )
     }
 
@@ -400,5 +612,136 @@ mod tests {
         assert_eq!(json[0]["to_pid"], 2);
         assert_eq!(json[0]["protocol"], "TCP");
         assert_eq!(json[0]["bytes_per_sec"], 1024);
+    }
+
+    fn make_diagnostic(id: u64, severity: Severity, host: &str) -> Diagnostic {
+        use aether_core::metrics::HostId;
+
+        Diagnostic {
+            id,
+            host: HostId::new(host),
+            target: DiagTarget::Process {
+                pid: 42,
+                name: "nginx".to_string(),
+            },
+            severity,
+            category: DiagCategory::CpuSpike,
+            summary: format!("test diagnostic {id}"),
+            evidence: vec![Evidence {
+                metric: "cpu_percent".to_string(),
+                current: 95.0,
+                threshold: 80.0,
+                trend: None,
+                context: "high cpu".to_string(),
+            }],
+            recommendation: Recommendation {
+                action: RecommendedAction::Investigate {
+                    what: "cpu usage".to_string(),
+                },
+                reason: "cpu above threshold".to_string(),
+                urgency: Urgency::Soon,
+                auto_executable: false,
+            },
+            detected_at: Instant::now(),
+            resolved_at: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_diagnostics_endpoint_returns_array() {
+        let state = test_state();
+        {
+            let mut diags = state.diagnostics.lock().unwrap();
+            diags.push(make_diagnostic(1, Severity::Warning, "host-1"));
+            diags.push(make_diagnostic(2, Severity::Critical, "host-1"));
+        }
+
+        let app = router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/diagnostics")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json.len(), 2, "should return 2 diagnostics");
+        assert_eq!(json[0]["id"], 1);
+        assert_eq!(json[1]["id"], 2);
+        assert_eq!(json[0]["severity"], "warning");
+        assert_eq!(json[1]["severity"], "critical");
+    }
+
+    #[tokio::test]
+    async fn test_diagnostics_stats_counts() {
+        let state = test_state();
+        {
+            let mut diags = state.diagnostics.lock().unwrap();
+            diags.push(make_diagnostic(1, Severity::Info, "h"));
+            diags.push(make_diagnostic(2, Severity::Warning, "h"));
+            diags.push(make_diagnostic(3, Severity::Critical, "h"));
+            diags.push(make_diagnostic(4, Severity::Critical, "h"));
+        }
+
+        let app = router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/diagnostics/stats")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["critical"], 2);
+        assert_eq!(json["warning"], 1);
+        assert_eq!(json["info"], 1);
+        assert_eq!(json["total"], 4);
+    }
+
+    #[tokio::test]
+    async fn test_diagnostics_filter_by_severity() {
+        let state = test_state();
+        {
+            let mut diags = state.diagnostics.lock().unwrap();
+            diags.push(make_diagnostic(1, Severity::Info, "h"));
+            diags.push(make_diagnostic(2, Severity::Critical, "h"));
+            diags.push(make_diagnostic(3, Severity::Critical, "h"));
+        }
+
+        let app = router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/diagnostics?severity=critical")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json.len(), 2, "only critical diagnostics returned");
+        assert!(json.iter().all(|d| d["severity"] == "critical"));
     }
 }

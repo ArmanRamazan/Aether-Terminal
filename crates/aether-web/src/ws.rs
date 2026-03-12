@@ -7,7 +7,10 @@ use axum::extract::{State, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 
-use crate::api::{ConnectionResponse, ProcessResponse, StatsResponse};
+use crate::api::{
+    compute_diagnostic_stats, diagnostic_to_response, ConnectionResponse, DiagnosticResponse,
+    DiagnosticStatsResponse, ProcessResponse, StatsResponse,
+};
 use crate::state::SharedState;
 
 const PUSH_INTERVAL: Duration = Duration::from_millis(500);
@@ -20,6 +23,8 @@ pub struct WorldUpdate {
     pub processes: Vec<ProcessResponse>,
     pub connections: Vec<ConnectionResponse>,
     pub stats: StatsResponse,
+    pub diagnostics: Vec<DiagnosticResponse>,
+    pub diagnostic_stats: DiagnosticStatsResponse,
     pub timestamp: u64,
 }
 
@@ -131,6 +136,11 @@ fn build_world_update(state: &SharedState) -> WorldUpdate {
         .unwrap_or_default()
         .as_millis() as u64;
 
+    let diags = state.diagnostics.lock().expect("diagnostics lock poisoned");
+    let diagnostics = diags.iter().map(diagnostic_to_response).collect();
+    let diagnostic_stats = compute_diagnostic_stats(&diags);
+    drop(diags);
+
     WorldUpdate {
         type_: "world_state",
         processes,
@@ -141,6 +151,8 @@ fn build_world_update(state: &SharedState) -> WorldUpdate {
             total_memory,
             avg_hp,
         },
+        diagnostics,
+        diagnostic_stats,
         timestamp,
     }
 }
@@ -182,7 +194,12 @@ mod tests {
 
     use tokio_tungstenite::tungstenite;
 
-    use aether_core::models::{ProcessNode, ProcessState};
+    use std::time::Instant;
+
+    use aether_core::models::{
+        DiagCategory, DiagTarget, Diagnostic, Evidence, ProcessNode, ProcessState,
+        RecommendedAction, Recommendation, Severity, Urgency,
+    };
     use aether_core::{ArbiterQueue, WorldGraph};
     use glam::Vec3;
 
@@ -207,6 +224,7 @@ mod tests {
         SharedState::new(
             Arc::new(RwLock::new(WorldGraph::new())),
             Arc::new(Mutex::new(ArbiterQueue::default())),
+            Arc::new(Mutex::new(Vec::new())),
         )
     }
 
@@ -249,5 +267,57 @@ mod tests {
         assert_eq!(json["processes"].as_array().unwrap().len(), 2);
         assert!(json["timestamp"].as_u64().unwrap() > 0);
         assert_eq!(json["stats"]["process_count"], 2);
+    }
+
+    fn make_diagnostic(id: u64, severity: Severity) -> Diagnostic {
+        use aether_core::metrics::HostId;
+
+        Diagnostic {
+            id,
+            host: HostId::default(),
+            target: DiagTarget::Process {
+                pid: 1,
+                name: "test".to_string(),
+            },
+            severity,
+            category: DiagCategory::CpuSpike,
+            summary: format!("diag {id}"),
+            evidence: vec![Evidence {
+                metric: "cpu".to_string(),
+                current: 90.0,
+                threshold: 80.0,
+                trend: None,
+                context: "high".to_string(),
+            }],
+            recommendation: Recommendation {
+                action: RecommendedAction::NoAction {
+                    reason: "test".to_string(),
+                },
+                reason: "test".to_string(),
+                urgency: Urgency::Informational,
+                auto_executable: false,
+            },
+            detected_at: Instant::now(),
+            resolved_at: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_world_update_includes_diagnostics() {
+        let state = test_state();
+        {
+            let mut diags = state.diagnostics.lock().unwrap();
+            diags.push(make_diagnostic(1, Severity::Warning));
+            diags.push(make_diagnostic(2, Severity::Critical));
+        }
+
+        let update = build_world_update(&state);
+        let json = serde_json::to_value(&update).unwrap();
+
+        let diag_arr = json["diagnostics"].as_array().unwrap();
+        assert_eq!(diag_arr.len(), 2, "world update should include 2 diagnostics");
+        assert_eq!(json["diagnostic_stats"]["warning"], 1);
+        assert_eq!(json["diagnostic_stats"]["critical"], 1);
+        assert_eq!(json["diagnostic_stats"]["total"], 2);
     }
 }
