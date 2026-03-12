@@ -97,11 +97,15 @@ version = "0.1.0"
 dependencies = [
  "aether-core",
  "axum",
+ "glam",
+ "http-body-util",
  "reqwest",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-util",
+ "tower",
  "tracing",
 ]
 
