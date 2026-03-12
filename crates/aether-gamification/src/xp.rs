@@ -1,6 +1,7 @@
 //! XP tracking and rank progression for the user.
 
 use aether_core::events::GameEvent;
+use aether_core::Severity;
 
 /// User rank determined by accumulated XP.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -127,6 +128,16 @@ impl XpTracker {
         self.add_xp(10, "zombie killed");
     }
 
+    /// Award XP for resolving a diagnostic based on its severity.
+    pub fn reward_diagnostic_resolved(&mut self, severity: Severity) {
+        let amount = match severity {
+            Severity::Critical => 50,
+            Severity::Warning => 20,
+            Severity::Info => 5,
+        };
+        self.add_xp(amount, "diagnostic resolved");
+    }
+
     /// Drain all pending game events.
     pub fn drain_events(&mut self) -> Vec<GameEvent> {
         std::mem::take(&mut self.pending_events)
@@ -234,6 +245,27 @@ mod tests {
         let events = tracker.drain_events();
         assert_eq!(events.len(), 2, "should have 2 events");
         assert!(tracker.drain_events().is_empty(), "should be empty after drain");
+    }
+
+    #[test]
+    fn test_reward_critical_gives_50_xp() {
+        let mut tracker = XpTracker::new();
+        tracker.reward_diagnostic_resolved(Severity::Critical);
+        assert_eq!(tracker.total_xp(), 50);
+    }
+
+    #[test]
+    fn test_reward_warning_gives_20_xp() {
+        let mut tracker = XpTracker::new();
+        tracker.reward_diagnostic_resolved(Severity::Warning);
+        assert_eq!(tracker.total_xp(), 20);
+    }
+
+    #[test]
+    fn test_reward_info_gives_5_xp() {
+        let mut tracker = XpTracker::new();
+        tracker.reward_diagnostic_resolved(Severity::Info);
+        assert_eq!(tracker.total_xp(), 5);
     }
 
     #[test]
