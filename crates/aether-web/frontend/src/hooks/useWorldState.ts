@@ -25,6 +25,8 @@ export function useWorldState() {
           update.processes,
           update.connections,
           update.stats,
+          update.diagnostics ?? [],
+          update.diagnostic_stats ?? { critical: 0, warning: 0, info: 0, total: 0 },
           update.timestamp,
         );
       };

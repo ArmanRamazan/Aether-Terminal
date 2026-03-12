@@ -27,11 +27,50 @@ export interface SystemStats {
   avg_hp: number;
 }
 
+/** Matches Rust DiagnosticEvidence from aether-web/src/api.rs */
+export interface Evidence {
+  metric: string;
+  current: number;
+  threshold: number;
+  context: string;
+  trend?: string;
+}
+
+/** Matches Rust DiagnosticRecommendation from aether-web/src/api.rs */
+export interface Recommendation {
+  action: string;
+  reason: string;
+  urgency: string;
+}
+
+/** Matches Rust DiagnosticResponse from aether-web/src/api.rs */
+export interface Diagnostic {
+  id: number;
+  host: string;
+  target_type: string;
+  target_name: string;
+  severity: "critical" | "warning" | "info";
+  category: string;
+  summary: string;
+  evidence: Evidence[];
+  recommendation: Recommendation;
+}
+
+/** Matches Rust DiagnosticStatsResponse from aether-web/src/api.rs */
+export interface DiagnosticStats {
+  critical: number;
+  warning: number;
+  info: number;
+  total: number;
+}
+
 /** Matches Rust WorldUpdate from aether-web/src/ws.rs */
 export interface WorldUpdate {
   type: string;
   processes: Process[];
   connections: Connection[];
   stats: SystemStats;
+  diagnostics: Diagnostic[];
+  diagnostic_stats: DiagnosticStats;
   timestamp: number;
 }
