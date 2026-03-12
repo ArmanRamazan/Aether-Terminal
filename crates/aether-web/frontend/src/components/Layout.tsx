@@ -1,11 +1,13 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { StatsBar } from "./StatsBar";
+import { useWorldStore } from "../stores/worldStore";
 
 const NAV_ITEMS = [
   { to: "/", label: "Overview", icon: "\u25A6" },
   { to: "/graph", label: "3D Graph", icon: "\u2B22" },
   { to: "/network", label: "Network", icon: "\u2B95" },
   { to: "/arbiter", label: "Arbiter", icon: "\u2696" },
+  { to: "/diagnostics", label: "Diagnostics", icon: "\u2695" },
 ] as const;
 
 const linkStyle = (isActive: boolean): React.CSSProperties => ({
@@ -21,7 +23,17 @@ const linkStyle = (isActive: boolean): React.CSSProperties => ({
   transition: "background 0.15s, color 0.15s",
 });
 
+function useDiagnosticDotColor(): string | null {
+  const stats = useWorldStore((s) => s.diagnosticStats);
+  if (stats.critical > 0) return "#ff3c3c";
+  if (stats.warning > 0) return "#ffc832";
+  if (stats.info > 0) return "#64c8ff";
+  return null;
+}
+
 export function Layout() {
+  const dotColor = useDiagnosticDotColor();
+
   return (
     <div
       style={{
@@ -54,6 +66,18 @@ export function Layout() {
             >
               <span style={{ fontSize: "1.1rem" }}>{item.icon}</span>
               {item.label}
+              {item.to === "/diagnostics" && dotColor && (
+                <span
+                  style={{
+                    width: 6,
+                    height: 6,
+                    borderRadius: "50%",
+                    background: dotColor,
+                    marginLeft: "auto",
+                    flexShrink: 0,
+                  }}
+                />
+              )}
             </NavLink>
           ))}
         </nav>
