@@ -116,14 +116,21 @@ impl AnalyzeEngine {
 
         // 2. Evaluate rules
         let empty_limits: HashMap<u32, ProcessLimits> = HashMap::new();
-        let findings = self.rule_engine.evaluate(&self.store, &self.config.host, &empty_limits);
+        let findings = self
+            .rule_engine
+            .evaluate(&self.store, &self.config.host, &empty_limits);
 
         // 3. Generate diagnostics from findings
         let new_diags: Vec<Diagnostic> = findings
             .iter()
             .map(|f| {
-                self.generator
-                    .generate(f, &self.store, &self.trend, &self.capacity, &self.config.host)
+                self.generator.generate(
+                    f,
+                    &self.store,
+                    &self.trend,
+                    &self.capacity,
+                    &self.config.host,
+                )
             })
             .collect();
 
@@ -135,7 +142,9 @@ impl AnalyzeEngine {
 
         // 4. Resolve: remove active diagnostics no longer present
         self.active_diagnostics.retain(|active| {
-            new_diags.iter().any(|new| same_target_category(active, new))
+            new_diags
+                .iter()
+                .any(|new| same_target_category(active, new))
         });
 
         // 5. Merge: add new diagnostics not already active, update existing
@@ -197,8 +206,8 @@ fn same_target_category(a: &Diagnostic, b: &Diagnostic) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aether_core::models::{DiagCategory, ProcessNode, ProcessState, Severity};
     use crate::rules::types::{CompareOp, Rule, RuleCondition};
+    use aether_core::models::{DiagCategory, ProcessNode, ProcessState, Severity};
     use glam::Vec3;
 
     fn make_world(processes: Vec<ProcessNode>) -> Arc<RwLock<WorldGraph>> {
@@ -287,7 +296,11 @@ mod tests {
 
         assert_eq!(engine.stats().evaluations, 0);
         engine.tick(&world);
-        assert_eq!(engine.stats().evaluations, 1, "evaluations should increment per tick");
+        assert_eq!(
+            engine.stats().evaluations,
+            1,
+            "evaluations should increment per tick"
+        );
         engine.tick(&world);
         assert_eq!(engine.stats().evaluations, 2);
     }
