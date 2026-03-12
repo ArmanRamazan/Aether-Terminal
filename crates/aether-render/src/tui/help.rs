@@ -93,6 +93,8 @@ fn help_lines() -> Vec<Line<'static>> {
         help_row("  F2", "World 3D", ks, ds),
         help_row("  F3", "Network", ks, ds),
         help_row("  F4", "Arbiter", ks, ds),
+        help_row("  F5", "Rules", ks, ds),
+        help_row("  F6", "Diagnostics", ks, ds),
         Line::from(""),
         Line::from(Span::styled("  Actions", hs)),
         Line::from(Span::styled(sep, dim)),
@@ -111,6 +113,17 @@ fn help_lines() -> Vec<Line<'static>> {
         help_row("  :kill <pid>", "Kill a process", ks, ds),
         help_row("  :sort <col>", "Sort by column", ks, ds),
         help_row("  :q", "Quit", ks, ds),
+        Line::from(""),
+        Line::from(Span::styled("  Diagnostic Severity", hs)),
+        Line::from(Span::styled(sep, dim)),
+        Line::from(vec![
+            Span::styled("  ■ ", Style::default().fg(Palette::DIAGNOSTIC_CRITICAL)),
+            Span::styled("Critical", ds),
+            Span::styled("   ■ ", Style::default().fg(Palette::DIAGNOSTIC_WARNING)),
+            Span::styled("Warning", ds),
+            Span::styled("   ● ", Style::default().fg(Palette::HEALTHY)),
+            Span::styled("Info", ds),
+        ]),
     ]
 }
 
