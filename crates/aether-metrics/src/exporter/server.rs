@@ -1,6 +1,6 @@
 use std::sync::{Arc, RwLock};
 
-use axum::{Router, routing::get};
+use axum::{routing::get, Router};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -39,8 +39,16 @@ impl MetricsExporter {
             labels.insert("pid".into(), proc.pid.to_string());
             labels.insert("name".into(), proc.name.clone());
 
-            reg.set_gauge("aether_process_cpu_percent", labels.clone(), f64::from(proc.cpu_percent));
-            reg.set_gauge("aether_process_memory_bytes", labels.clone(), proc.mem_bytes as f64);
+            reg.set_gauge(
+                "aether_process_cpu_percent",
+                labels.clone(),
+                f64::from(proc.cpu_percent),
+            );
+            reg.set_gauge(
+                "aether_process_memory_bytes",
+                labels.clone(),
+                proc.mem_bytes as f64,
+            );
             reg.set_gauge("aether_process_hp", labels, f64::from(proc.hp));
         }
 
@@ -70,7 +78,11 @@ impl MetricsExporter {
     }
 
     /// Start HTTP server with /metrics and /health endpoints.
-    pub async fn serve(self, port: u16, cancel: CancellationToken) -> Result<(), crate::error::MetricsError> {
+    pub async fn serve(
+        self,
+        port: u16,
+        cancel: CancellationToken,
+    ) -> Result<(), crate::error::MetricsError> {
         let registry = self.registry;
 
         let metrics_registry = Arc::clone(&registry);
@@ -80,7 +92,10 @@ impl MetricsExporter {
                 let snapshot = reg.read().expect("registry lock poisoned").snapshot();
                 let body = encode_openmetrics(&snapshot);
                 (
-                    [(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],
+                    [(
+                        axum::http::header::CONTENT_TYPE,
+                        "text/plain; version=0.0.4; charset=utf-8",
+                    )],
                     body,
                 )
             }
@@ -107,14 +122,46 @@ impl MetricsExporter {
 
 fn register_defaults(registry: &mut MetricRegistry) {
     let defaults = [
-        ("aether_process_cpu_percent", "CPU usage percentage per process", MetricType::Gauge),
-        ("aether_process_memory_bytes", "Memory usage in bytes per process", MetricType::Gauge),
-        ("aether_process_hp", "Health points per process", MetricType::Gauge),
-        ("aether_host_cpu_percent", "Host-level CPU usage percentage", MetricType::Gauge),
-        ("aether_host_memory_used_bytes", "Host memory used in bytes", MetricType::Gauge),
-        ("aether_host_load_avg_1m", "Host 1-minute load average", MetricType::Gauge),
-        ("aether_diagnostics_active", "Active diagnostics count by severity", MetricType::Gauge),
-        ("aether_analyze_evaluations_total", "Total number of analysis evaluations", MetricType::Counter),
+        (
+            "aether_process_cpu_percent",
+            "CPU usage percentage per process",
+            MetricType::Gauge,
+        ),
+        (
+            "aether_process_memory_bytes",
+            "Memory usage in bytes per process",
+            MetricType::Gauge,
+        ),
+        (
+            "aether_process_hp",
+            "Health points per process",
+            MetricType::Gauge,
+        ),
+        (
+            "aether_host_cpu_percent",
+            "Host-level CPU usage percentage",
+            MetricType::Gauge,
+        ),
+        (
+            "aether_host_memory_used_bytes",
+            "Host memory used in bytes",
+            MetricType::Gauge,
+        ),
+        (
+            "aether_host_load_avg_1m",
+            "Host 1-minute load average",
+            MetricType::Gauge,
+        ),
+        (
+            "aether_diagnostics_active",
+            "Active diagnostics count by severity",
+            MetricType::Gauge,
+        ),
+        (
+            "aether_analyze_evaluations_total",
+            "Total number of analysis evaluations",
+            MetricType::Counter,
+        ),
     ];
 
     for (name, help, metric_type) in defaults {
@@ -153,7 +200,9 @@ mod tests {
                 context: String::new(),
             }],
             recommendation: Recommendation {
-                action: RecommendedAction::Investigate { what: String::new() },
+                action: RecommendedAction::Investigate {
+                    what: String::new(),
+                },
                 reason: String::new(),
                 urgency: Urgency::Informational,
                 auto_executable: false,
@@ -190,12 +239,29 @@ mod tests {
         let reg = exporter.registry.read().expect("lock");
         let snap = reg.snapshot();
 
-        let cpu_family = snap.iter().find(|f| f.desc.name == "aether_process_cpu_percent").expect("cpu metric");
-        assert_eq!(cpu_family.samples.len(), 1, "should have one process sample");
-        assert!((cpu_family.samples[0].1 - 55.5).abs() < f64::EPSILON, "cpu value");
+        let cpu_family = snap
+            .iter()
+            .find(|f| f.desc.name == "aether_process_cpu_percent")
+            .expect("cpu metric");
+        assert_eq!(
+            cpu_family.samples.len(),
+            1,
+            "should have one process sample"
+        );
+        assert!(
+            (cpu_family.samples[0].1 - 55.5).abs() < f64::EPSILON,
+            "cpu value"
+        );
 
-        let diag_family = snap.iter().find(|f| f.desc.name == "aether_diagnostics_active").expect("diag metric");
-        assert_eq!(diag_family.samples.len(), 3, "should have 3 severity labels");
+        let diag_family = snap
+            .iter()
+            .find(|f| f.desc.name == "aether_diagnostics_active")
+            .expect("diag metric");
+        assert_eq!(
+            diag_family.samples.len(),
+            3,
+            "should have 3 severity labels"
+        );
     }
 
     #[tokio::test]
@@ -210,7 +276,10 @@ mod tests {
                 let snapshot = reg.read().expect("registry lock poisoned").snapshot();
                 let body = encode_openmetrics(&snapshot);
                 (
-                    [(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],
+                    [(
+                        axum::http::header::CONTENT_TYPE,
+                        "text/plain; version=0.0.4; charset=utf-8",
+                    )],
                     body,
                 )
             }
@@ -229,9 +298,15 @@ mod tests {
             .expect("response");
 
         assert_eq!(response.status(), 200);
-        let content_type = response.headers().get("content-type").expect("content-type header");
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .expect("content-type header");
         assert!(
-            content_type.to_str().expect("header str").starts_with("text/plain"),
+            content_type
+                .to_str()
+                .expect("header str")
+                .starts_with("text/plain"),
             "content type should be text/plain"
         );
     }
@@ -252,7 +327,12 @@ mod tests {
             .expect("response");
 
         assert_eq!(response.status(), 200);
-        let body = response.into_body().collect().await.expect("body").to_bytes();
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&body).expect("json");
         assert_eq!(json["status"], "ok");
     }
