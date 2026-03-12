@@ -1,5 +1,6 @@
 import { useNavigate } from "react-router-dom";
 import { useWorldStore } from "../stores/worldStore";
+import { HostSelector } from "./HostSelector";
 
 function cpuColor(percent: number): string {
   if (percent >= 80) return "#ef4444";
@@ -32,6 +33,7 @@ export function StatsBar() {
     <div
       style={{
         display: "flex",
+        alignItems: "center",
         gap: "2rem",
         padding: "0.5rem 1.5rem",
         background: "#111118",
@@ -81,6 +83,9 @@ export function StatsBar() {
           )}
         </span>
       )}
+      <div style={{ marginLeft: "auto" }}>
+        <HostSelector />
+      </div>
     </div>
   );
 }

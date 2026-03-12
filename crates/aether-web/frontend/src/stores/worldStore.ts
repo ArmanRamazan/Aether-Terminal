@@ -9,6 +9,8 @@ interface WorldState {
   diagnosticStats: DiagnosticStats;
   selectedPid: number | null;
   lastUpdate: number;
+  availableHosts: string[];
+  selectedHost: string | null;
 
   setWorldState: (
     processes: Process[],
@@ -20,6 +22,8 @@ interface WorldState {
   ) => void;
   selectProcess: (pid: number) => void;
   clearSelection: () => void;
+  setSelectedHost: (host: string | null) => void;
+  clearHostFilter: () => void;
 }
 
 const defaultStats: SystemStats = {
@@ -44,11 +48,31 @@ export const useWorldStore = create<WorldState>((set) => ({
   diagnosticStats: defaultDiagnosticStats,
   selectedPid: null,
   lastUpdate: 0,
+  availableHosts: [],
+  selectedHost: null,
 
-  setWorldState: (processes, connections, stats, diagnostics, diagnosticStats, timestamp) =>
-    set({ processes, connections, stats, diagnostics, diagnosticStats, lastUpdate: timestamp }),
+  setWorldState: (processes, connections, stats, diagnostics, diagnosticStats, timestamp) => {
+    const hostSet = new Set<string>();
+    hostSet.add("local");
+    for (const d of diagnostics) {
+      if (d.host) hostSet.add(d.host);
+    }
+    set({
+      processes,
+      connections,
+      stats,
+      diagnostics,
+      diagnosticStats,
+      lastUpdate: timestamp,
+      availableHosts: Array.from(hostSet).sort(),
+    });
+  },
 
   selectProcess: (pid) => set({ selectedPid: pid }),
 
   clearSelection: () => set({ selectedPid: null }),
+
+  setSelectedHost: (host) => set({ selectedHost: host }),
+
+  clearHostFilter: () => set({ selectedHost: null }),
 }));

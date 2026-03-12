@@ -20,11 +20,18 @@ const FILTER_BUTTONS: { label: string; value: SeverityFilter }[] = [
 ];
 
 export function DiagnosticsPage() {
-  const diagnostics = useWorldStore((s) => s.diagnostics);
+  const allDiagnostics = useWorldStore((s) => s.diagnostics);
   const stats = useWorldStore((s) => s.diagnosticStats);
+  const selectedHost = useWorldStore((s) => s.selectedHost);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [filter, setFilter] = useState<SeverityFilter>("all");
   const [search, setSearch] = useState("");
+
+  // Filter by host first
+  const diagnostics = useMemo(() => {
+    if (!selectedHost) return allDiagnostics;
+    return allDiagnostics.filter((d) => d.host === selectedHost);
+  }, [allDiagnostics, selectedHost]);
 
   const filtered = useMemo(() => {
     let result: Diagnostic[] = diagnostics;
