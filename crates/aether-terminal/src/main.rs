@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use clap::Parser;
@@ -6,7 +7,10 @@ use tokio_util::sync::CancellationToken;
 
 use aether_analyze::engine::{AnalyzeConfig, AnalyzeEngine};
 use aether_core::events::SystemEvent;
-use aether_core::models::Diagnostic;
+use aether_core::models::{
+    DiagCategory, DiagTarget, Diagnostic, Evidence, Recommendation, RecommendedAction, Severity,
+    Urgency,
+};
 use aether_core::metrics::HostId;
 use aether_core::{AgentAction, WorldGraph};
 use aether_ingestion::ebpf_bridge::EbpfBridge;
@@ -146,14 +150,23 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    // Shared diagnostics state (populated by AnalyzeEngine + script bridge, read by TUI)
+    let diagnostics: Arc<Mutex<Vec<Diagnostic>>> = Arc::new(Mutex::new(Vec::new()));
+
     // Rules engine setup (before graph updater so we can share the event stream)
     let rules_display = Arc::new(Mutex::new(RulesDisplayState::default()));
+    let diag_bridge = if cli.rules.is_some() && !cli.no_analyze {
+        Some(Arc::clone(&diagnostics))
+    } else {
+        None
+    };
     let engine_event_tx = if let Some(ref rules_path) = cli.rules {
         Some(init_rules_engine(
             rules_path,
             &cancel,
             Arc::clone(&arbiter),
             Arc::clone(&rules_display),
+            diag_bridge,
         )?)
     } else {
         None
@@ -279,9 +292,6 @@ async fn main() -> anyhow::Result<()> {
 
         tracing::info!("prediction engine enabled");
     }
-
-    // Shared diagnostics state (populated by AnalyzeEngine, read by TUI)
-    let diagnostics: Arc<Mutex<Vec<Diagnostic>>> = Arc::new(Mutex::new(Vec::new()));
 
     // Spawn Prometheus consumer if --prometheus is set (before AnalyzeEngine so we can pass rx)
     let prometheus_rx = if let Some(ref prom_url) = cli.prometheus {
@@ -506,6 +516,7 @@ fn init_rules_engine(
     cancel: &CancellationToken,
     arbiter: Arc<Mutex<ArbiterQueue>>,
     display: Arc<Mutex<RulesDisplayState>>,
+    diag_bridge: Option<Arc<Mutex<Vec<Diagnostic>>>>,
 ) -> anyhow::Result<mpsc::Sender<SystemEvent>> {
     // Load rule file (parsing is a TODO — compile empty set if parser unavailable)
     let _content = std::fs::read_to_string(rules_path)?;
@@ -545,7 +556,7 @@ fn init_rules_engine(
         engine.run(engine_event_rx, engine_cancel).await;
     });
 
-    // Spawn action forwarder: RuleAction → display state update + arbiter queue
+    // Spawn action forwarder: RuleAction → display state + arbiter + diagnostic bridge
     let forwarder_cancel = cancel.child_token();
     tokio::spawn(async move {
         loop {
@@ -572,6 +583,18 @@ fn init_rules_engine(
                     if let Ok(mut q) = arbiter.lock() {
                         q.submit("RuleEngine".into(), agent_action);
                     }
+
+                    // Bridge to diagnostic engine if active
+                    if let Some(ref diags) = diag_bridge {
+                        let diag = rule_action_to_diagnostic(&action);
+                        if let Ok(mut d) = diags.lock() {
+                            d.push(diag);
+                            if d.len() > 200 {
+                                let excess = d.len() - 200;
+                                d.drain(..excess);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -579,6 +602,69 @@ fn init_rules_engine(
 
     tracing::info!("rules engine initialized from {}", rules_path.display());
     Ok(engine_event_tx)
+}
+
+/// Convert a JIT script RuleAction into a core Diagnostic.
+fn rule_action_to_diagnostic(action: &RuleAction) -> Diagnostic {
+    static SCRIPT_DIAG_ID: AtomicU64 = AtomicU64::new(1_000_000);
+
+    let severity = match action.severity {
+        2 => Severity::Critical,
+        1 => Severity::Warning,
+        _ => Severity::Info,
+    };
+
+    let recommended = match action.action {
+        2 => RecommendedAction::KillProcess {
+            pid: action.target_pid,
+            reason: format!("script rule '{}' triggered kill", action.rule_name),
+        },
+        1 => RecommendedAction::Investigate {
+            what: format!("script rule '{}' raised alert", action.rule_name),
+        },
+        _ => RecommendedAction::NoAction {
+            reason: format!("script rule '{}' logged event", action.rule_name),
+        },
+    };
+
+    let urgency = match severity {
+        Severity::Critical => Urgency::Immediate,
+        Severity::Warning => Urgency::Soon,
+        Severity::Info => Urgency::Informational,
+    };
+
+    Diagnostic {
+        id: SCRIPT_DIAG_ID.fetch_add(1, Ordering::Relaxed),
+        host: HostId::new("local"),
+        target: DiagTarget::Process {
+            pid: action.target_pid,
+            name: String::new(),
+        },
+        severity,
+        category: DiagCategory::ScriptRule,
+        summary: format!(
+            "[script] rule '{}' fired on pid {}",
+            action.rule_name, action.target_pid
+        ),
+        evidence: vec![Evidence {
+            metric: "script_rule".to_string(),
+            current: action.severity as f64,
+            threshold: 0.0,
+            trend: None,
+            context: format!(
+                "action={}, severity={}",
+                action.action, action.severity
+            ),
+        }],
+        recommendation: Recommendation {
+            action: recommended,
+            reason: format!("triggered by .aether rule '{}'", action.rule_name),
+            urgency,
+            auto_executable: false,
+        },
+        detected_at: std::time::Instant::now(),
+        resolved_at: None,
+    }
 }
 
 /// Execute an approved agent action.

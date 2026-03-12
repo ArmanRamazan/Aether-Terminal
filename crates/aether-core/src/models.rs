@@ -119,6 +119,7 @@ pub enum DiagCategory {
     ConfigMismatch,
     CapacityRisk,
     CorrelatedAnomaly,
+    ScriptRule,
 }
 
 /// A piece of evidence supporting a diagnostic finding.
