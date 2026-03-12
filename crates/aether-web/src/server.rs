@@ -34,6 +34,17 @@ pub fn router(state: SharedState) -> Router {
         .route("/api/arbiter/pending", get(api::list_pending_actions))
         .route("/api/arbiter/{id}/approve", post(api::approve_action))
         .route("/api/arbiter/{id}/deny", post(api::deny_action))
+        .route("/api/diagnostics", get(api::list_diagnostics))
+        .route("/api/diagnostics/stats", get(api::get_diagnostic_stats))
+        .route("/api/diagnostics/{id}", get(api::get_diagnostic))
+        .route(
+            "/api/diagnostics/{id}/dismiss",
+            post(api::dismiss_diagnostic),
+        )
+        .route(
+            "/api/diagnostics/{id}/execute",
+            post(api::execute_diagnostic),
+        )
         .route("/ws", get(ws::ws_handler))
         .fallback(embedded::static_handler)
         .layer(cors)
@@ -74,6 +85,7 @@ mod tests {
         let state = SharedState::new(
             Arc::new(RwLock::new(WorldGraph::new())),
             Arc::new(Mutex::new(ArbiterQueue::default())),
+            Arc::new(Mutex::new(Vec::new())),
         );
         let _router = router(state);
     }
