@@ -10,7 +10,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Widget, Wrap};
 
-use aether_core::{DiagTarget, Diagnostic, Severity, Urgency};
+use aether_core::{AgentAction, DiagTarget, Diagnostic, RecommendedAction, Severity, Urgency};
 
 use crate::palette::Palette;
 
@@ -332,6 +332,32 @@ impl DiagnosticsTab {
     }
 }
 
+/// Convert a diagnostic's recommendation into an arbiter-compatible action.
+///
+/// Returns `None` for `NoAction` recommendations.
+pub(crate) fn diagnostic_to_agent_action(diag: &Diagnostic) -> Option<AgentAction> {
+    let pid = match &diag.target {
+        DiagTarget::Process { pid, .. } => *pid,
+        _ => 0,
+    };
+
+    match &diag.recommendation.action {
+        RecommendedAction::KillProcess { pid: kill_pid, .. } => {
+            Some(AgentAction::KillProcess { pid: *kill_pid })
+        }
+        RecommendedAction::Restart { .. } => {
+            // Restart = kill process; supervisor handles actual restart.
+            Some(AgentAction::KillProcess { pid })
+        }
+        RecommendedAction::ScaleUp { .. }
+        | RecommendedAction::RaiseLimits { .. }
+        | RecommendedAction::Investigate { .. }
+        | RecommendedAction::ReduceLoad { .. } => Some(AgentAction::Inspect { pid }),
+        RecommendedAction::NoAction { .. } => None,
+        _ => Some(AgentAction::Inspect { pid }),
+    }
+}
+
 /// Return style for a given severity level.
 fn severity_style(severity: Severity) -> Style {
     let color = match severity {
@@ -568,5 +594,63 @@ mod tests {
             sample_diagnostic(3, Severity::Info),
         ];
         tab.render(area, &mut buf, &diags);
+    }
+
+    #[test]
+    fn test_convert_kill_process() {
+        let mut diag = sample_diagnostic(1, Severity::Critical);
+        diag.recommendation.action = RecommendedAction::KillProcess {
+            pid: 99,
+            reason: "runaway".to_string(),
+        };
+        match diagnostic_to_agent_action(&diag) {
+            Some(AgentAction::KillProcess { pid }) => assert_eq!(pid, 99),
+            other => panic!("expected KillProcess, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_convert_restart_uses_target_pid() {
+        let mut diag = sample_diagnostic(1, Severity::Warning);
+        diag.recommendation.action = RecommendedAction::Restart {
+            reason: "memory leak".to_string(),
+        };
+        // target pid is 42 from sample_diagnostic
+        match diagnostic_to_agent_action(&diag) {
+            Some(AgentAction::KillProcess { pid }) => assert_eq!(pid, 42),
+            other => panic!("expected KillProcess, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_convert_investigate_maps_to_inspect() {
+        let diag = sample_diagnostic(1, Severity::Info);
+        // sample_diagnostic uses Investigate action
+        match diagnostic_to_agent_action(&diag) {
+            Some(AgentAction::Inspect { pid }) => assert_eq!(pid, 42),
+            other => panic!("expected Inspect, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_convert_no_action_returns_none() {
+        let mut diag = sample_diagnostic(1, Severity::Info);
+        diag.recommendation.action = RecommendedAction::NoAction {
+            reason: "all good".to_string(),
+        };
+        assert!(diagnostic_to_agent_action(&diag).is_none());
+    }
+
+    #[test]
+    fn test_convert_non_process_target_has_zero_pid() {
+        let mut diag = sample_diagnostic(1, Severity::Warning);
+        diag.target = DiagTarget::Host(HostId::new("server-1"));
+        diag.recommendation.action = RecommendedAction::Investigate {
+            what: "host load".to_string(),
+        };
+        match diagnostic_to_agent_action(&diag) {
+            Some(AgentAction::Inspect { pid }) => assert_eq!(pid, 0),
+            other => panic!("expected Inspect with pid 0, got {other:?}"),
+        }
     }
 }
