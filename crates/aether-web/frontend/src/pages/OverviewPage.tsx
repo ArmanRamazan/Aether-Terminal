@@ -2,7 +2,7 @@ import { useWorldStore } from "../stores/worldStore";
 import { ProcessDetail } from "../components/ProcessDetail";
 import { ProcessTable } from "../components/ProcessTable";
 import { SparklineChart } from "../components/SparklineChart";
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 
 const MAX_HISTORY = 60;
 
@@ -80,11 +80,18 @@ function formatMemory(bytes: number): string {
 }
 
 export function OverviewPage() {
-  const processes = useWorldStore((s) => s.processes);
+  const allProcesses = useWorldStore((s) => s.processes);
   const connections = useWorldStore((s) => s.connections);
   const selectedPid = useWorldStore((s) => s.selectedPid);
   const selectProcess = useWorldStore((s) => s.selectProcess);
   const clearSelection = useWorldStore((s) => s.clearSelection);
+  const selectedHost = useWorldStore((s) => s.selectedHost);
+
+  // Filter processes by host — all processes are "local" for now
+  const processes = useMemo(() => {
+    if (!selectedHost || selectedHost === "local") return allProcesses;
+    return [];
+  }, [allProcesses, selectedHost]);
 
   const selectedProcess = selectedPid != null
     ? processes.find((p) => p.pid === selectedPid) ?? null
