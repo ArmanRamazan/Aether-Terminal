@@ -93,6 +93,7 @@ pub enum RuleCondition {
 }
 
 /// A diagnostic rule definition.
+#[derive(Debug)]
 pub struct Rule {
     pub id: &'static str,
     pub name: &'static str,
@@ -103,6 +104,7 @@ pub struct Rule {
 }
 
 /// A finding produced when a rule matches.
+#[derive(Debug)]
 pub struct RuleFinding {
     pub rule_id: &'static str,
     pub rule_name: &'static str,
