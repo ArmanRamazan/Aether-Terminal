@@ -82,10 +82,8 @@ impl AnomalyDetector {
         let mut points = Vec::new();
 
         for i in window_size..values.len().saturating_sub(window_size) {
-            let left_mean =
-                values[i - window_size..i].iter().sum::<f64>() / window_size as f64;
-            let right_mean =
-                values[i..i + window_size].iter().sum::<f64>() / window_size as f64;
+            let left_mean = values[i - window_size..i].iter().sum::<f64>() / window_size as f64;
+            let right_mean = values[i..i + window_size].iter().sum::<f64>() / window_size as f64;
             let diff = (right_mean - left_mean).abs();
 
             if diff > threshold {
@@ -210,7 +208,10 @@ mod tests {
         points.push((20.0, 100.0)); // extreme outlier
         let series = make_series(&points);
         let detector = AnomalyDetector;
-        assert!(detector.is_outlier_iqr(&series), "expected outlier detection");
+        assert!(
+            detector.is_outlier_iqr(&series),
+            "expected outlier detection"
+        );
     }
 
     #[test]
