@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -14,6 +14,9 @@ use aether_core::WorldGraph;
 
 use crate::analyzers::capacity::CapacityAnalyzer;
 use crate::analyzers::trend::TrendAnalyzer;
+use crate::collectors::cgroup::CgroupCollector;
+use crate::collectors::procfs::ProcfsCollector;
+use crate::collectors::ProcessProfile;
 use crate::recommendations::generator::RecommendationGenerator;
 use crate::rules::engine::RuleEngine;
 use crate::rules::types::ProcessLimits;
@@ -28,6 +31,10 @@ pub struct AnalyzeConfig {
     pub history_capacity: usize,
     /// Host identifier for this machine.
     pub host: HostId,
+    /// Enable procfs/cgroup profiling for top processes.
+    pub enable_profiling: bool,
+    /// Number of top processes (by CPU) to profile per tick.
+    pub top_n_profiled: usize,
 }
 
 impl Default for AnalyzeConfig {
@@ -36,6 +43,8 @@ impl Default for AnalyzeConfig {
             interval: Duration::from_secs(5),
             history_capacity: 3600,
             host: HostId::new("local"),
+            enable_profiling: true,
+            top_n_profiled: 10,
         }
     }
 }
@@ -57,8 +66,11 @@ pub struct AnalyzeEngine {
     trend: TrendAnalyzer,
     capacity: CapacityAnalyzer,
     generator: RecommendationGenerator,
+    procfs: ProcfsCollector,
+    cgroup: CgroupCollector,
     config: AnalyzeConfig,
     active_diagnostics: Vec<Diagnostic>,
+    profiles: HashMap<u32, ProcessProfile>,
     stats: AnalyzeStats,
 }
 
@@ -74,8 +86,37 @@ impl AnalyzeEngine {
             trend: TrendAnalyzer,
             capacity: CapacityAnalyzer,
             generator: RecommendationGenerator::new(),
+            procfs: ProcfsCollector::new(),
+            cgroup: CgroupCollector::new(),
             config,
             active_diagnostics: Vec::new(),
+            profiles: HashMap::new(),
+            stats: AnalyzeStats::default(),
+        }
+    }
+
+    /// Create an engine with custom collector roots (for testing).
+    #[cfg(test)]
+    fn with_collectors(
+        config: AnalyzeConfig,
+        procfs: ProcfsCollector,
+        cgroup: CgroupCollector,
+    ) -> Self {
+        let store = MetricStore::new(config.history_capacity);
+        let mut rule_engine = RuleEngine::new();
+        rule_engine.load_builtin();
+
+        Self {
+            store,
+            rule_engine,
+            trend: TrendAnalyzer,
+            capacity: CapacityAnalyzer,
+            generator: RecommendationGenerator::new(),
+            procfs,
+            cgroup,
+            config,
+            active_diagnostics: Vec::new(),
+            profiles: HashMap::new(),
             stats: AnalyzeStats::default(),
         }
     }
@@ -101,6 +142,11 @@ impl AnalyzeEngine {
         }
     }
 
+    /// Current process profiles from the latest tick.
+    pub fn profiles(&self) -> &HashMap<u32, ProcessProfile> {
+        &self.profiles
+    }
+
     /// Execute a single analysis cycle.
     fn tick(&mut self, world: &Arc<RwLock<WorldGraph>>) {
         let graph = match world.read() {
@@ -111,16 +157,24 @@ impl AnalyzeEngine {
             }
         };
 
-        // 1. Ingest current state
+        // 1. Ingest current state from WorldGraph.
         self.store.ingest_world_state(&self.config.host, &graph);
+        drop(graph);
 
-        // 2. Evaluate rules
-        let empty_limits: HashMap<u32, ProcessLimits> = HashMap::new();
+        // 2. Collect host and process profiles if profiling is enabled.
+        let limits_map = if self.config.enable_profiling {
+            self.collect_profiles()
+        } else {
+            self.profiles.clear();
+            HashMap::new()
+        };
+
+        // 3. Evaluate rules with collected limits.
         let findings = self
             .rule_engine
-            .evaluate(&self.store, &self.config.host, &empty_limits);
+            .evaluate(&self.store, &self.config.host, &limits_map);
 
-        // 3. Generate diagnostics from findings
+        // 4. Generate diagnostics from findings.
         let new_diags: Vec<Diagnostic> = findings
             .iter()
             .map(|f| {
@@ -137,24 +191,24 @@ impl AnalyzeEngine {
         debug!(
             findings = findings.len(),
             new_diags = new_diags.len(),
+            profiles = self.profiles.len(),
             "tick complete"
         );
 
-        // 4. Resolve: remove active diagnostics no longer present
+        // 5. Resolve: remove active diagnostics no longer present.
         self.active_diagnostics.retain(|active| {
             new_diags
                 .iter()
                 .any(|new| same_target_category(active, new))
         });
 
-        // 5. Merge: add new diagnostics not already active, update existing
+        // 6. Merge: add new diagnostics not already active, update existing.
         for new in new_diags {
             if let Some(existing) = self
                 .active_diagnostics
                 .iter_mut()
                 .find(|a| same_target_category(a, &new))
             {
-                // Update evidence and severity for existing diagnostic
                 existing.evidence = new.evidence;
                 existing.severity = new.severity;
                 existing.recommendation = new.recommendation;
@@ -163,10 +217,111 @@ impl AnalyzeEngine {
             }
         }
 
-        // 6. Update stats
+        // 7. Update stats.
         self.stats.evaluations += 1;
         self.stats.rules_fired += findings.len() as u64;
         self.update_severity_counts();
+    }
+
+    /// Collect host profile and per-process profiles/limits for top-N processes.
+    fn collect_profiles(&mut self) -> HashMap<u32, ProcessLimits> {
+        let host = &self.config.host;
+        let now = Instant::now();
+
+        // Collect host profile → feed into store.
+        match self.procfs.host_profile() {
+            Ok(hp) => {
+                self.store
+                    .push_sample(host, None, "loadavg_1", now, hp.loadavg_1);
+                self.store
+                    .push_sample(host, None, "loadavg_5", now, hp.loadavg_5);
+                self.store
+                    .push_sample(host, None, "loadavg_15", now, hp.loadavg_15);
+                self.store
+                    .push_sample(host, None, "mem_total", now, hp.mem_total as f64);
+                self.store
+                    .push_sample(host, None, "mem_available", now, hp.mem_available as f64);
+                self.store
+                    .push_sample(host, None, "swap_total", now, hp.swap_total as f64);
+                self.store
+                    .push_sample(host, None, "swap_free", now, hp.swap_free as f64);
+            }
+            Err(e) => {
+                warn!("host profile collection failed: {e}");
+            }
+        }
+
+        // Get top N processes by CPU from the store.
+        let top_pids = self.top_pids_by_cpu(self.config.top_n_profiled);
+
+        // Collect process profiles and cgroup limits for top N.
+        self.profiles.clear();
+        let mut limits_map = HashMap::new();
+
+        for pid in top_pids {
+            match self.procfs.process_profile(pid) {
+                Ok(profile) => {
+                    // Feed process-level metrics into store.
+                    self.store
+                        .push_sample(host, Some(pid), "threads", now, profile.threads as f64);
+                    self.store.push_sample(
+                        host,
+                        Some(pid),
+                        "open_fds",
+                        now,
+                        profile.open_fds as f64,
+                    );
+                    self.store.push_sample(
+                        host,
+                        Some(pid),
+                        "io_read_bytes",
+                        now,
+                        profile.io_read_bytes as f64,
+                    );
+                    self.store.push_sample(
+                        host,
+                        Some(pid),
+                        "io_write_bytes",
+                        now,
+                        profile.io_write_bytes as f64,
+                    );
+                    self.profiles.insert(pid, profile);
+                }
+                Err(e) => {
+                    warn!(pid, "process profile collection failed: {e}");
+                }
+            }
+
+            match self.cgroup.limits(pid) {
+                Ok(limits) => {
+                    limits_map.insert(pid, limits);
+                }
+                Err(e) => {
+                    debug!(pid, "cgroup limits collection failed: {e}");
+                }
+            }
+        }
+
+        limits_map
+    }
+
+    /// Return PIDs of top N processes by CPU usage from the store.
+    fn top_pids_by_cpu(&self, n: usize) -> Vec<u32> {
+        let host = &self.config.host;
+        let mut pid_cpu: Vec<(u32, f64)> = self
+            .store
+            .process_pids(host)
+            .into_iter()
+            .filter_map(|pid| {
+                self.store
+                    .get(host, Some(pid), "cpu_percent")
+                    .and_then(|ts| ts.last())
+                    .map(|s| (pid, s.value))
+            })
+            .collect();
+
+        pid_cpu.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        pid_cpu.into_iter().take(n).map(|(pid, _)| pid).collect()
     }
 
     fn update_severity_counts(&mut self) {
@@ -323,6 +478,7 @@ mod tests {
     async fn test_run_sends_diagnostics() {
         let config = AnalyzeConfig {
             interval: Duration::from_millis(50),
+            enable_profiling: false,
             ..Default::default()
         };
         let mut engine = AnalyzeEngine::new(config);
@@ -344,5 +500,164 @@ mod tests {
 
         assert!(!batch.is_empty(), "should produce at least one diagnostic");
         cancel.cancel();
+    }
+
+    fn setup_fake_proc(dir: &std::path::Path, pid: u32) {
+        let pid_dir = dir.join(pid.to_string());
+        std::fs::create_dir_all(pid_dir.join("fd")).unwrap();
+        std::fs::write(pid_dir.join("fd/0"), "").unwrap();
+        std::fs::write(pid_dir.join("fd/1"), "").unwrap();
+        std::fs::write(
+            pid_dir.join("status"),
+            "Name:\tfake\nThreads:\t8\nvoluntary_ctxt_switches:\t50\nnonvoluntary_ctxt_switches:\t5\n",
+        )
+        .unwrap();
+        std::fs::write(
+            pid_dir.join("io"),
+            "rchar: 1000\nwchar: 500\nread_bytes: 4096\nwrite_bytes: 2048\n",
+        )
+        .unwrap();
+    }
+
+    fn setup_fake_host(dir: &std::path::Path) {
+        std::fs::write(dir.join("loadavg"), "1.50 2.00 1.75 3/200 12345\n").unwrap();
+        std::fs::write(
+            dir.join("meminfo"),
+            "MemTotal:       16000000 kB\nMemFree:         2000000 kB\nMemAvailable:    8000000 kB\nSwapTotal:       4000000 kB\nSwapFree:        3000000 kB\n",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_engine_with_collectors() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_fake_host(tmp.path());
+        setup_fake_proc(tmp.path(), 42);
+
+        let config = AnalyzeConfig {
+            enable_profiling: true,
+            top_n_profiled: 10,
+            ..Default::default()
+        };
+        let procfs = ProcfsCollector::with_root(tmp.path().to_path_buf());
+        let cgroup = CgroupCollector::with_root(tmp.path().to_path_buf());
+        let mut engine = AnalyzeEngine::with_collectors(config, procfs, cgroup);
+        engine.rule_engine.add_rule(cpu_test_rule());
+
+        let world = make_world(vec![make_process(42, "hot", 99.0, 1024)]);
+        engine.tick(&world);
+
+        // Host metrics should be in the store.
+        let host = &engine.config.host;
+        assert!(
+            engine.store.get(host, None, "loadavg_1").is_some(),
+            "host profile should populate loadavg_1"
+        );
+        assert!(
+            engine.store.get(host, None, "mem_total").is_some(),
+            "host profile should populate mem_total"
+        );
+
+        // Process profile should be collected for the top process.
+        assert!(
+            engine.profiles().contains_key(&42),
+            "process 42 should have a profile"
+        );
+        let profile = &engine.profiles()[&42];
+        assert_eq!(profile.threads, 8, "threads from fake /proc/42/status");
+        assert_eq!(profile.open_fds, 2, "fds from fake /proc/42/fd");
+
+        // Process-level metrics should be in the store.
+        assert!(
+            engine.store.get(host, Some(42), "threads").is_some(),
+            "threads metric should be in store"
+        );
+
+        assert_eq!(engine.stats().evaluations, 1);
+    }
+
+    #[test]
+    fn test_engine_without_collectors_fallback() {
+        // Point collectors at nonexistent dirs — everything should fail gracefully.
+        let tmp = tempfile::tempdir().unwrap();
+        let bogus = tmp.path().join("nonexistent");
+
+        let config = AnalyzeConfig {
+            enable_profiling: true,
+            top_n_profiled: 5,
+            ..Default::default()
+        };
+        let procfs = ProcfsCollector::with_root(bogus.clone());
+        let cgroup = CgroupCollector::with_root(bogus);
+        let mut engine = AnalyzeEngine::with_collectors(config, procfs, cgroup);
+        engine.rule_engine.add_rule(cpu_test_rule());
+
+        let world = make_world(vec![make_process(1, "hot", 99.0, 1024)]);
+        engine.tick(&world);
+
+        // Engine should still produce diagnostics from WorldGraph data.
+        assert!(
+            !engine.active_diagnostics().is_empty(),
+            "engine should still work when collectors fail"
+        );
+        assert!(
+            engine.profiles().is_empty(),
+            "no profiles should be collected from bogus paths"
+        );
+        assert_eq!(engine.stats().evaluations, 1);
+    }
+
+    #[test]
+    fn test_top_n_limits_profiling() {
+        let tmp = tempfile::tempdir().unwrap();
+        setup_fake_host(tmp.path());
+
+        // Create fake /proc entries for 5 processes.
+        for pid in [10, 20, 30, 40, 50] {
+            setup_fake_proc(tmp.path(), pid);
+        }
+
+        let config = AnalyzeConfig {
+            enable_profiling: true,
+            top_n_profiled: 3,
+            ..Default::default()
+        };
+        let procfs = ProcfsCollector::with_root(tmp.path().to_path_buf());
+        let cgroup = CgroupCollector::with_root(tmp.path().to_path_buf());
+        let mut engine = AnalyzeEngine::with_collectors(config, procfs, cgroup);
+
+        // Create processes with varying CPU — top 3 should be pid 50, 40, 30.
+        let world = make_world(vec![
+            make_process(10, "low1", 10.0, 1024),
+            make_process(20, "low2", 20.0, 1024),
+            make_process(30, "mid", 50.0, 1024),
+            make_process(40, "high", 80.0, 1024),
+            make_process(50, "top", 99.0, 1024),
+        ]);
+
+        engine.tick(&world);
+
+        // Only top 3 processes should have profiles.
+        assert_eq!(
+            engine.profiles().len(),
+            3,
+            "only top_n_profiled=3 processes should be profiled"
+        );
+        assert!(
+            engine.profiles().contains_key(&50),
+            "pid 50 (99% cpu) should be profiled"
+        );
+        assert!(
+            engine.profiles().contains_key(&40),
+            "pid 40 (80% cpu) should be profiled"
+        );
+        assert!(
+            engine.profiles().contains_key(&30),
+            "pid 30 (50% cpu) should be profiled"
+        );
+        assert!(
+            !engine.profiles().contains_key(&10),
+            "pid 10 (10% cpu) should NOT be profiled"
+        );
     }
 }

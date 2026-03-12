@@ -13,3 +13,4 @@ serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
 glam = "0.29"
+tempfile = "3"

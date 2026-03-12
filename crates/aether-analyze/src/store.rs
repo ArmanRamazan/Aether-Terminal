@@ -148,7 +148,7 @@ impl MetricStore {
         });
     }
 
-    fn push_sample(
+    pub(crate) fn push_sample(
         &mut self,
         host: &HostId,
         pid: Option<u32>,
