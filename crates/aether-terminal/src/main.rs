@@ -19,6 +19,8 @@ use aether_predict::models::PredictedAnomaly;
 use aether_render::tui::app::App;
 use aether_render::tui::rules::RulesDisplayState;
 use aether_render::PredictionDisplay;
+use aether_metrics::consumer::PrometheusConsumer;
+use aether_metrics::exporter::server::MetricsExporter;
 use aether_script::engine::ScriptEngine;
 use aether_script::hot_reload::HotReloader;
 use aether_script::runtime::{CompiledRuleSet, RuleAction};
@@ -81,6 +83,18 @@ struct Cli {
     /// Diagnostic analysis interval in seconds
     #[arg(long, value_name = "SECS")]
     analyze_interval: Option<u64>,
+
+    /// Expose Prometheus /metrics endpoint on optional port (default: 9090)
+    #[arg(long, num_args = 0..=1, default_missing_value = "9090")]
+    metrics: Option<u16>,
+
+    /// Poll a remote Prometheus server at this URL
+    #[arg(long, value_name = "URL")]
+    prometheus: Option<String>,
+
+    /// Prometheus poll interval in seconds (default: 15)
+    #[arg(long, value_name = "SECS")]
+    prometheus_interval: Option<u64>,
 }
 
 #[tokio::main]
@@ -269,6 +283,24 @@ async fn main() -> anyhow::Result<()> {
     // Shared diagnostics state (populated by AnalyzeEngine, read by TUI)
     let diagnostics: Arc<Mutex<Vec<Diagnostic>>> = Arc::new(Mutex::new(Vec::new()));
 
+    // Spawn Prometheus consumer if --prometheus is set (before AnalyzeEngine so we can pass rx)
+    let prometheus_rx = if let Some(ref prom_url) = cli.prometheus {
+        let interval_secs = cli.prometheus_interval.unwrap_or(15);
+        let consumer = PrometheusConsumer::new(
+            prom_url,
+            std::time::Duration::from_secs(interval_secs),
+        )?;
+        let (prom_tx, prom_rx) = mpsc::channel(64);
+        let prom_cancel = cancel.child_token();
+        tokio::spawn(async move {
+            consumer.run(prom_tx, prom_cancel).await;
+        });
+        tracing::info!("Prometheus consumer polling {prom_url} every {interval_secs}s");
+        Some(prom_rx)
+    } else {
+        None
+    };
+
     // Spawn diagnostic engine unless --no-analyze
     if !cli.no_analyze {
         let interval_secs = cli.analyze_interval.unwrap_or(5);
@@ -278,6 +310,9 @@ async fn main() -> anyhow::Result<()> {
             ..Default::default()
         };
         let mut engine = AnalyzeEngine::new(config);
+        if let Some(rx) = prometheus_rx {
+            engine = engine.with_prometheus_rx(rx);
+        }
         let (diag_tx, mut diag_rx) = mpsc::channel::<Vec<Diagnostic>>(32);
         let analyze_cancel = cancel.child_token();
         let analyze_world = Arc::clone(&world);
@@ -310,6 +345,42 @@ async fn main() -> anyhow::Result<()> {
         });
 
         tracing::info!("diagnostic engine enabled (interval: {interval_secs}s)");
+    }
+
+    // Spawn Prometheus metrics exporter if --metrics is set
+    if let Some(port) = cli.metrics {
+        let exporter = MetricsExporter::new();
+        let exporter_world = Arc::clone(&world);
+        let exporter_diags = Arc::clone(&diagnostics);
+
+        // Periodic update task: feed WorldGraph + diagnostics into the exporter
+        let update_cancel = cancel.child_token();
+        let exporter_ref = exporter.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+            loop {
+                tokio::select! {
+                    _ = update_cancel.cancelled() => break,
+                    _ = interval.tick() => {
+                        if let Ok(graph) = exporter_world.read() {
+                            let diags = exporter_diags.lock()
+                                .map(|d| d.clone())
+                                .unwrap_or_default();
+                            exporter_ref.update_from_world(&graph, &diags);
+                        }
+                    }
+                }
+            }
+        });
+
+        let serve_cancel = cancel.child_token();
+        tokio::spawn(async move {
+            if let Err(e) = exporter.serve(port, serve_cancel).await {
+                tracing::error!("metrics server error: {e}");
+            }
+        });
+
+        tracing::info!("Prometheus /metrics endpoint on port {port}");
     }
 
     // Mode handling

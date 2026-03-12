@@ -8,7 +8,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
-use aether_core::metrics::HostId;
+use aether_core::metrics::{HostId, TimeSeries};
 use aether_core::models::{Diagnostic, Severity};
 use aether_core::WorldGraph;
 
@@ -72,6 +72,7 @@ pub struct AnalyzeEngine {
     active_diagnostics: Vec<Diagnostic>,
     profiles: HashMap<u32, ProcessProfile>,
     stats: AnalyzeStats,
+    prometheus_rx: Option<mpsc::Receiver<Vec<TimeSeries>>>,
 }
 
 impl AnalyzeEngine {
@@ -92,7 +93,14 @@ impl AnalyzeEngine {
             active_diagnostics: Vec::new(),
             profiles: HashMap::new(),
             stats: AnalyzeStats::default(),
+            prometheus_rx: None,
         }
+    }
+
+    /// Attach a Prometheus consumer channel for remote time-series ingestion.
+    pub fn with_prometheus_rx(mut self, rx: mpsc::Receiver<Vec<TimeSeries>>) -> Self {
+        self.prometheus_rx = Some(rx);
+        self
     }
 
     /// Create an engine with custom collector roots (for testing).
@@ -118,6 +126,7 @@ impl AnalyzeEngine {
             active_diagnostics: Vec::new(),
             profiles: HashMap::new(),
             stats: AnalyzeStats::default(),
+            prometheus_rx: None,
         }
     }
 
@@ -128,10 +137,20 @@ impl AnalyzeEngine {
         diag_tx: mpsc::Sender<Vec<Diagnostic>>,
         cancel: CancellationToken,
     ) {
+        let mut interval = tokio::time::interval(self.config.interval);
+        // Skip the immediate first tick so we don't fire before data is available.
+        interval.tick().await;
+
         loop {
             tokio::select! {
                 _ = cancel.cancelled() => break,
-                _ = tokio::time::sleep(self.config.interval) => {
+                _ = interval.tick() => {
+                    // Drain any pending Prometheus batches before analysis tick.
+                    if let Some(ref mut rx) = self.prometheus_rx {
+                        while let Ok(batch) = rx.try_recv() {
+                            self.store.ingest_remote(batch);
+                        }
+                    }
                     self.tick(&world);
                     if diag_tx.send(self.active_diagnostics.clone()).await.is_err() {
                         warn!("diagnostic receiver dropped, stopping engine");

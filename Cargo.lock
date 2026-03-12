@@ -167,6 +167,7 @@ dependencies = [
  "aether-gamification",
  "aether-ingestion",
  "aether-mcp",
+ "aether-metrics",
  "aether-predict",
  "aether-render",
  "aether-script",
