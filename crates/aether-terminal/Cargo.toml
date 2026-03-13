@@ -22,6 +22,7 @@ aether-config = { path = "../aether-config" }
 aether-discovery = { path = "../aether-discovery" }
 aether-prober = { path = "../aether-prober" }
 aether-output = { path = "../aether-output" }
+aether-api = { path = "../aether-api" }
 arc-swap = "1"
 clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
@@ -33,3 +34,4 @@ crossterm = "0.28"
 ratatui = "0.29"
 open = "5"
 sysinfo = "0.34"
+tonic = "0.12"
