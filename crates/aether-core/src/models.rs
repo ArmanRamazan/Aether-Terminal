@@ -357,13 +357,15 @@ pub struct CollectedMetric {
     pub timestamp: SystemTime,
 }
 
-/// An infrastructure target discovered by service discovery.
+/// A monitored service or endpoint discovered or configured.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Target {
+    pub id: String,
     pub name: String,
     pub kind: TargetKind,
-    pub endpoints: Vec<String>,
+    pub endpoints: Vec<Endpoint>,
     pub labels: HashMap<String, String>,
+    pub discovered_at: SystemTime,
 }
 
 /// Classification of a discovered target.
@@ -383,6 +385,117 @@ impl fmt::Display for TargetKind {
             Self::Service => f.write_str("service"),
             Self::Container => f.write_str("container"),
             Self::Pod => f.write_str("pod"),
+        }
+    }
+}
+
+/// A network endpoint associated with a target.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Endpoint {
+    pub url: String,
+    pub endpoint_type: EndpointType,
+}
+
+/// Type of endpoint for monitoring purposes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum EndpointType {
+    Prometheus,
+    Health,
+    TcpProbe,
+    Logs,
+}
+
+impl fmt::Display for EndpointType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Prometheus => f.write_str("prometheus"),
+            Self::Health => f.write_str("health"),
+            Self::TcpProbe => f.write_str("tcp_probe"),
+            Self::Logs => f.write_str("logs"),
+        }
+    }
+}
+
+/// Health status of a monitored target.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServiceHealth {
+    pub target_id: String,
+    pub status: HealthStatus,
+    pub last_check: SystemTime,
+    pub probe_results: Vec<ProbeResult>,
+}
+
+/// Overall health classification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum HealthStatus {
+    Healthy,
+    Degraded,
+    Failed,
+    Unknown,
+}
+
+impl fmt::Display for HealthStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Healthy => f.write_str("healthy"),
+            Self::Degraded => f.write_str("degraded"),
+            Self::Failed => f.write_str("failed"),
+            Self::Unknown => f.write_str("unknown"),
+        }
+    }
+}
+
+/// Result of a single probe check.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProbeResult {
+    pub target_id: String,
+    pub check_type: CheckType,
+    pub status: ProbeStatus,
+    pub latency_ms: f64,
+    pub details: Option<String>,
+    pub timestamp: SystemTime,
+}
+
+/// Type of probe check performed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum CheckType {
+    HttpHealth,
+    TcpConnect,
+    DnsResolve,
+    TlsCertificate,
+}
+
+impl fmt::Display for CheckType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::HttpHealth => f.write_str("http_health"),
+            Self::TcpConnect => f.write_str("tcp_connect"),
+            Self::DnsResolve => f.write_str("dns_resolve"),
+            Self::TlsCertificate => f.write_str("tls_certificate"),
+        }
+    }
+}
+
+/// Outcome of a single probe execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum ProbeStatus {
+    Ok,
+    Degraded,
+    Failed,
+    Timeout,
+}
+
+impl fmt::Display for ProbeStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Ok => f.write_str("ok"),
+            Self::Degraded => f.write_str("degraded"),
+            Self::Failed => f.write_str("failed"),
+            Self::Timeout => f.write_str("timeout"),
         }
     }
 }
@@ -568,6 +681,77 @@ mod tests {
         assert!(Severity::Critical > Severity::Warning);
         assert!(Severity::Warning > Severity::Info);
         assert!(Severity::Critical > Severity::Info);
+    }
+
+    #[test]
+    fn test_target_serialization_roundtrip() {
+        let target = Target {
+            id: "svc-1".to_string(),
+            name: "web-server".to_string(),
+            kind: TargetKind::Service,
+            endpoints: vec![
+                Endpoint {
+                    url: "http://localhost:9090/metrics".to_string(),
+                    endpoint_type: EndpointType::Prometheus,
+                },
+                Endpoint {
+                    url: "http://localhost:8080/health".to_string(),
+                    endpoint_type: EndpointType::Health,
+                },
+            ],
+            labels: {
+                let mut m = HashMap::new();
+                m.insert("env".to_string(), "prod".to_string());
+                m
+            },
+            discovered_at: SystemTime::now(),
+        };
+        let json = serde_json::to_string(&target).unwrap();
+        let restored: Target = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.id, "svc-1");
+        assert_eq!(restored.name, "web-server");
+        assert_eq!(restored.kind, TargetKind::Service);
+        assert_eq!(restored.endpoints.len(), 2);
+        assert_eq!(restored.endpoints[0].endpoint_type, EndpointType::Prometheus);
+        assert_eq!(restored.labels.get("env").map(String::as_str), Some("prod"));
+    }
+
+    #[test]
+    fn test_probe_result_construction() {
+        let result = ProbeResult {
+            target_id: "svc-1".to_string(),
+            check_type: CheckType::HttpHealth,
+            status: ProbeStatus::Ok,
+            latency_ms: 42.5,
+            details: Some("200 OK".to_string()),
+            timestamp: SystemTime::now(),
+        };
+        assert_eq!(result.check_type, CheckType::HttpHealth);
+        assert_eq!(result.status, ProbeStatus::Ok);
+        assert!((result.latency_ms - 42.5).abs() < f64::EPSILON);
+
+        let json = serde_json::to_string(&result).unwrap();
+        let restored: ProbeResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.target_id, "svc-1");
+        assert_eq!(restored.check_type, CheckType::HttpHealth);
+        assert_eq!(restored.status, ProbeStatus::Ok);
+    }
+
+    #[test]
+    fn test_health_status_defaults() {
+        let health = ServiceHealth {
+            target_id: "svc-1".to_string(),
+            status: HealthStatus::Unknown,
+            last_check: SystemTime::now(),
+            probe_results: Vec::new(),
+        };
+        assert_eq!(health.status, HealthStatus::Unknown);
+        assert!(health.probe_results.is_empty());
+
+        let json = serde_json::to_string(&health).unwrap();
+        let restored: ServiceHealth = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.status, HealthStatus::Unknown);
+        assert_eq!(restored.target_id, "svc-1");
     }
 
     #[test]
