@@ -15,8 +15,7 @@ use tokio::sync::broadcast;
 /// and by a gRPC streaming adapter in Phase 2.
 pub trait EventBus: Send + Sync {
     /// Publish an event to all subscribers.
-    fn publish(&self, event: IntegrationEvent)
-        -> impl std::future::Future<Output = ()> + Send;
+    fn publish(&self, event: IntegrationEvent) -> impl std::future::Future<Output = ()> + Send;
 
     /// Create a new subscription receiver.
     fn subscribe(&self) -> broadcast::Receiver<IntegrationEvent>;

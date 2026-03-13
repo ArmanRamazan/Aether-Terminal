@@ -140,7 +140,10 @@ mod tests {
         let id = q.enqueue(AgentAction::KillProcess { pid: 1 }, 1, "agent");
         let action = q.approve(&id).expect("should approve");
         assert!(matches!(action, AgentAction::KillProcess { pid: 1 }));
-        assert!(q.pending().is_empty(), "pending should be empty after approve");
+        assert!(
+            q.pending().is_empty(),
+            "pending should be empty after approve"
+        );
         assert_eq!(q.history().len(), 1);
         assert!(q.history()[0].1, "should be marked approved");
     }

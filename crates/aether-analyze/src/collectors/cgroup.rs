@@ -61,12 +61,10 @@ impl CgroupCollector {
         let version = self.detect_version(pid)?;
 
         let relative = match version {
-            CgroupVersion::V2 => {
-                content
-                    .lines()
-                    .find_map(|l| l.strip_prefix("0::"))
-                    .unwrap_or("/")
-            }
+            CgroupVersion::V2 => content
+                .lines()
+                .find_map(|l| l.strip_prefix("0::"))
+                .unwrap_or("/"),
             CgroupVersion::V1 => {
                 // Find memory controller: "<id>:memory:<path>" or "<id>:...,memory,...:<path>"
                 content
@@ -136,15 +134,13 @@ impl Default for CgroupCollector {
 
 /// Read /proc/{pid}/cgroup content.
 fn read_proc_cgroup(pid: u32) -> Result<String, AnalyzeError> {
-    fs::read_to_string(format!("/proc/{pid}/cgroup")).map_err(|e| {
-        AnalyzeError::Collector(format!("failed to read /proc/{pid}/cgroup: {e}"))
-    })
+    fs::read_to_string(format!("/proc/{pid}/cgroup"))
+        .map_err(|e| AnalyzeError::Collector(format!("failed to read /proc/{pid}/cgroup: {e}")))
 }
 
 /// Read cgroup v2 control files.
 fn read_v2_limits(path: &Path) -> CgroupLimits {
-    let memory_max =
-        read_file_trimmed(&path.join("memory.max")).and_then(|s| parse_max_value(&s));
+    let memory_max = read_file_trimmed(&path.join("memory.max")).and_then(|s| parse_max_value(&s));
     let memory_current = read_file_trimmed(&path.join("memory.current"))
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
@@ -194,8 +190,8 @@ fn read_v1_limits(path: &Path) -> CgroupLimits {
                     Some(val as u64)
                 }
             });
-            let period = read_file_trimmed(&cpu_path.join("cpu.cfs_period_us"))
-                .and_then(|s| s.parse().ok());
+            let period =
+                read_file_trimmed(&cpu_path.join("cpu.cfs_period_us")).and_then(|s| s.parse().ok());
             (quota, period)
         })
         .unwrap_or((None, None));
@@ -340,7 +336,10 @@ mod tests {
             Some(1024),
             "soft_limit > 0 should map to Some"
         );
-        assert_eq!(limits.disk_total, None, "disk_total always None from cgroup");
+        assert_eq!(
+            limits.disk_total, None,
+            "disk_total always None from cgroup"
+        );
     }
 
     #[test]

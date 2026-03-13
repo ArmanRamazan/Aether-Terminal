@@ -207,11 +207,7 @@ fn eval_condition(
             true
         }
 
-        RuleCondition::Count {
-            counter,
-            op,
-            value,
-        } => {
+        RuleCondition::Count { counter, op, value } => {
             let metric_key = match counter {
                 CounterType::ZombieProcesses => "zombie_count",
                 CounterType::RestartCount => "restart_count",
@@ -232,6 +228,81 @@ fn eval_condition(
 
             matched_values.push((metric_key.to_string(), current));
             true
+        }
+
+        RuleCondition::RateChange {
+            metric,
+            window_secs,
+            threshold_percent,
+        } => {
+            let series = match ctx.store.get(ctx.host, Some(ctx.pid), metric) {
+                Some(s) => s,
+                None => return false,
+            };
+
+            let window = Duration::from_secs(*window_secs);
+            let samples: Vec<_> = series
+                .samples
+                .iter()
+                .filter(|s| s.timestamp.elapsed() <= window)
+                .collect();
+
+            if samples.len() < 2 {
+                return false;
+            }
+
+            let mid = samples.len() / 2;
+            let first_half_avg = samples[..mid].iter().map(|s| s.value).sum::<f64>() / mid as f64;
+            let second_half_avg =
+                samples[mid..].iter().map(|s| s.value).sum::<f64>() / (samples.len() - mid) as f64;
+
+            if first_half_avg.abs() < f64::EPSILON {
+                return false;
+            }
+
+            let change_percent = ((second_half_avg - first_half_avg) / first_half_avg) * 100.0;
+
+            // For negative thresholds (drops): change_percent <= threshold_percent
+            // For positive thresholds (spikes): change_percent >= threshold_percent
+            let triggered = if *threshold_percent < 0.0 {
+                change_percent <= *threshold_percent
+            } else {
+                change_percent >= *threshold_percent
+            };
+
+            if !triggered {
+                return false;
+            }
+
+            matched_values.push(((*metric).to_string(), change_percent));
+            true
+        }
+
+        RuleCondition::GrowthTrend {
+            metric,
+            window_secs,
+            slope_threshold,
+            sustained,
+        } => {
+            let series = match ctx.store.get(ctx.host, Some(ctx.pid), metric) {
+                Some(s) => s,
+                None => return false,
+            };
+
+            let window = Duration::from_secs(*window_secs);
+            let slope = ctx.trend.slope(series, window);
+
+            if slope <= *slope_threshold {
+                clear_sustained(ctx.sustained_state, ctx.rule_id, ctx.pid);
+                return false;
+            }
+
+            matched_values.push(((*metric).to_string(), slope));
+
+            match sustained {
+                Some(dur) => check_sustained(ctx.sustained_state, ctx.rule_id, ctx.pid, *dur),
+                None => true,
+            }
         }
 
         RuleCondition::All(conditions) => {
@@ -594,15 +665,185 @@ mod tests {
             ));
 
             let findings = engine.evaluate(&store, &host, &HashMap::new());
-            assert_eq!(
-                findings.len(),
-                1,
-                "{expected_key}: 5 > 3 should match"
-            );
+            assert_eq!(findings.len(), 1, "{expected_key}: 5 > 3 should match");
             assert_eq!(
                 findings[0].matched_values[0].0, *expected_key,
                 "matched key should be {expected_key}"
             );
         }
+    }
+
+    #[test]
+    fn test_rate_change_detects_throughput_drop() {
+        let host = HostId::new("local");
+        let mut store = MetricStore::new(200);
+
+        // First half: ~100 rps, second half: ~50 rps (50% drop).
+        let base = Instant::now() - Duration::from_secs(300);
+        for i in 0..150 {
+            store_push_at(
+                &mut store,
+                &host,
+                1,
+                "http_requests_total",
+                base + Duration::from_secs(i),
+                100.0,
+            );
+        }
+        for i in 150..300 {
+            store_push_at(
+                &mut store,
+                &host,
+                1,
+                "http_requests_total",
+                base + Duration::from_secs(i),
+                50.0,
+            );
+        }
+
+        let mut engine = RuleEngine::new();
+        engine.add_rule(make_rule(
+            "throughput_drop",
+            RuleCondition::RateChange {
+                metric: "http_requests_total",
+                window_secs: 300,
+                threshold_percent: -30.0,
+            },
+        ));
+
+        let findings = engine.evaluate(&store, &host, &HashMap::new());
+        assert_eq!(findings.len(), 1, "50% drop should trigger -30% threshold");
+    }
+
+    #[test]
+    fn test_rate_change_no_fire_small_drop() {
+        let host = HostId::new("local");
+        let mut store = MetricStore::new(200);
+
+        // First half: 100, second half: 85 (15% drop, below 30% threshold).
+        let base = Instant::now() - Duration::from_secs(300);
+        for i in 0..150 {
+            store_push_at(
+                &mut store,
+                &host,
+                1,
+                "http_requests_total",
+                base + Duration::from_secs(i),
+                100.0,
+            );
+        }
+        for i in 150..300 {
+            store_push_at(
+                &mut store,
+                &host,
+                1,
+                "http_requests_total",
+                base + Duration::from_secs(i),
+                85.0,
+            );
+        }
+
+        let mut engine = RuleEngine::new();
+        engine.add_rule(make_rule(
+            "throughput_drop",
+            RuleCondition::RateChange {
+                metric: "http_requests_total",
+                window_secs: 300,
+                threshold_percent: -30.0,
+            },
+        ));
+
+        let findings = engine.evaluate(&store, &host, &HashMap::new());
+        assert!(
+            findings.is_empty(),
+            "15% drop should not trigger -30% threshold"
+        );
+    }
+
+    #[test]
+    fn test_latency_high_fires() {
+        let host = HostId::new("local");
+        let store = make_store_with_metric(&host, 1, "http_latency_p99_ms", 600.0);
+
+        let mut engine = RuleEngine::new();
+        engine.add_rule(make_rule(
+            "latency_high",
+            RuleCondition::Threshold {
+                metric: "http_latency_p99_ms",
+                op: CompareOp::Gt,
+                value: 500.0,
+                sustained: None,
+            },
+        ));
+
+        let findings = engine.evaluate(&store, &host, &HashMap::new());
+        assert_eq!(findings.len(), 1, "p99 600ms > 500ms should fire");
+    }
+
+    #[test]
+    fn test_health_check_failed_fires() {
+        let host = HostId::new("local");
+        let store = make_store_with_metric(&host, 1, "probe_success", 0.0);
+
+        let mut engine = RuleEngine::new();
+        engine.add_rule(make_rule(
+            "health_check",
+            RuleCondition::Threshold {
+                metric: "probe_success",
+                op: CompareOp::Lt,
+                value: 1.0,
+                sustained: None,
+            },
+        ));
+
+        let findings = engine.evaluate(&store, &host, &HashMap::new());
+        assert_eq!(findings.len(), 1, "probe_success=0 < 1 should fire");
+    }
+
+    #[test]
+    fn test_growth_trend_fires() {
+        let host = HostId::new("local");
+        let mut store = MetricStore::new(200);
+
+        // Linear growth: 0, 1, 2, 3, ... over 60 seconds.
+        let base = Instant::now() - Duration::from_secs(60);
+        for i in 0..60 {
+            store_push_at(
+                &mut store,
+                &host,
+                1,
+                "http_latency_p99_ms",
+                base + Duration::from_secs(i),
+                i as f64,
+            );
+        }
+
+        let mut engine = RuleEngine::new();
+        engine.add_rule(make_rule(
+            "latency_trend",
+            RuleCondition::GrowthTrend {
+                metric: "http_latency_p99_ms",
+                window_secs: 60,
+                slope_threshold: 0.0,
+                sustained: None,
+            },
+        ));
+
+        let findings = engine.evaluate(&store, &host, &HashMap::new());
+        assert_eq!(
+            findings.len(),
+            1,
+            "positive slope should exceed 0.0 threshold"
+        );
+    }
+
+    #[test]
+    fn test_rule_count_includes_app_rules() {
+        use super::super::builtin::builtin_rules;
+
+        let rules = builtin_rules();
+        let app_count = rules.iter().filter(|r| r.id.starts_with("app_")).count();
+        assert_eq!(app_count, 10, "should have 10 application rules");
+        assert!(rules.len() >= 40, "should have at least 40 total rules");
     }
 }
