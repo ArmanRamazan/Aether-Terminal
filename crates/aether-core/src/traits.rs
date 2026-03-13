@@ -61,7 +61,9 @@ pub trait Storage: Send + Sync + 'static {
 #[async_trait]
 pub trait DataSource: Send + Sync {
     /// Collect metrics from this source.
-    async fn collect(&self) -> Result<Vec<CollectedMetric>, Box<dyn std::error::Error + Send + Sync>>;
+    async fn collect(
+        &self,
+    ) -> Result<Vec<CollectedMetric>, Box<dyn std::error::Error + Send + Sync>>;
 
     /// Human-readable name of this data source.
     fn name(&self) -> &str;
@@ -71,7 +73,10 @@ pub trait DataSource: Send + Sync {
 #[async_trait]
 pub trait OutputSink: Send + Sync {
     /// Send a diagnostic finding to this output.
-    async fn send(&self, diagnostic: &Diagnostic) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
+    async fn send(
+        &self,
+        diagnostic: &Diagnostic,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
 
     /// Human-readable name of this output.
     fn name(&self) -> &str;

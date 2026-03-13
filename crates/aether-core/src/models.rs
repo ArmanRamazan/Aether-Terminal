@@ -173,6 +173,12 @@ pub enum DiagCategory {
     CapacityRisk,
     CorrelatedAnomaly,
     ScriptRule,
+    ThroughputDrop,
+    LatencyHigh,
+    ErrorRateHigh,
+    HealthCheckFailed,
+    CertificateExpiry,
+    NetworkDegradation,
 }
 
 impl fmt::Display for DiagCategory {
@@ -193,6 +199,12 @@ impl fmt::Display for DiagCategory {
             Self::CapacityRisk => f.write_str("capacity_risk"),
             Self::CorrelatedAnomaly => f.write_str("correlated_anomaly"),
             Self::ScriptRule => f.write_str("script_rule"),
+            Self::ThroughputDrop => f.write_str("throughput_drop"),
+            Self::LatencyHigh => f.write_str("latency_high"),
+            Self::ErrorRateHigh => f.write_str("error_rate_high"),
+            Self::HealthCheckFailed => f.write_str("health_check_failed"),
+            Self::CertificateExpiry => f.write_str("certificate_expiry"),
+            Self::NetworkDegradation => f.write_str("network_degradation"),
         }
     }
 }
@@ -216,13 +228,32 @@ pub struct Evidence {
 #[derive(Debug, Clone, Serialize)]
 #[non_exhaustive]
 pub enum RecommendedAction {
-    ScaleUp { resource: String, from: String, to: String },
-    Restart { reason: String },
-    RaiseLimits { limit_name: String, from: String, to: String },
-    ReduceLoad { suggestion: String },
-    Investigate { what: String },
-    KillProcess { pid: u32, reason: String },
-    NoAction { reason: String },
+    ScaleUp {
+        resource: String,
+        from: String,
+        to: String,
+    },
+    Restart {
+        reason: String,
+    },
+    RaiseLimits {
+        limit_name: String,
+        from: String,
+        to: String,
+    },
+    ReduceLoad {
+        suggestion: String,
+    },
+    Investigate {
+        what: String,
+    },
+    KillProcess {
+        pid: u32,
+        reason: String,
+    },
+    NoAction {
+        reason: String,
+    },
 }
 
 impl fmt::Display for RecommendedAction {
@@ -232,7 +263,11 @@ impl fmt::Display for RecommendedAction {
                 write!(f, "scale_up({resource}: {from} -> {to})")
             }
             Self::Restart { reason } => write!(f, "restart({reason})"),
-            Self::RaiseLimits { limit_name, from, to } => {
+            Self::RaiseLimits {
+                limit_name,
+                from,
+                to,
+            } => {
                 write!(f, "raise_limits({limit_name}: {from} -> {to})")
             }
             Self::ReduceLoad { suggestion } => write!(f, "reduce_load({suggestion})"),

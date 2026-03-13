@@ -192,7 +192,10 @@ mod tests {
         }
         assert_eq!(ts.len(), 10);
         let rate = ts.rate(Duration::from_secs(60)).expect("should have rate");
-        assert!((rate - 10.0).abs() < 0.01, "rate should be ~10.0, got {rate}");
+        assert!(
+            (rate - 10.0).abs() < 0.01,
+            "rate should be ~10.0, got {rate}"
+        );
     }
 
     #[test]

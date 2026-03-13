@@ -89,6 +89,22 @@ pub enum RuleCondition {
         op: CompareOp,
         value: u64,
     },
+    /// Metric rate changed by more than a percentage within a time window.
+    ///
+    /// Compares the average of the first half of the window to the second half.
+    /// A negative `threshold_percent` detects drops (e.g. -30.0 = 30% decrease).
+    RateChange {
+        metric: &'static str,
+        window_secs: u64,
+        threshold_percent: f64,
+    },
+    /// Metric trend slope exceeds a threshold over a configurable window.
+    GrowthTrend {
+        metric: &'static str,
+        window_secs: u64,
+        slope_threshold: f64,
+        sustained: Option<Duration>,
+    },
     /// All sub-conditions must be true.
     All(Vec<RuleCondition>),
     /// At least one sub-condition must be true.

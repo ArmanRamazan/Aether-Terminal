@@ -362,7 +362,11 @@ mod tests {
 
         let pairs = g.edge_pairs();
         assert_eq!(pairs.len(), 1);
-        assert_eq!(pairs[0], (1, 2), "edge should connect pid 1 → 2, not self-loop");
+        assert_eq!(
+            pairs[0],
+            (1, 2),
+            "edge should connect pid 1 → 2, not self-loop"
+        );
     }
 
     #[test]

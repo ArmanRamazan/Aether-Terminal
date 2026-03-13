@@ -6,9 +6,9 @@ use aether_core::models::{DiagCategory, Severity};
 
 use super::types::{CompareOp, CounterType, LimitSource, Rule, RuleCondition};
 
-/// Returns all built-in diagnostic rules.
+/// Returns all built-in diagnostic rules (system + application).
 pub fn builtin_rules() -> Vec<Rule> {
-    vec![
+    let mut rules = vec![
         // 1. Memory approaching OOM (>90% of cgroup limit).
         Rule {
             id: "mem_approaching_oom",
@@ -433,7 +433,9 @@ pub fn builtin_rules() -> Vec<Rule> {
             },
             enabled: true,
         },
-    ]
+    ];
+    rules.extend(super::app_rules::application_rules());
+    rules
 }
 
 #[cfg(test)]
@@ -445,10 +447,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_builtin_count_gte_30() {
+    fn test_builtin_count_gte_40() {
         assert!(
-            builtin_rules().len() >= 30,
-            "expected at least 30 rules, got {}",
+            builtin_rules().len() >= 40,
+            "expected at least 40 rules (30 system + 10 app), got {}",
             builtin_rules().len()
         );
     }
