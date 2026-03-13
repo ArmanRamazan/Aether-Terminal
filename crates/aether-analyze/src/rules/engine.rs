@@ -25,6 +25,7 @@ impl Default for RuleEngine {
 }
 
 impl RuleEngine {
+    /// Create an empty rule engine with no rules loaded.
     pub fn new() -> Self {
         Self {
             rules: Vec::new(),

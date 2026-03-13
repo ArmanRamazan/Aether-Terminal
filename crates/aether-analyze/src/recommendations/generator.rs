@@ -17,6 +17,7 @@ pub struct RecommendationGenerator {
 }
 
 impl RecommendationGenerator {
+    /// Create a new generator with auto-incrementing diagnostic IDs.
     pub fn new() -> Self {
         Self {
             next_id: AtomicU64::new(1),

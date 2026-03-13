@@ -76,6 +76,7 @@ pub struct AnalyzeEngine {
 }
 
 impl AnalyzeEngine {
+    /// Create a new engine with the given configuration and built-in rules.
     pub fn new(config: AnalyzeConfig) -> Self {
         let store = MetricStore::new(config.history_capacity);
         let mut rule_engine = RuleEngine::new();
