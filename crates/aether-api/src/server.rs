@@ -1,7 +1,6 @@
 //! gRPC server implementing the AetherService.
 
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
@@ -9,10 +8,9 @@ use tonic::{Request, Response, Status};
 use tracing::{debug, warn};
 
 use aether_core::event_bus::EventBus;
-use aether_core::{
-    AgentAction, ArbiterQueue, Diagnostic, Severity, Target,
-};
+use aether_core::{AgentAction, ArbiterQueue, Diagnostic, Severity, Target};
 
+use crate::convert::diag_target_name;
 use crate::proto;
 
 /// gRPC server for machine-to-machine integration.
@@ -44,98 +42,12 @@ impl<E: EventBus> AetherGrpcServer<E> {
 }
 
 #[allow(clippy::result_large_err)] // tonic::Status is large by design
-fn lock_or_status<'a, T>(lock: &'a Mutex<T>, name: &str) -> Result<std::sync::MutexGuard<'a, T>, Status> {
+fn lock_or_status<'a, T>(
+    lock: &'a Mutex<T>,
+    name: &str,
+) -> Result<std::sync::MutexGuard<'a, T>, Status> {
     lock.lock()
         .map_err(|_| Status::internal(format!("{name} lock poisoned")))
-}
-
-fn diag_target_name(target: &aether_core::DiagTarget) -> String {
-    match target {
-        aether_core::DiagTarget::Process { pid, name } => format!("process:{name}({pid})"),
-        aether_core::DiagTarget::Host(id) => format!("host:{id}"),
-        aether_core::DiagTarget::Container { name, .. } => format!("container:{name}"),
-        aether_core::DiagTarget::Disk { mount } => format!("disk:{mount}"),
-        aether_core::DiagTarget::Network { interface } => format!("network:{interface}"),
-        _ => "unknown".to_string(),
-    }
-}
-
-fn core_to_proto_diagnostic(d: &Diagnostic) -> proto::Diagnostic {
-    proto::Diagnostic {
-        id: d.id,
-        target_name: diag_target_name(&d.target),
-        severity: d.severity.to_string(),
-        category: d.category.to_string(),
-        summary: d.summary.clone(),
-        recommendation: d.recommendation.reason.clone(),
-    }
-}
-
-fn core_to_proto_target(t: &Target) -> proto::Target {
-    proto::Target {
-        id: t.name.clone(),
-        name: t.name.clone(),
-        kind: t.kind.to_string(),
-        endpoints: t.endpoints.clone(),
-    }
-}
-
-fn now_unix_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
-}
-
-fn integration_to_proto(event: &aether_core::events::IntegrationEvent) -> proto::IntegrationEvent {
-    let (event_type, payload) = match event {
-        aether_core::events::IntegrationEvent::DiagnosticCreated {
-            diagnostic_id,
-            severity,
-            summary,
-        } => (
-            "diagnostic_created".to_string(),
-            format!("{{\"diagnostic_id\":{diagnostic_id},\"severity\":\"{severity}\",\"summary\":\"{summary}\"}}"),
-        ),
-        aether_core::events::IntegrationEvent::DiagnosticResolved { diagnostic_id } => (
-            "diagnostic_resolved".to_string(),
-            format!("{{\"diagnostic_id\":{diagnostic_id}}}"),
-        ),
-        aether_core::events::IntegrationEvent::ActionProposed {
-            action_id,
-            description,
-        } => (
-            "action_proposed".to_string(),
-            format!("{{\"action_id\":\"{action_id}\",\"description\":\"{description}\"}}"),
-        ),
-        aether_core::events::IntegrationEvent::ActionApproved { action_id } => (
-            "action_approved".to_string(),
-            format!("{{\"action_id\":\"{action_id}\"}}"),
-        ),
-        aether_core::events::IntegrationEvent::ActionDenied { action_id } => (
-            "action_denied".to_string(),
-            format!("{{\"action_id\":\"{action_id}\"}}"),
-        ),
-        aether_core::events::IntegrationEvent::ActionExecuted { action_id, success } => (
-            "action_executed".to_string(),
-            format!("{{\"action_id\":\"{action_id}\",\"success\":{success}}}"),
-        ),
-        aether_core::events::IntegrationEvent::TargetDiscovered { name, kind } => (
-            "target_discovered".to_string(),
-            format!("{{\"name\":\"{name}\",\"kind\":\"{kind}\"}}"),
-        ),
-        aether_core::events::IntegrationEvent::TargetLost { name } => (
-            "target_lost".to_string(),
-            format!("{{\"name\":\"{name}\"}}"),
-        ),
-        _ => ("unknown".to_string(), "{}".to_string()),
-    };
-
-    proto::IntegrationEvent {
-        event_type,
-        payload,
-        timestamp: now_unix_ms(),
-    }
 }
 
 fn parse_severity(s: &str) -> Option<Severity> {
@@ -163,10 +75,8 @@ impl<E: EventBus + 'static> proto::aether_service_server::AetherService for Aeth
             .iter()
             .filter(|d| d.resolved_at.is_none())
             .filter(|d| severity_filter.is_none_or(|s| d.severity == s))
-            .filter(|d| {
-                target_filter.is_none_or(|t| diag_target_name(&d.target).contains(t))
-            })
-            .map(core_to_proto_diagnostic)
+            .filter(|d| target_filter.is_none_or(|t| diag_target_name(&d.target).contains(t)))
+            .map(proto::Diagnostic::from)
             .collect();
 
         debug!(count = diagnostics.len(), "GetDiagnostics response");
@@ -179,14 +89,15 @@ impl<E: EventBus + 'static> proto::aether_service_server::AetherService for Aeth
     ) -> Result<Response<proto::GetTargetsResponse>, Status> {
         let targets = lock_or_status(&self.targets, "targets")?;
 
-        let targets: Vec<proto::Target> = targets.iter().map(core_to_proto_target).collect();
+        let targets: Vec<proto::Target> = targets.iter().map(proto::Target::from).collect();
 
         debug!(count = targets.len(), "GetTargets response");
         Ok(Response::new(proto::GetTargetsResponse { targets }))
     }
 
-    type StreamEventsStream =
-        std::pin::Pin<Box<dyn tokio_stream::Stream<Item = Result<proto::IntegrationEvent, Status>> + Send>>;
+    type StreamEventsStream = std::pin::Pin<
+        Box<dyn tokio_stream::Stream<Item = Result<proto::IntegrationEvent, Status>> + Send>,
+    >;
 
     async fn stream_events(
         &self,
@@ -198,30 +109,29 @@ impl<E: EventBus + 'static> proto::aether_service_server::AetherService for Aeth
 
         debug!(?severity_filter, "StreamEvents subscription started");
 
-        let stream = BroadcastStream::new(rx)
-            .filter_map(move |result| {
-                match result {
-                    Ok(event) => {
-                        // Apply severity filter for diagnostic events.
-                        if let Some(ref filter) = severity_filter {
-                            if let aether_core::events::IntegrationEvent::DiagnosticCreated {
-                                ref severity,
-                                ..
-                            } = event
-                            {
-                                if severity != filter {
-                                    return None;
-                                }
+        let stream = BroadcastStream::new(rx).filter_map(move |result| {
+            match result {
+                Ok(event) => {
+                    // Apply severity filter for diagnostic events.
+                    if let Some(ref filter) = severity_filter {
+                        if let aether_core::events::IntegrationEvent::DiagnosticCreated {
+                            ref severity,
+                            ..
+                        } = event
+                        {
+                            if severity != filter {
+                                return None;
                             }
                         }
-                        Some(Ok(integration_to_proto(&event)))
                     }
-                    Err(e) => {
-                        warn!(error = %e, "broadcast stream lagged");
-                        None
-                    }
+                    Some(Ok(proto::IntegrationEvent::from(&event)))
                 }
-            });
+                Err(e) => {
+                    warn!(error = %e, "broadcast stream lagged");
+                    None
+                }
+            }
+        });
 
         Ok(Response::new(Box::pin(stream)))
     }
@@ -267,13 +177,14 @@ impl<E: EventBus + 'static> proto::aether_service_server::AetherService for Aeth
                     .clone();
                 AgentAction::CustomScript { command }
             }
-            other => return Err(Status::invalid_argument(format!("unknown action type: {other}"))),
+            other => {
+                return Err(Status::invalid_argument(format!(
+                    "unknown action type: {other}"
+                )))
+            }
         };
 
-        let target_pid: u32 = req
-            .target
-            .parse()
-            .unwrap_or(0);
+        let target_pid: u32 = req.target.parse().unwrap_or(0);
 
         let mut arbiter = lock_or_status(&self.arbiter, "arbiter")?;
         let action_id = arbiter.enqueue(action, target_pid, "grpc-api");
@@ -316,17 +227,91 @@ mod tests {
         assert_eq!(parse_severity("bogus"), None);
     }
 
-    #[test]
-    fn test_integration_to_proto() {
+    #[tokio::test]
+    async fn test_stream_receives_published_event() {
+        use proto::aether_service_server::AetherService;
+        use tokio_stream::StreamExt;
+
+        let bus = Arc::new(InProcessEventBus::new(16));
+        let server = AetherGrpcServer::new(
+            Arc::new(Mutex::new(Vec::new())),
+            Arc::new(Mutex::new(Vec::new())),
+            Arc::clone(&bus),
+            Arc::new(Mutex::new(ArbiterQueue::default())),
+        );
+
+        let req = Request::new(proto::StreamEventsRequest {
+            severity_filter: None,
+        });
+        let resp = server.stream_events(req).await.unwrap();
+        let mut stream = resp.into_inner();
+
+        // Publish an event after subscribing.
         let event = aether_core::events::IntegrationEvent::DiagnosticCreated {
-            diagnostic_id: 42,
+            diagnostic_id: 99,
+            severity: "critical".to_string(),
+            summary: "disk full".to_string(),
+        };
+        bus.publish(event).await;
+
+        let received = tokio::time::timeout(std::time::Duration::from_secs(1), stream.next())
+            .await
+            .expect("stream should yield within 1s")
+            .expect("stream should not be empty")
+            .expect("item should be Ok");
+
+        assert_eq!(received.event_type, "diagnostic_created");
+        assert!(received.payload.contains("99"));
+        assert!(received.payload.contains("disk full"));
+    }
+
+    #[tokio::test]
+    async fn test_stream_severity_filter() {
+        use proto::aether_service_server::AetherService;
+        use tokio_stream::StreamExt;
+
+        let bus = Arc::new(InProcessEventBus::new(16));
+        let server = AetherGrpcServer::new(
+            Arc::new(Mutex::new(Vec::new())),
+            Arc::new(Mutex::new(Vec::new())),
+            Arc::clone(&bus),
+            Arc::new(Mutex::new(ArbiterQueue::default())),
+        );
+
+        // Subscribe with severity filter = "critical".
+        let req = Request::new(proto::StreamEventsRequest {
+            severity_filter: Some("critical".to_string()),
+        });
+        let resp = server.stream_events(req).await.unwrap();
+        let mut stream = resp.into_inner();
+
+        // Publish a "warning" event — should be filtered out.
+        bus.publish(aether_core::events::IntegrationEvent::DiagnosticCreated {
+            diagnostic_id: 1,
+            severity: "warning".to_string(),
+            summary: "high cpu".to_string(),
+        })
+        .await;
+
+        // Publish a "critical" event — should pass through.
+        bus.publish(aether_core::events::IntegrationEvent::DiagnosticCreated {
+            diagnostic_id: 2,
             severity: "critical".to_string(),
             summary: "OOM".to_string(),
-        };
-        let proto_event = integration_to_proto(&event);
-        assert_eq!(proto_event.event_type, "diagnostic_created");
-        assert!(proto_event.payload.contains("42"));
-        assert!(proto_event.timestamp > 0);
+        })
+        .await;
+
+        let received = tokio::time::timeout(std::time::Duration::from_secs(1), stream.next())
+            .await
+            .expect("stream should yield within 1s")
+            .expect("stream should not be empty")
+            .expect("item should be Ok");
+
+        assert_eq!(received.event_type, "diagnostic_created");
+        assert!(
+            received.payload.contains("OOM"),
+            "should receive the critical event, not warning"
+        );
     }
 
     #[tokio::test]

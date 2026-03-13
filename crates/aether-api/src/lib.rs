@@ -4,6 +4,7 @@
 //! via gRPC (tonic). Designed for machine-to-machine integration with the
 //! broader Aether ecosystem (K8s Autoscaler, Service Graph, Auto-Fix Agent).
 
+pub mod convert;
 pub mod error;
 pub mod server;
 
