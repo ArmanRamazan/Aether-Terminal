@@ -1,9 +1,9 @@
-pub mod api;
-pub mod embedded;
+pub(crate) mod api;
+pub(crate) mod embedded;
 pub mod error;
 pub mod server;
 pub mod state;
-pub mod ws;
+pub(crate) mod ws;
 
 pub use error::WebError;
 pub use server::{router, serve};
