@@ -340,8 +340,18 @@ async fn main() -> anyhow::Result<()> {
                         match batch {
                             Some(new_diags) => {
                                 if let Ok(mut diags) = collector_diags.lock() {
-                                    diags.extend(new_diags);
+                                    for new_diag in new_diags {
+                                        if let Some(existing) = diags.iter_mut().find(|d| {
+                                            d.target == new_diag.target
+                                                && d.category == new_diag.category
+                                        }) {
+                                            *existing = new_diag;
+                                        } else {
+                                            diags.push(new_diag);
+                                        }
+                                    }
                                     if diags.len() > 200 {
+                                        diags.sort_by_key(|d| d.severity);
                                         let excess = diags.len() - 200;
                                         diags.drain(..excess);
                                     }
