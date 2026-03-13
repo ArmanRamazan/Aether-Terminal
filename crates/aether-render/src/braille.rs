@@ -70,6 +70,7 @@ impl BrailleCanvas {
     /// Raise a dot at pixel coordinates `(x, y)`.
     ///
     /// Out-of-bounds coordinates are silently ignored.
+    #[allow(dead_code)]
     pub fn set_pixel(&mut self, x: usize, y: usize) {
         if let Some((idx, bit)) = self.pixel_to_cell(x, y) {
             self.buffer[idx] |= bit;
@@ -89,6 +90,7 @@ impl BrailleCanvas {
     /// Clear a single dot at pixel coordinates `(x, y)`.
     ///
     /// Out-of-bounds coordinates are silently ignored.
+    #[allow(dead_code)]
     pub fn clear_pixel(&mut self, x: usize, y: usize) {
         if let Some((idx, bit)) = self.pixel_to_cell(x, y) {
             self.buffer[idx] &= !bit;

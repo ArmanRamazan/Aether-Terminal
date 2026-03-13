@@ -28,6 +28,7 @@ impl ForceLayout {
     }
 
     /// Distributes pids randomly on a sphere surface.
+    #[allow(dead_code)]
     pub fn initial_placement(&mut self, pids: &[u32]) {
         let radius = (pids.len() as f32).sqrt();
         self.k = compute_k(pids.len());
@@ -100,6 +101,7 @@ impl ForceLayout {
     }
 
     /// Writes layout positions back into each ProcessNode's `position_3d` field.
+    #[allow(dead_code)]
     pub fn update_graph_positions(&self, graph: &mut WorldGraph) {
         for (&pid, &pos) in &self.positions {
             graph.update_process(pid, |node| {
@@ -109,6 +111,7 @@ impl ForceLayout {
     }
 
     /// Runs `step()` for the given number of iterations.
+    #[allow(dead_code)]
     pub fn converge(&mut self, graph: &WorldGraph, iterations: usize) {
         for _ in 0..iterations {
             self.step(graph);
@@ -181,6 +184,7 @@ fn compute_k(node_count: usize) -> f32 {
     (volume / node_count.max(1) as f32).cbrt()
 }
 
+#[allow(dead_code)]
 /// Deterministic point on a sphere using golden-ratio spiral.
 fn sphere_point(index: usize, total: usize, radius: f32) -> Vec3 {
     let golden = (1.0 + 5.0_f32.sqrt()) / 2.0;

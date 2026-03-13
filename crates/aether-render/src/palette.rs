@@ -90,6 +90,7 @@ pub fn color_for_hp(hp: f32) -> Color {
 ///
 /// Maps to the same semantic roles as [`Palette`] constants, but values
 /// are determined at runtime from a theme file.
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Theme {
     pub bg: Color,
@@ -116,12 +117,14 @@ impl Default for Theme {
     }
 }
 
+#[allow(dead_code)]
 /// Raw TOML structure for deserialization.
 #[derive(Deserialize)]
 struct ThemeFile {
     colors: ThemeColors,
 }
 
+#[allow(dead_code)]
 #[derive(Deserialize)]
 struct ThemeColors {
     bg: String,
@@ -133,6 +136,7 @@ struct ThemeColors {
     xp_purple: String,
 }
 
+#[allow(dead_code)]
 /// Parse a `#RRGGBB` hex string into a ratatui `Color::Rgb`.
 fn parse_hex_color(hex: &str) -> Result<Color, RenderError> {
     let hex = hex.strip_prefix('#').unwrap_or(hex);
@@ -151,6 +155,7 @@ fn parse_hex_color(hex: &str) -> Result<Color, RenderError> {
     Ok(Color::Rgb(r, g, b))
 }
 
+#[allow(dead_code)]
 /// Load a [`Theme`] from a TOML file at the given path.
 ///
 /// Falls back to the default cyberpunk theme if the file does not exist.

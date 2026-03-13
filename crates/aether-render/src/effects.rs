@@ -207,6 +207,7 @@ impl StartupAnimation {
     }
 
     /// Current animation phase.
+    #[allow(dead_code)]
     pub fn phase(&self) -> StartupPhase {
         self.phase
     }

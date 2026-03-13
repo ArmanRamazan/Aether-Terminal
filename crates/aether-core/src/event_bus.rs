@@ -7,6 +7,8 @@
 use crate::events::IntegrationEvent;
 use tokio::sync::broadcast;
 
+// EventBus is defined for Phase 2 gRPC integration; no callers yet.
+#[allow(dead_code)]
 /// Port for publishing and subscribing to integration events.
 ///
 /// Implemented by [`InProcessEventBus`] (broadcast channel) now,
@@ -20,11 +22,13 @@ pub trait EventBus: Send + Sync {
     fn subscribe(&self) -> broadcast::Receiver<IntegrationEvent>;
 }
 
+#[allow(dead_code)]
 /// In-process EventBus backed by a tokio broadcast channel.
 pub struct InProcessEventBus {
     sender: broadcast::Sender<IntegrationEvent>,
 }
 
+#[allow(dead_code)]
 impl InProcessEventBus {
     /// Create a new bus with the given channel capacity.
     pub fn new(capacity: usize) -> Self {
