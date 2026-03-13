@@ -654,7 +654,7 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["pid"], 42);
         assert_eq!(json["name"], "proc-42");
-        assert_eq!(json["state"], "Running");
+        assert_eq!(json["state"], "running");
         assert_eq!(json["position"], serde_json::json!([1.0, 2.0, 3.0]));
     }
 
@@ -737,7 +737,7 @@ mod tests {
         assert_eq!(json.len(), 1);
         assert_eq!(json[0]["from_pid"], 1);
         assert_eq!(json[0]["to_pid"], 2);
-        assert_eq!(json[0]["protocol"], "TCP");
+        assert_eq!(json[0]["protocol"], "tcp");
         assert_eq!(json[0]["bytes_per_sec"], 1024);
     }
 
