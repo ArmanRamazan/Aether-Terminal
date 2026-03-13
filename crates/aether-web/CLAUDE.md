@@ -1,31 +1,40 @@
 # aether-web
 
 ## Purpose
-Web UI backend. Serves React SPA static files, REST API for system data, and WebSocket for realtime updates. Runs alongside TUI via `--web [PORT]` flag.
+Web UI backend + embedded React SPA. Serves REST API, WebSocket realtime updates, and static files. Runs alongside TUI via `--web [PORT]` flag.
 
 ## Modules
 - `server.rs` — axum Router setup, HTTP server with graceful shutdown
-- `state.rs` — SharedState (Arc wrappers for WorldGraph + ArbiterQueue)
-- `error.rs` — WebError enum (thiserror)
+- `api.rs` — REST endpoints: processes, stats, diagnostics, metrics, arbiter
+- `ws.rs` — WebSocket handler, pushes WorldUpdate every 500ms
+- `state.rs` — SharedState (Arc wrappers for WorldGraph, ArbiterQueue, diagnostics, system metrics)
+- `embedded.rs` — rust-embed for serving React SPA static files
+- `error.rs` — WebError enum with IntoResponse
 
-## Rules
+## Strict Rules
 - Depends ONLY on aether-core (hexagonal architecture)
-- SharedState uses Arc<RwLock<WorldGraph>> and Arc<Mutex<ArbiterQueue>> — same pattern as aether-mcp
-- WebSocket broadcasts system state diffs, REST serves snapshots
-- CORS enabled for local dev (localhost origins)
-- Static files served via rust-embed or tower-http fs
-- All routes return JSON (Content-Type: application/json) except static files
-- No .unwrap() in production code
+- **ZERO `.unwrap()` or `.expect()` in ANY handler** — poisoned lock MUST return HTTP 500, not panic
+- All handlers return `Result<impl IntoResponse, WebError>` — never raw StatusCode
+- Use SharedState helper methods (read_world, read_arbiter) that return WebError
+- SharedState uses THE SAME ArbiterQueue as TUI and MCP — never create a separate one
+- `format!("{:?}")` FORBIDDEN in API responses — use Display impl or Serialize
+- Internal modules (`api`, `ws`, `embedded`) are `pub(crate)` — not part of public API
+- Only `server`, `state`, `error` are `pub`
+- WebSocket must handle disconnects gracefully — never panic on send failure
+- CORS enabled for localhost origins only
+- All REST routes return JSON (Content-Type: application/json) except static files
+
+## Frontend
+- React 18 + TypeScript + Vite
+- Built separately: `cd crates/aether-web/frontend && npm run build`
+- Dist files embedded via rust-embed at compile time
+- Pages: Overview, 3D Graph, Network, Arbiter, Diagnostics, Metrics
+- Stores: zustand (worldStore, metricsStore)
 
 ## Testing
 ```bash
 cargo test -p aether-web
 ```
-Test router construction, shared state cloning.
-
-## Key Dependencies
-- aether-core (path dependency)
-- axum (HTTP + WebSocket)
-- tower-http (CORS, static files)
-- rust-embed (embed SPA assets)
-- serde_json (API serialization)
+- Test router construction
+- Test SharedState cloning and access
+- Test API response formats (no zeros, no Debug format)

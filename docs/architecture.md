@@ -1,47 +1,58 @@
 # Architecture Overview
 
-> **Implementation Status** (as of 2026-03-10): All 8 milestones complete. 27/27 sprints done.
+> **Implementation Status** (as of 2026-03-13): All 13 milestones complete. 38/38 sprints done.
+>
+> - **Phase A** (MS1–MS8, Mar 8): Core platform — 9 crates, TUI+3D, eBPF, MCP, JIT DSL, ML prediction, gamification
+> - **Phase B** (MS9–MS13, Mar 10–13): MVP evolution — Web UI, deterministic diagnostics, Prometheus, integrations
 
 ## System Architecture
 
 ```
-+-----------------------------------------------------------------+
-|                     aether-terminal (bin)                        |
-|                                                                  |
-|  +--------+ +--------+ +-------+ +-------+ +------+ +--------+  |
-|  |Ingestion| | Render | |  MCP  | | Gamif.| | Pred.| | Script |  |
-|  |Pipeline | | Engine | | Server| | Engine| | AI   | | Engine |  |
-|  +---+----+ +---+----+ +--+----+ +--+----+ +--+---+ +---+----+  |
-|   DONE       DONE        DONE      DONE      DONE     DONE      |
-|      |          |          |         |         |         |       |
-|      +-----+----+-----+---+----+----+---------+---------+       |
-|            |          |        |                                 |
-|      +-----v----------v-------v------+                          |
-|      |         aether-core           |                          |
-|      |    WorldGraph + Channels      |  DONE                    |
-|      +------^------------------------+                          |
-|             |                                                   |
-|      +------+--------+                                          |
-|      |  aether-ebpf  |  DONE                                    |
-|      | Ring Buffer /  |                                          |
-|      | BPF Programs   |                                          |
-|      +----------------+                                          |
-+-----------------------------------------------------------------+
++--------------------------------------------------------------------------+
+|                         aether-terminal (bin)                             |
+|                                                                           |
+|  +--------+ +--------+ +-------+ +-------+ +------+ +--------+           |
+|  |Ingestion| | Render | |  MCP  | | Gamif.| | Pred.| | Script |           |
+|  |Pipeline | | Engine | | Server| | Engine| | AI   | | Engine |           |
+|  +---+----+ +---+----+ +--+----+ +--+----+ +--+---+ +---+----+           |
+|      |          |          |         |         |         |                |
+|  +---+----+ +---+----+ +--+----+                                         |
+|  |Analyze | |Metrics | |  Web  |                                         |
+|  |Engine  | |Exporter| | (axum |                                         |
+|  |        | |+Consumer| | +React)|                                        |
+|  +---+----+ +---+----+ +--+----+                                         |
+|      |          |          |         |         |         |                |
+|      +-----+----+-----+---+----+----+---------+---------+                |
+|            |          |        |                                          |
+|      +-----v----------v-------v------+                                   |
+|      |         aether-core           |                                   |
+|      |    WorldGraph + Channels      |                                   |
+|      +------^------------------------+                                   |
+|             |                                                            |
+|      +------+--------+                                                   |
+|      |  aether-ebpf  |                                                   |
+|      | Ring Buffer /  |                                                   |
+|      | BPF Programs   |                                                   |
+|      +----------------+                                                   |
++--------------------------------------------------------------------------+
 ```
 
 ## Crate Implementation Status
 
 | Crate | Status | Key Modules |
 |-------|--------|-------------|
-| aether-core | **Done** | models, graph (WorldGraph), events (SystemEvent, GameEvent, AgentAction), traits (SystemProbe, Storage), error (CoreError), arbiter (ArbiterQueue) |
+| aether-core | **Done** | models, graph (WorldGraph), events (SystemEvent, GameEvent, AgentAction, DiagnosticEvent), traits (SystemProbe, Storage), error (CoreError), arbiter (ArbiterQueue), HostId, TimeSeries, Diagnostic, Recommendation |
 | aether-ingestion | **Done** | sysinfo_probe (SysinfoProbe), pipeline (IngestionPipeline), error |
-| aether-render | **Done** | TUI: app, overview, world3d, network, arbiter, help, tabs, input, widgets/sparklines. Engine: camera, layout, projection, rasterizer, scene, shading. Shared: braille, effects, palette |
-| aether-mcp | **Done** | server (McpServer), tools (4 MCP tools), transport/stdio, transport/sse, arbiter, error |
-| aether-gamification | **Done** | hp (HpEngine), xp (XpTracker), achievements (AchievementTracker), storage (SqliteStorage), error |
+| aether-render | **Done** | TUI: app, overview, world3d, network, arbiter, diagnostics (F6), help, tabs, input, widgets/sparklines. Engine: camera, layout, projection, rasterizer, scene, shading. Shared: braille, effects, palette |
+| aether-mcp | **Done** | server (McpServer), tools (get_system_topology, inspect_process, list_anomalies, predict_anomalies, execute_action, get_diagnostics), transport/stdio, transport/sse, arbiter, error |
+| aether-gamification | **Done** | hp (HpEngine), xp (XpTracker), achievements (AchievementTracker + diagnostic achievements), storage (SqliteStorage), error |
 | aether-ebpf | **Done** | BPF programs (process/net/syscall monitors), loader (BpfLoader), ring buffer reader, kernel event types, error |
 | aether-predict | **Done** | features (FeatureExtractor, FeatureVector), window (SlidingWindow), inference (OnnxModel, AnomalyDetector, CpuForecaster), models (PredictedAnomaly, AnomalyType, ConfidenceScorer), engine (PredictEngine), error |
-| aether-script | **Done** | lexer (logos), ast, parser (recursive descent), types (type checker), codegen (Cranelift IR, JitCompiler), runtime (CompiledRuleSet, DurationTracker), hot_reload (HotReloader), engine (ScriptEngine), error |
-| aether-terminal | **Done** | main.rs: CLI (--log-level, --mcp-stdio, --mcp-sse, --ebpf, --predict, --model-path, --rules), orchestrates all crates |
+| aether-script | **Done** | lexer (logos), ast, parser (recursive descent), types (type checker), codegen (Cranelift IR, JitCompiler), runtime (CompiledRuleSet, DurationTracker), hot_reload (HotReloader), engine (ScriptEngine), error. Bridge: JIT rules → diagnostic engine |
+| aether-analyze | **Done** | MetricStore, TrendAnalyzer, CapacityAnalyzer, CorrelationAnalyzer, AnomalyDetector (deterministic), RuleEngine (30+ builtin rules), RecommendationGenerator, ProcfsCollector, CgroupCollector, AnalyzeEngine |
+| aether-metrics | **Done** | MetricRegistry, Prometheus text encoder, /metrics HTTP exporter, PromQL consumer client |
+| aether-web | **Done** | axum backend (REST API + WebSocket), React SPA (Overview, 3D Graph, Network, Arbiter, Diagnostics, Metrics pages), rust-embed static serving, host selector |
+| aether-terminal | **Done** | main.rs: CLI (--log-level, --mcp-stdio, --mcp-sse, --ebpf, --predict, --model-path, --rules, --web [PORT]), orchestrates all 11 crates |
 
 ## Data Flow
 
@@ -60,16 +71,17 @@ Linux Kernel (eBPF probes)          OS (sysinfo fallback)
                             |
           Arc<RwLock<WorldGraph>> + broadcast<WorldState>
                             |
-          +---------+-------+--------+-----------+-----------+
-          v         v       v        v           v           v
-     RenderEngine McpServer Gamif. PredictEngine ScriptEngine ArbiterQueue
-          |         |       |        |           |            |
-     Terminal   AI Agent  SQLite   Anomaly     JIT-compiled  approve/deny
-     (TUI+3D)  (JSON-RPC) (HP/XP)  Alerts     Rule Actions   actions
-          ^         |                |           |            ^
-          |         v                v           v            |
-          +---- ArbiterQueue <------+-----------+------------+
-               (approve/deny)
+    +-------+-------+-------+--------+-----------+-----------+----------+
+    v       v       v       v        v           v           v          v
+  Render  McpServer Gamif. Predict  Script     Analyze     Metrics    Web
+  Engine            Engine Engine   Engine     Engine      Exporter   (axum+
+    |       |       |      |        |          |           |          React)
+  TUI+3D  Agent   SQLite  Anomaly  JIT Rules  Diagnostics Prometheus WebSocket
+    |     (JSON)  (HP/XP)  Alerts  Actions    + Recommend. /metrics   + REST
+    |       |                |       |          |           |          |
+    +-------+-------+-------+-------+-----------+-----------+----------+
+                    |
+              ArbiterQueue (approve/deny actions)
 ```
 
 ## Channel Architecture
@@ -77,13 +89,14 @@ Linux Kernel (eBPF probes)          OS (sysinfo fallback)
 | Channel | Type | From | To | Payload |
 |---------|------|------|----|---------|
 | system_events | `mpsc` | IngestionPipeline / eBPF bridge | WorldGraph updater | SystemEvent |
-| world_state | `Arc<RwLock<WorldGraph>>` | WorldGraph updater | Render, MCP, Predict, Script | shared graph |
+| world_state | `Arc<RwLock<WorldGraph>>` | WorldGraph updater | Render, MCP, Predict, Script, Analyze, Web | shared graph |
 | agent_actions | `mpsc` | McpServer | ArbiterQueue | AgentAction |
 | game_events | `mpsc` | WorldGraph updater | Gamification | GameEvent |
-| arbiter_feedback | `mpsc` | Render (Arbiter tab) | ArbiterQueue | Approve/Deny |
+| arbiter_feedback | `mpsc` | Render (Arbiter tab) / Web UI | ArbiterQueue | Approve/Deny |
 | ebpf_events | `mpsc` | eBPF ring buffer reader | Ingestion bridge | RawKernelEvent |
 | predictions | `mpsc` | PredictEngine | Core / Render | PredictedAnomaly |
 | rule_actions | `mpsc` | ScriptEngine | ArbiterQueue / Core | RuleAction |
+| diagnostics | `Arc<Mutex<Vec<Diagnostic>>>` | AnalyzeEngine | Render, MCP, Web, Gamification | Diagnostic findings |
 
 ## Thread/Task Model
 
@@ -99,12 +112,16 @@ Main Thread:
         +-- task: PredictEngine (--predict flag, inference every 5s)
         +-- task: ScriptEngine (--rules flag, evaluates JIT rules every tick)
         +-- task: HotReloader (file watcher, recompiles rules on change)
+        +-- task: AnalyzeEngine (deterministic diagnostics, 30+ rules, collectors)
+        +-- task: MetricsExporter (Prometheus /metrics endpoint)
+        +-- task: Web server (--web flag, axum HTTP + WebSocket + React SPA)
         +-- blocking: TUI render loop (crossterm + ratatui, 60fps)
-              +-- Tab: Overview (process table, sparklines, prediction indicators)
+              +-- Tab: Overview (process table, sparklines, prediction + diagnostic indicators)
               +-- Tab: World3D (3D graph with camera, Braille rasterizer, anomaly pulses)
               +-- Tab: Network (connection topology)
               +-- Tab: Arbiter (AI action queue, approve/deny UI)
               +-- Tab: Rules (F5, JIT rule engine stats)
+              +-- Tab: Diagnostics (F6, diagnostic findings, severity, recommendations)
               +-- Tab: Help (keybindings)
 ```
 
@@ -113,13 +130,16 @@ Main Thread:
 ```
 aether-terminal
   +-- aether-core
-  +-- aether-ebpf        -> aether-core
-  +-- aether-ingestion   -> aether-core
-  +-- aether-predict     -> aether-core
-  +-- aether-script      -> aether-core
-  +-- aether-render      -> aether-core
-  +-- aether-mcp         -> aether-core
+  +-- aether-ebpf         -> aether-core
+  +-- aether-ingestion    -> aether-core
+  +-- aether-predict      -> aether-core
+  +-- aether-script       -> aether-core
+  +-- aether-render       -> aether-core
+  +-- aether-mcp          -> aether-core
   +-- aether-gamification -> aether-core
+  +-- aether-analyze      -> aether-core
+  +-- aether-metrics      -> aether-core
+  +-- aether-web          -> aether-core
 ```
 
 Rule: library crates NEVER depend on each other. Only on aether-core. The binary crate wires them together.
@@ -138,6 +158,9 @@ Rule: library crates NEVER depend on each other. Only on aether-core. The binary
 10. **Zero-Copy Telemetry**: eBPF ring buffer reads directly into Rust structs via aya
 11. **JIT Hot-Reload**: Rule files recompiled on file watch, swapped atomically via `Arc<ArcSwap<CompiledRuleSet>>`
 12. **Streaming Inference**: ML model processes sliding window of features (60 samples = 5 min), ONNX via tract
+13. **Deterministic Diagnostics**: Rule-based analysis (30+ rules) with trend/capacity/correlation analyzers — production-grade complement to ML predictions
+14. **Prometheus Bidirectional**: Export own metrics + consume external Prometheus data
+15. **Web UI**: React SPA embedded in binary, WebSocket realtime updates, concurrent with TUI
 
 ## Implemented Subsystem Details
 
@@ -247,3 +270,44 @@ Compilation Pipeline:
 - **ScriptEngine** (`engine.rs`): async task, evaluates rules every tick, tracks stats
 - CLI: `--rules <PATH>` flag loads rules, spawns engine + hot-reloader
 - TUI: Rules tab (F5) shows active rules, stats, details
+- Bridge: JIT-compiled rules feed findings into AnalyzeEngine diagnostic pipeline
+
+### aether-analyze (Deterministic Diagnostics)
+
+- **MetricStore** (`metric_store.rs`): TimeSeries storage, sliding window per metric
+- **RuleEngine** (`engine.rs`): 30+ builtin rules (CPU, memory, disk, network, zombie, OOM risk, etc.)
+- **TrendAnalyzer** (`trend.rs`): linear regression on time-series data
+- **CapacityAnalyzer** (`capacity.rs`): capacity planning projections
+- **CorrelationAnalyzer** (`correlation.rs`): Pearson coefficient between metrics
+- **AnomalyDetector** (`anomaly.rs`): deterministic anomaly detection (threshold + trend based)
+- **RecommendationGenerator** (`recommendations/generator.rs`): actionable recommendations per diagnostic
+- **Collectors**: ProcfsCollector (/proc profiling), CgroupCollector (container limits)
+- **AnalyzeEngine** (`engine.rs`): async task, runs all analyzers + rules → Vec<Diagnostic>
+- Diagnostics wired to: Arbiter (auto-execute), MCP (get_diagnostics tool), Gamification (XP rewards), TUI (F6 tab), Web UI
+
+### aether-metrics (Prometheus Integration)
+
+- **MetricRegistry**: collects system metrics for export
+- **Prometheus Encoder**: text format encoder for /metrics endpoint
+- **HTTP Exporter**: standalone axum server exposing /metrics
+- **PromQL Consumer**: client for querying external Prometheus instances
+
+### aether-web (Web UI)
+
+```
+Architecture:
+  axum HTTP server (--web [PORT] flag)
+    +-- REST API: /api/processes, /api/stats, /api/diagnostics, /api/metrics, /api/arbiter
+    +-- WebSocket: /ws (500ms push of WorldUpdate)
+    +-- Static: React SPA served via rust-embed
+
+  React SPA (Vite + TypeScript):
+    +-- Pages: Overview, 3D Graph (react-three-fiber), Network, Arbiter, Diagnostics, Metrics
+    +-- Stores: zustand (worldStore, metricsStore)
+    +-- Charts: recharts (sparklines, time-series, area charts)
+    +-- Host Selector: cluster-ready multi-host filtering
+```
+
+- **Backend** (`server.rs`, `api.rs`, `ws.rs`, `state.rs`): axum router, SharedState, REST + WebSocket
+- **Frontend**: React 18 + TypeScript, Vite build, embedded in binary via rust-embed
+- Runs alongside TUI (concurrent) or standalone via `--web` flag

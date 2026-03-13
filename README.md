@@ -2,7 +2,7 @@
 
 **Cinematic 3D system monitor with eBPF telemetry, predictive AI, and a JIT-compiled rule engine**
 
-<!-- TODO: Replace with asciinema GIF after MS3 -->
+<!-- TODO: Record asciinema demo -->
 <!-- ![demo](assets/demo.gif) -->
 
 Aether-Terminal transforms system observability into a spatial experience. Processes are nodes in a 3D force-directed graph rendered in your terminal using Braille characters. A native eBPF engine captures kernel-level events at 100K+ events/sec. An on-device ML model predicts anomalies before they happen. A custom DSL with JIT compilation lets you write reactive rules that compile to machine code. AI agents connect via Model Context Protocol to inspect, analyze, and manage your infrastructure with human-in-the-loop approval.
@@ -20,9 +20,12 @@ Aether-Terminal transforms system observability into a spatial experience. Proce
 | Theme System | Implemented | TOML-based color themes. Ships with `cyberpunk` and `matrix` presets |
 | Startup Animation | Implemented | Cinematic boot sequence with phased reveals |
 | Death Animation | Implemented | Dissolve effect when processes terminate |
-| eBPF Telemetry | Planned (MS6) | Kernel-level event capture: syscalls, TCP connect/close, fork/exec/exit. Ring buffer with zero-copy reads |
-| JIT Rule Engine | Planned (MS7) | Custom DSL compiled to native code via Cranelift. Hot-reload without restart |
-| Predictive AI | Planned (MS8) | On-device ONNX inference. Time-series anomaly detection predicts OOM, CPU spikes, and resource exhaustion |
+| eBPF Telemetry | Implemented | Kernel-level event capture: syscalls, TCP connect/close, fork/exec/exit. Ring buffer with zero-copy reads |
+| JIT Rule Engine | Implemented | Custom DSL compiled to native code via Cranelift. Hot-reload without restart |
+| Predictive AI | Implemented | On-device ONNX inference. Time-series anomaly detection predicts OOM, CPU spikes, and resource exhaustion |
+| Diagnostic Engine | Implemented | 30+ deterministic rules, trend/capacity/correlation analyzers, actionable recommendations |
+| Web UI | Implemented | React SPA with 3D graph, real-time WebSocket, diagnostics dashboard, Prometheus charts |
+| Prometheus Integration | Implemented | Bidirectional: export metrics + consume external Prometheus data |
 
 ## Architecture
 
@@ -63,8 +66,8 @@ Hexagonal architecture: all crates depend on `aether-core`, never on each other.
 
 | Crate | Role |
 |-------|------|
-| `aether-terminal` | CLI entry point, wires all crates together |
-| `aether-core` | Domain types, traits (ports), WorldGraph, events |
+| `aether-terminal` | CLI entry point, wires all 11 crates together |
+| `aether-core` | Domain types, traits (ports), WorldGraph, events, diagnostics |
 | `aether-ingestion` | System metrics via sysinfo, eBPF bridge, dual-tick pipeline |
 | `aether-render` | TUI (ratatui) + 3D software rasterizer (glam, Braille) |
 | `aether-mcp` | MCP server (stdio + SSE), Arbiter queue |
@@ -72,6 +75,9 @@ Hexagonal architecture: all crates depend on `aether-core`, never on each other.
 | `aether-ebpf` | eBPF loader (aya), ring buffer, kernel probes |
 | `aether-script` | DSL lexer (logos), recursive descent parser, Cranelift JIT |
 | `aether-predict` | ONNX inference (tract), feature extraction, anomaly models |
+| `aether-analyze` | Deterministic diagnostics, 30+ rules, trend/capacity analyzers |
+| `aether-metrics` | Prometheus exporter + PromQL consumer |
+| `aether-web` | Web UI: axum backend + React SPA (embedded via rust-embed) |
 
 ## Tech Stack
 
@@ -89,6 +95,9 @@ Hexagonal architecture: all crates depend on `aether-core`, never on each other.
 | DSL Parser | logos (lexer) + custom recursive-descent parser |
 | MCP | rmcp + axum (SSE transport) |
 | Storage | rusqlite (bundled SQLite) |
+| Web Backend | axum (REST + WebSocket) |
+| Web Frontend | React 18 + TypeScript + Vite + recharts + react-three-fiber |
+| Monitoring | Prometheus text format export + PromQL consumer |
 
 ## Quick Start
 
@@ -118,9 +127,11 @@ Options:
   --no-3d               Disable 3D rendering, use 2D tables
   --no-game             Disable gamification layer
   --theme <NAME>        Color theme name or path to TOML file (default: cyberpunk)
-  --rules <PATH>        Load .aether rule files (JIT-compiled DSL) [planned]
-  --predict             Enable predictive anomaly detection [planned]
-  --ebpf                Enable eBPF telemetry (Linux, requires CAP_BPF) [planned]
+  --rules <PATH>        Load .aether rule files (JIT-compiled DSL)
+  --predict             Enable predictive anomaly detection
+  --ebpf                Enable eBPF telemetry (Linux, requires CAP_BPF)
+  --web [PORT]          Start Web UI server alongside TUI (default: 8080)
+  --model-path <PATH>   Path to ONNX model files
   -h, --help            Print help
   -V, --version         Print version
 ```
@@ -137,15 +148,18 @@ cargo run -p aether-terminal -- --theme matrix --no-game
 # Full stack: SSE server + custom theme + debug logging
 cargo run -p aether-terminal -- --mcp-sse 8080 --theme cyberpunk --log-level debug
 
-# Future: eBPF + predictive AI + custom rules
+# eBPF + predictive AI + custom rules
 sudo cargo run -p aether-terminal -- --ebpf --predict --rules rules/default.aether
+
+# Web UI on custom port
+cargo run -p aether-terminal -- --web 3000
 ```
 
 ### Keyboard Shortcuts
 
 | Key | Action |
 |-----|--------|
-| `F1`-`F5` | Switch tabs (Overview, 3D World, Network, Arbiter, Rules) |
+| `F1`-`F6` | Switch tabs (Overview, 3D World, Network, Arbiter, Rules, Diagnostics) |
 | `h/j/k/l` | Navigate |
 | `WASD` | Rotate 3D camera |
 | `+/-` | Zoom |
@@ -164,6 +178,7 @@ sudo cargo run -p aether-terminal -- --ebpf --predict --rules rules/default.aeth
 | `list_anomalies` | Processes with low HP, zombies, CPU spikes |
 | `predict_anomalies` | ML-predicted future anomalies (OOM, spikes) |
 | `execute_action` | Kill/restart with human approval |
+| `get_diagnostics` | Active diagnostic findings with severity and recommendations |
 | `get_network_flows` | Active connections with DPI data |
 | `eval_rule` | Evaluate an Aether DSL expression on current state |
 | `list_rules` | Show active JIT-compiled rules |
@@ -207,6 +222,9 @@ aether-terminal/
 |   +-- aether-render/          (lib: TUI + 3D engine)
 |   +-- aether-mcp/             (lib: MCP server + transports)
 |   +-- aether-gamification/    (lib: HP, XP, SQLite)
+|   +-- aether-analyze/         (lib: diagnostic engine, rules, analyzers)
+|   +-- aether-metrics/         (lib: Prometheus exporter + consumer)
+|   +-- aether-web/             (lib: axum backend + React SPA)
 +-- bpf/                        (eBPF C programs compiled to BPF bytecode)
 +-- models/                     (pre-trained ONNX models)
 +-- rules/                      (Aether DSL rule files)
@@ -246,10 +264,14 @@ cargo fmt --check
 - [x] MS3: 3D software rasterizer
 - [x] MS4: MCP server + Arbiter Mode
 - [x] MS5: Gamification, animations, themes
-- [ ] MS6: eBPF telemetry engine
-- [ ] MS7: JIT-compiled rule DSL
-- [ ] MS8: Predictive AI engine
-- [ ] Global leaderboard
+- [x] MS6: eBPF telemetry engine
+- [x] MS7: JIT-compiled rule DSL
+- [x] MS8: Predictive AI engine
+- [x] MS9: Web UI (React SPA + axum backend)
+- [x] MS10: Deterministic diagnostic engine (core models + rules + TUI)
+- [x] MS11: Advanced analyzers + collectors (procfs, cgroups)
+- [x] MS12: Prometheus integration (exporter + consumer)
+- [x] MS13: Full integration (script→analyze bridge, MCP diagnostics, web diagnostics)
 
 ## Technical Complexity
 

@@ -2,9 +2,11 @@
 
 ## Project Overview
 
-Aether-Terminal — кинематографический 3D TUI системный монитор на Rust с eBPF-телеметрией, предиктивным AI, JIT-компилируемым DSL и интеграцией MCP для ИИ-агентов. Процессы отображаются как узлы 3D-графа с RPG-механикой (HP, XP, ранги).
+Aether-Terminal — production diagnostics platform с тремя уровнями интеллекта (Rules → ML → AI Agent). Наблюдает за инфраструктурой, детектит проблемы детерминистически, предсказывает аномалии через ML, позволяет AI-агентам управлять через MCP. Процессы отображаются как узлы 3D-графа с RPG-механикой (HP, XP, ранги).
 
-**Роль в портфолио**: Инновационный showcase уровня 10/10 по сложности реализации — компилятор, eBPF, ML inference, 3D рендер, всё на Rust.
+**Роль в экосистеме**: Observer-слой для self-healing платформы из 5 проектов (Aether-Terminal, K8s Autoscaler, Service Graph, Auto-Fix Agent, Custom Orchestrator). Предоставляет API и Event Bus для внешних сервисов.
+
+**Роль в портфолио**: Инновационный showcase — компилятор, eBPF, ML inference, 3D рендер, gRPC API, всё на Rust.
 
 ## Tech Stack
 
@@ -19,17 +21,24 @@ Aether-Terminal — кинематографический 3D TUI системн
 - **JIT compiler**: cranelift-codegen + cranelift-frontend (rule DSL)
 - **DSL parser**: logos (lexer) + hand-written recursive descent parser
 - **MCP**: rmcp (Rust MCP SDK), axum (SSE transport)
+- **gRPC**: tonic + prost (machine-to-machine API)
+- **Web backend**: axum (REST + WebSocket)
+- **Web frontend**: React 18 + TypeScript + Vite + recharts
+- **Diagnostics**: deterministic rule engine (30+ rules), trend/capacity/correlation analyzers
+- **Monitoring**: Prometheus text format export + PromQL consumer + active scraper
+- **Config**: serde + toml + serde_yaml (TOML/YAML auto-detect)
 - **Storage**: rusqlite (bundled SQLite)
 - **CLI**: clap (derive)
 - **Logging**: tracing + tracing-subscriber
 
 ## Architecture
 
-Cargo workspace с 9 crates. Hexagonal architecture — все crates зависят от `aether-core`, но НЕ друг от друга. Общение через traits и tokio channels.
+Cargo workspace с 17 crates (12 existing + 5 planned). Hexagonal architecture — все crates зависят от `aether-core`, но НЕ друг от друга. Общение через traits и tokio channels.
 
 ```
+EXISTING (12):
 aether-terminal    (bin) → orchestrates all crates
-aether-core        (lib) → types, traits, graph, events
+aether-core        (lib) → types, traits, graph, events, event bus
 aether-ebpf        (lib) → eBPF loader, ring buffer, kernel probes
 aether-ingestion   (lib) → sysinfo fallback + eBPF bridge, pipeline
 aether-predict     (lib) → ONNX inference, anomaly prediction
@@ -37,9 +46,22 @@ aether-script      (lib) → DSL lexer/parser/AST, Cranelift JIT compiler
 aether-render      (lib) → TUI + 3D rasterizer
 aether-mcp         (lib) → MCP server (stdio + SSE)
 aether-gamification(lib) → HP, XP, achievements, SQLite
+aether-analyze     (lib) → deterministic diagnostics, 30+ rules, analyzers
+aether-metrics     (lib) → Prometheus exporter + consumer + scraper
+aether-web         (lib) → React SPA + axum backend (REST + WebSocket)
+
+PLANNED (5, Phase 2):
+aether-config      (lib) → TOML/YAML config, validation, env interpolation
+aether-discovery   (lib) → auto-discovery (ports, K8s API, known patterns)
+aether-prober      (lib) → HTTP health, TCP latency, DNS, TLS checks
+aether-output      (lib) → Slack, Discord, Telegram webhooks + stdout/file
+aether-api         (lib) → gRPC server (tonic), event bus streaming
 ```
 
-Design doc: `docs/plans/2026-03-08-aether-terminal-design.md`
+Design docs:
+- `docs/plans/2026-03-13-global-vision.md` — 5-project ecosystem
+- `docs/plans/2026-03-13-roadmap.md` — Phase 0-3 implementation roadmap
+- `docs/plans/2026-03-13-v1-production-diagnostics-design.md` — v1.0 detailed spec
 
 ## Architecture Principles
 
@@ -78,6 +100,20 @@ Design doc: `docs/plans/2026-03-08-aether-terminal-design.md`
 - Никаких глобальных `static mut`, `lazy_static` с мутабельным состоянием, синглтонов.
 - Тестируемость: любой struct можно создать в тесте с mock-зависимостями.
 
+**API Stability (для library crates)**
+- `pub(crate)` по умолчанию. `pub` — ТОЛЬКО для cross-crate API.
+- `lib.rs` — ТОЛЬКО `pub mod` + `pub use` re-exports. Нулевая логика.
+- Не дублируй публичные методы (одна функция = один способ вызова).
+- Не экспортируй internal types (HashMap keys, builder internals).
+- `format!("{:?}")` ЗАПРЕЩЁН для API сериализации — используй `Display` impl или `Serialize`.
+- Каждый тип в JSON API должен иметь стабильный контракт через Serialize/Deserialize.
+
+**Additive Architecture**
+- Новый код ДОПОЛНЯЕТ существующий, не переписывает.
+- Новый crate = реализация trait из core. Ноль изменений в существующих crate-ах.
+- Trait-ы в core определяют контракт заранее (DataSource, OutputSink, ServiceDiscovery, EventBus).
+- `aether-terminal` (bin) — единственное место где wiring меняется при добавлении crate-ов.
+
 ## Rust Best Practices
 
 ### Ownership & Borrowing
@@ -99,16 +135,19 @@ Design doc: `docs/plans/2026-03-08-aether-terminal-design.md`
   }
   ```
 - **Binary crate**: `anyhow::Result` в main и интеграционном коде.
-- Не используй `.unwrap()` в production code. Допустимо ТОЛЬКО в тестах и `const` инициализации.
-- `.expect("описание инварианта")` — допустимо когда паника = баг в нашем коде (не пользовательский ввод).
+- **ЗАПРЕЩЕНО**: `.unwrap()` в production code. Допустимо ТОЛЬКО в тестах и `const` инициализации.
+- **ЗАПРЕЩЕНО**: `.expect()` в HTTP/WebSocket handlers — poisoned lock не должен паниковать сервер. Возвращай HTTP 500.
+- `.expect("инвариант")` — допустимо ТОЛЬКО когда паника = баг в нашей логике (не I/O, не user input, не lock poisoning).
 - `?` operator — основной способ проброса ошибок. Не оборачивай в `.map_err()` без добавления контекста.
+- В web handlers: используй `WebError` enum с `IntoResponse` — НИКОГДА прямой StatusCode return.
 
 ### Type System
 - Используй newtype pattern для доменных значений: `struct Pid(u32)`, `struct Hp(f32)` — когда это улучшает читаемость API.
 - `enum` > bool параметры. `fn set_mode(mode: Mode)` >> `fn set_mode(is_fast: bool)`.
 - Derive порядок: `#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]` — от самого базового.
 - `#[must_use]` на функциях, возвращающих Result или значимые результаты.
-- `#[non_exhaustive]` на public enums, которые могут расширяться.
+- `#[non_exhaustive]` на **ВСЕХ** public enums в aether-core — обязательно для semver safety.
+- Все `match` на `#[non_exhaustive]` enums из других crates **ОБЯЗАНЫ** иметь `_ =>` wildcard.
 
 ### Naming Conventions
 - **Файлы**: `snake_case.rs` — одно слово или два через `_`. Никаких длинных имён типа `system_probe_implementation.rs`.
@@ -233,6 +272,18 @@ Sprint YAML format: see `tools/orchestrator/tasks/ms1-workspace-setup.yaml`
 | JIT compiler | Cranelift | Pure Rust, ms-fast compilation, designed for JIT |
 | DSL parser | Hand-written recursive descent | Demonstrates compiler skills, no generator deps |
 | Gamification | Light RPG first, full later | Professional tool first, fun second |
+| Diagnostics | Deterministic rules first | Predictable, no ML required for base functionality |
+| Config format | TOML + YAML dual | TOML for local dev, YAML for K8s — auto-detect by extension |
+| Integration API | gRPC (tonic) | Machine-to-machine for future ecosystem projects |
+| Event bus | broadcast channel → gRPC stream | In-process first, network-capable later |
+| Webhooks | Slack/Discord/Telegram builtin | Most popular, covers 90% of teams |
+| Service discovery | Port scan + K8s API | Auto-discovery for wow-effect, config for precision |
+
+## Scopes for Commits
+
+- core, ingestion, render, mcp, gamification, ebpf, predict, script
+- analyze, metrics, web, config, discovery, prober, output, api
+- workspace, orchestrator, ci, docker, docs
 
 ## Crate-Specific Context
 
@@ -245,3 +296,7 @@ Each crate has its own CLAUDE.md with module-specific rules:
 - `crates/aether-render/CLAUDE.md`
 - `crates/aether-mcp/CLAUDE.md`
 - `crates/aether-gamification/CLAUDE.md`
+- `crates/aether-analyze/CLAUDE.md`
+- `crates/aether-metrics/CLAUDE.md`
+- `crates/aether-web/CLAUDE.md`
+- `crates/aether-terminal/CLAUDE.md`
