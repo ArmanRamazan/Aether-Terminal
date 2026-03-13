@@ -1,0 +1,55 @@
+syntax = "proto3";
+package aether.v1;
+
+service AetherService {
+    rpc GetDiagnostics(GetDiagnosticsRequest) returns (GetDiagnosticsResponse);
+    rpc GetTargets(GetTargetsRequest) returns (GetTargetsResponse);
+    rpc StreamEvents(StreamEventsRequest) returns (stream IntegrationEvent);
+    rpc ExecuteAction(ExecuteActionRequest) returns (ExecuteActionResponse);
+}
+
+message GetDiagnosticsRequest {
+    optional string severity_filter = 1;
+    optional string target_filter = 2;
+}
+message GetDiagnosticsResponse {
+    repeated Diagnostic diagnostics = 1;
+}
+message Diagnostic {
+    uint64 id = 1;
+    string target_name = 2;
+    string severity = 3;
+    string category = 4;
+    string summary = 5;
+    string recommendation = 6;
+}
+
+message GetTargetsRequest {}
+message GetTargetsResponse {
+    repeated Target targets = 1;
+}
+message Target {
+    string id = 1;
+    string name = 2;
+    string kind = 3;
+    repeated string endpoints = 4;
+}
+
+message StreamEventsRequest {
+    optional string severity_filter = 1;
+}
+message IntegrationEvent {
+    string event_type = 1;
+    string payload = 2;
+    uint64 timestamp = 3;
+}
+
+message ExecuteActionRequest {
+    string action_type = 1;
+    string target = 2;
+    map<string, string> parameters = 3;
+}
+message ExecuteActionResponse {
+    string action_id = 1;
+    string status = 2;
+}

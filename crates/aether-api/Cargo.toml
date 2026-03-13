@@ -1,0 +1,16 @@
+[package]
+name = "aether-api"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+aether-core = { path = "../aether-core" }
+tonic = { version = "0.12", features = ["default"] }
+prost = "0.13"
+tokio = { version = "1", features = ["full"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+thiserror = "2"
+tracing = "0.1"
+
+[build-dependencies]
+tonic-build = "0.12"
