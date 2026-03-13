@@ -190,7 +190,7 @@ pub async fn get_process(
         .map(|(from, to, edge)| ConnectionResponse {
             from_pid: from,
             to_pid: to,
-            protocol: format!("{:?}", edge.protocol),
+            protocol: edge.protocol.to_string(),
             bytes_per_sec: edge.bytes_per_sec,
         })
         .collect();
@@ -212,7 +212,7 @@ pub async fn list_connections(
         .map(|(from, to, edge)| ConnectionResponse {
             from_pid: from,
             to_pid: to,
-            protocol: format!("{:?}", edge.protocol),
+            protocol: edge.protocol.to_string(),
             bytes_per_sec: edge.bytes_per_sec,
         })
         .collect();
@@ -301,7 +301,7 @@ pub async fn list_diagnostics(
         .iter()
         .filter(|d| {
             if let Some(ref sev) = filter.severity {
-                if format!("{:?}", d.severity).to_lowercase() != sev.to_lowercase() {
+                if d.severity.to_string() != sev.to_lowercase() {
                     return false;
                 }
             }
@@ -455,7 +455,7 @@ fn process_to_response(p: &aether_core::ProcessNode) -> ProcessResponse {
         name: p.name.clone(),
         cpu_percent: p.cpu_percent,
         mem_bytes: p.mem_bytes,
-        state: format!("{:?}", p.state),
+        state: p.state.to_string(),
         hp: p.hp,
         xp: p.xp,
         position: p.position_3d.to_array(),
@@ -488,8 +488,8 @@ pub(crate) fn diagnostic_to_response(d: &Diagnostic) -> DiagnosticResponse {
         host: d.host.as_str().to_string(),
         target_type,
         target_name,
-        severity: format!("{:?}", d.severity).to_lowercase(),
-        category: format!("{:?}", d.category),
+        severity: d.severity.to_string(),
+        category: d.category.to_string(),
         summary: d.summary.clone(),
         evidence: d
             .evidence
@@ -502,9 +502,9 @@ pub(crate) fn diagnostic_to_response(d: &Diagnostic) -> DiagnosticResponse {
             })
             .collect(),
         recommendation: RecommendationResponse {
-            action: format!("{:?}", d.recommendation.action),
+            action: d.recommendation.action.to_string(),
             reason: d.recommendation.reason.clone(),
-            urgency: format!("{:?}", d.recommendation.urgency),
+            urgency: d.recommendation.urgency.to_string(),
         },
     }
 }
@@ -660,7 +660,7 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["pid"], 42);
         assert_eq!(json["name"], "proc-42");
-        assert_eq!(json["state"], "Running");
+        assert_eq!(json["state"], "running");
         assert_eq!(json["position"], serde_json::json!([1.0, 2.0, 3.0]));
     }
 
@@ -743,7 +743,7 @@ mod tests {
         assert_eq!(json.len(), 1);
         assert_eq!(json[0]["from_pid"], 1);
         assert_eq!(json[0]["to_pid"], 2);
-        assert_eq!(json[0]["protocol"], "TCP");
+        assert_eq!(json[0]["protocol"], "tcp");
         assert_eq!(json[0]["bytes_per_sec"], 1024);
     }
 
