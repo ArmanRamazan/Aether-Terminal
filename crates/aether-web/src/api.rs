@@ -472,6 +472,7 @@ fn format_action(action: &AgentAction) -> String {
         AgentAction::RestartService { name } => format!("restart_service({name})"),
         AgentAction::Inspect { pid } => format!("inspect({pid})"),
         AgentAction::CustomScript { command } => format!("custom_script({command})"),
+        _ => format!("{action:?}"),
     }
 }
 
@@ -523,7 +524,7 @@ pub(crate) fn compute_diagnostic_stats(diags: &[Diagnostic]) -> DiagnosticStatsR
         match d.severity {
             Severity::Critical => critical += 1,
             Severity::Warning => warning += 1,
-            Severity::Info => info += 1,
+            Severity::Info | _ => info += 1,
         }
     }
     DiagnosticStatsResponse {

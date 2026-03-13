@@ -62,6 +62,7 @@ impl MetricsExporter {
                 Severity::Info => info_count += 1.0,
                 Severity::Warning => warn_count += 1.0,
                 Severity::Critical => crit_count += 1.0,
+                _ => info_count += 1.0,
             }
         }
 

@@ -363,7 +363,7 @@ fn severity_style(severity: Severity) -> Style {
     let color = match severity {
         Severity::Critical => Palette::DIAGNOSTIC_CRITICAL,
         Severity::Warning => Palette::DIAGNOSTIC_WARNING,
-        Severity::Info => Palette::DIAGNOSTIC_INFO,
+        Severity::Info | _ => Palette::DIAGNOSTIC_INFO,
     };
     Style::default().fg(color)
 }
@@ -383,8 +383,7 @@ fn urgency_style(urgency: Urgency) -> Style {
 fn severity_icon(severity: Severity) -> &'static str {
     match severity {
         Severity::Critical => "■",
-        Severity::Warning => "●",
-        Severity::Info => "●",
+        Severity::Warning | Severity::Info | _ => "●",
     }
 }
 
@@ -397,7 +396,7 @@ fn severity_counts(diagnostics: &[Diagnostic]) -> (usize, usize, usize) {
         match d.severity {
             Severity::Critical => critical += 1,
             Severity::Warning => warning += 1,
-            Severity::Info => info += 1,
+            Severity::Info | _ => info += 1,
         }
     }
     (critical, warning, info)

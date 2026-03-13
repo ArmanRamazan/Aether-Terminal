@@ -139,6 +139,7 @@ fn process_state_to_u32(state: ProcessState) -> u32 {
         ProcessState::Sleeping => 1,
         ProcessState::Zombie => 2,
         ProcessState::Stopped => 3,
+        _ => u32::MAX,
     }
 }
 

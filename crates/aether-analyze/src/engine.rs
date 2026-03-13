@@ -375,7 +375,7 @@ impl AnalyzeEngine {
             match d.severity {
                 Severity::Critical => critical += 1,
                 Severity::Warning => warning += 1,
-                Severity::Info => info += 1,
+                Severity::Info | _ => info += 1,
             }
         }
 

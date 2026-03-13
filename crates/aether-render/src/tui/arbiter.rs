@@ -73,6 +73,7 @@ impl ArbiterQueue {
             AgentAction::RestartService { name } => (0, name.clone()),
             AgentAction::Inspect { pid } => (*pid, String::new()),
             AgentAction::CustomScript { command } => (0, command.clone()),
+            _ => (0, format!("{action:?}")),
         };
         self.entries.push(ArbiterEntry {
             source,
@@ -448,6 +449,7 @@ fn format_action(action: &AgentAction) -> &'static str {
         AgentAction::RestartService { .. } => "restart",
         AgentAction::Inspect { .. } => "inspect",
         AgentAction::CustomScript { .. } => "script",
+        _ => "unknown",
     }
 }
 
