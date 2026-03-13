@@ -1,0 +1,117 @@
+phase: "p2-analyze-rules"
+description: "Phase 2: extend aether-analyze with application-level diagnostic rules"
+
+tasks:
+  - id: analyze-app-rules
+    title: "Add application-level diagnostic rules to analyze engine"
+    agent: rust-engineer
+    scope: analyze
+    type: feat
+    context: |
+      Extend aether-analyze with rules that work on Prometheus-scraped metrics
+      and probe results. These rules detect application-level problems:
+      throughput drop, latency growth, connection pool saturation, error rates.
+
+      Rules use MetricStore data — samples are pushed by scraper and prober.
+      Each rule implements the existing Rule/RuleCondition pattern.
+    prompt: |
+      Add application-level diagnostic rules to aether-analyze.
+
+      Step 1: Read existing rules
+      - Read crates/aether-analyze/src/rules/builtin.rs — understand current pattern
+      - Read crates/aether-analyze/src/rules/types.rs — Rule, RuleCondition
+
+      Step 2: Add new rule conditions (if needed)
+      File: crates/aether-analyze/src/rules/types.rs (extend)
+      - Add conditions for rate-based metrics:
+        - RateChange { metric: String, window_seconds: u64, threshold_percent: f64 }
+        - AboveThreshold { metric: String, threshold: f64 }
+        - GrowthTrend { metric: String, window_seconds: u64, slope_threshold: f64 }
+
+      Step 3: Add builtin application rules
+      File: crates/aether-analyze/src/rules/app_rules.rs (new)
+      - pub fn application_rules() -> Vec<Rule> — returns all app-level rules
+
+      Rules to implement:
+      1. throughput_drop — http_requests_total rate drops >30% in 5 min window
+      2. latency_p99_high — histogram_quantile(0.99) > 500ms
+      3. latency_growing — p99 linear trend slope > 0 for 10 min
+      4. connection_pool_saturated — active_connections/max_connections > 80%
+      5. error_rate_spike — 5xx_total / requests_total > 5%
+      6. health_check_failed — probe_status == Failed
+      7. tcp_latency_degraded — probe_latency_ms > 3x rolling average
+      8. tls_expiry_warning — tls_days_remaining < 30
+      9. dns_resolution_slow — dns_latency_ms > 100ms
+      10. disk_io_saturated — disk_io_time_percent > 90%
+
+      Each rule:
+      - Has a name, category, severity
+      - References metric names that scraper/prober push to MetricStore
+      - Uses configurable thresholds (defaults from ThresholdConfig)
+
+      Step 4: Register in engine
+      File: crates/aether-analyze/src/rules/builtin.rs (extend)
+      - Include application_rules() in the default builtin set
+      - Or keep separate: engine.add_rules(application_rules())
+
+      Step 5: Update rule evaluation
+      File: crates/aether-analyze/src/rules/engine.rs
+      - Ensure evaluate() handles the new conditions (RateChange, AboveThreshold, GrowthTrend)
+      - Wire to MetricStore for metric lookups
+
+      Tests:
+      - test_throughput_drop_fires — simulate rate decrease
+      - test_latency_high_fires — simulate p99 > threshold
+      - test_health_check_failed_fires — simulate probe failure
+      - test_rule_count_includes_app_rules
+
+      COMMIT: feat(analyze): add 10 application-level diagnostic rules for production monitoring
+    test: "cargo test -p aether-analyze"
+    depends_on: []
+
+  - id: analyze-correlation
+    title: "Add cross-source correlation to diagnostic engine"
+    agent: rust-engineer
+    scope: analyze
+    type: feat
+    context: |
+      Correlate findings from different data sources:
+      - Probe failure + metric spike → likely same root cause
+      - Throughput drop + connection pool saturation → causal chain
+      - Multiple services degraded simultaneously → upstream dependency
+
+      Use existing CorrelationAnalyzer (Pearson coefficient) and extend it.
+    prompt: |
+      Add cross-source correlation to aether-analyze.
+
+      Step 1: Read existing correlation code
+      - Read crates/aether-analyze/src/analyzers/correlation.rs
+
+      Step 2: Add diagnostic correlator
+      File: crates/aether-analyze/src/analyzers/correlator.rs (new)
+      - pub struct DiagnosticCorrelator
+      - pub fn correlate(diagnostics: &[Diagnostic]) -> Vec<CorrelatedGroup>
+      - CorrelatedGroup { diagnostics: Vec<usize>, root_cause: Option<String>, confidence: f64 }
+
+      Correlation logic:
+      1. Time correlation: diagnostics within 60s window → likely related
+      2. Target correlation: same target, different categories → compound issue
+      3. Causal patterns:
+         - connection_pool_saturated + throughput_drop → pool is root cause
+         - health_check_failed + error_rate_spike → service down
+         - memory_growing + latency_growing → memory leak causing GC pauses
+      4. Add "correlated_with" field to Diagnostic recommendations
+
+      Step 3: Integrate into AnalyzeEngine
+      File: crates/aether-analyze/src/engine.rs
+      - After generating diagnostics, run correlator
+      - Enrich diagnostics with correlation info in recommendations
+
+      Tests:
+      - test_time_correlation — two diagnostics within window grouped
+      - test_causal_pattern — pool + throughput linked
+      - test_no_correlation — unrelated diagnostics stay separate
+
+      COMMIT: feat(analyze): add cross-source diagnostic correlation with causal pattern detection
+    test: "cargo test -p aether-analyze"
+    depends_on: [analyze-app-rules]

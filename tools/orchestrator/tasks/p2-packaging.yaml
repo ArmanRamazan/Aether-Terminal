@@ -1,0 +1,294 @@
+phase: "p2-packaging"
+description: "Phase 2: CI/CD, Docker, Helm, documentation for public release"
+
+tasks:
+  - id: ci-github-actions
+    title: "Set up GitHub Actions CI/CD pipeline"
+    agent: rust-engineer
+    scope: workspace
+    type: chore
+    context: |
+      CI for every push/PR: build, test, clippy, fmt.
+      Release workflow: build binaries + Docker image on tag.
+    prompt: |
+      Create GitHub Actions workflows.
+
+      File: .github/workflows/ci.yaml
+      ```yaml
+      name: CI
+      on: [push, pull_request]
+      jobs:
+        check:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+            - uses: dtolnay/rust-toolchain@stable
+            - uses: Swatinem/rust-cache@v2
+            - run: cargo fmt --check
+            - run: cargo clippy --workspace -- -D warnings
+            - run: cargo test --workspace
+            - run: cargo build --workspace
+      ```
+
+      File: .github/workflows/release.yaml
+      ```yaml
+      name: Release
+      on:
+        push:
+          tags: ['v*']
+      jobs:
+        build:
+          strategy:
+            matrix:
+              include:
+                - os: ubuntu-latest
+                  target: x86_64-unknown-linux-gnu
+                - os: ubuntu-latest
+                  target: aarch64-unknown-linux-gnu
+                - os: macos-latest
+                  target: x86_64-apple-darwin
+                - os: macos-latest
+                  target: aarch64-apple-darwin
+          runs-on: ${{ matrix.os }}
+          steps:
+            - uses: actions/checkout@v4
+            - uses: dtolnay/rust-toolchain@stable
+              with:
+                targets: ${{ matrix.target }}
+            - run: cargo build --release --target ${{ matrix.target }} -p aether-terminal
+            - uses: actions/upload-artifact@v4
+              with:
+                name: aether-${{ matrix.target }}
+                path: target/${{ matrix.target }}/release/aether-terminal
+
+        docker:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+            - uses: docker/setup-buildx-action@v3
+            - uses: docker/login-action@v3
+              with:
+                registry: ghcr.io
+                username: ${{ github.actor }}
+                password: ${{ secrets.GITHUB_TOKEN }}
+            - uses: docker/build-push-action@v5
+              with:
+                push: true
+                tags: ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+      ```
+
+      File: .github/workflows/security.yaml
+      ```yaml
+      name: Security Audit
+      on:
+        schedule:
+          - cron: '0 0 * * 1'  # weekly Monday
+      jobs:
+        audit:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+            - uses: dtolnay/rust-toolchain@stable
+            - run: cargo install cargo-audit
+            - run: cargo audit
+      ```
+
+      COMMIT: chore(ci): add GitHub Actions for CI, release, and security audit
+    test: "ls .github/workflows/ci.yaml"
+    depends_on: []
+
+  - id: docker-image
+    title: "Create multi-stage Dockerfile"
+    agent: rust-engineer
+    scope: workspace
+    type: chore
+    context: |
+      Multi-stage build: builder (Rust compile) → runtime (minimal image).
+      Include frontend assets (built during Docker build).
+    prompt: |
+      Create a multi-stage Dockerfile.
+
+      File: Dockerfile
+      ```dockerfile
+      # Stage 1: Build frontend
+      FROM node:20-alpine AS frontend
+      WORKDIR /app/crates/aether-web/frontend
+      COPY crates/aether-web/frontend/package*.json ./
+      RUN npm ci
+      COPY crates/aether-web/frontend/ ./
+      RUN npm run build
+
+      # Stage 2: Build Rust
+      FROM rust:1.82-bookworm AS builder
+      WORKDIR /app
+      COPY . .
+      COPY --from=frontend /app/crates/aether-web/frontend/dist crates/aether-web/frontend/dist
+      RUN cargo build --release -p aether-terminal
+
+      # Stage 3: Runtime
+      FROM debian:bookworm-slim
+      RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+      COPY --from=builder /app/target/release/aether-terminal /usr/local/bin/
+      EXPOSE 8080 3000 50051
+      ENTRYPOINT ["aether-terminal"]
+      ```
+
+      File: .dockerignore
+      ```
+      target/
+      .git/
+      .superpowers/
+      node_modules/
+      *.md
+      docs/
+      tools/
+      ```
+
+      Test: docker build -t aether-terminal . (or just verify Dockerfile syntax)
+
+      COMMIT: chore(docker): add multi-stage Dockerfile for minimal runtime image
+    test: "test -f Dockerfile"
+    depends_on: []
+
+  - id: helm-chart
+    title: "Create basic Helm chart for Kubernetes deployment"
+    agent: rust-engineer
+    scope: workspace
+    type: chore
+    context: |
+      Basic Helm chart: Deployment, Service, ConfigMap for aether.yaml.
+      Users deploy to K8s with: helm install aether ./chart
+    prompt: |
+      Create a basic Helm chart.
+
+      File: chart/Chart.yaml
+      ```yaml
+      apiVersion: v2
+      name: aether-terminal
+      description: Production diagnostics platform
+      version: 0.1.0
+      appVersion: "1.0.0"
+      ```
+
+      File: chart/values.yaml
+      ```yaml
+      replicaCount: 1
+      image:
+        repository: ghcr.io/arman-ramazan/aether-terminal
+        tag: latest
+        pullPolicy: IfNotPresent
+      service:
+        web:
+          port: 8080
+        grpc:
+          port: 50051
+      config:
+        discovery:
+          enabled: true
+          kubernetes: true
+        thresholds:
+          throughput_drop_percent: 30
+          latency_p99_ms: 500
+        output:
+          stdout:
+            enabled: true
+            format: json
+      resources:
+        limits:
+          cpu: 500m
+          memory: 256Mi
+        requests:
+          cpu: 100m
+          memory: 128Mi
+      ```
+
+      File: chart/templates/deployment.yaml
+      - Deployment with configMap volume mount for aether.yaml
+      - Container ports: 8080 (web), 50051 (grpc)
+      - args: ["--config", "/etc/aether/aether.yaml", "--web", "8080"]
+
+      File: chart/templates/service.yaml
+      - ClusterIP service exposing web and grpc ports
+
+      File: chart/templates/configmap.yaml
+      - ConfigMap from values.config → aether.yaml
+
+      COMMIT: chore(helm): add basic Helm chart for Kubernetes deployment
+    test: "test -f chart/Chart.yaml"
+    depends_on: []
+
+  - id: docs-getting-started
+    title: "Write Getting Started guide and configuration reference"
+    agent: rust-engineer
+    scope: workspace
+    type: docs
+    context: |
+      User-facing documentation for the public release.
+      Getting Started: install → configure → run → see diagnostics.
+      Config reference: every field documented.
+    prompt: |
+      Write user documentation.
+
+      File: docs/getting-started.md
+      - Installation (3 ways): cargo install, Docker, build from source
+      - Quick start: run with defaults (no config needed)
+      - First config: create aether.toml with one target
+      - See diagnostics: check TUI (F6), Web UI, stdout output
+      - Connect AI agent: MCP SSE example with Claude Desktop config
+      - Kubernetes: helm install with example values
+
+      File: docs/configuration.md
+      - Full reference for every config field
+      - Organize by section: discovery, targets, thresholds, output, api, scrape, probe
+      - Include default values
+      - Show both TOML and YAML examples
+      - Environment variable interpolation: ${VAR} syntax
+
+      File: docs/integrations.md
+      - Slack setup: create webhook, add to config
+      - Discord setup: create webhook URL
+      - Telegram setup: create bot, get chat_id
+      - MCP: Claude Desktop config.json example
+      - gRPC: example client code (grpcurl commands)
+      - Prometheus: scrape config, what metrics are exported
+
+      COMMIT: docs: add Getting Started, Configuration, and Integrations guides
+    test: "test -f docs/getting-started.md"
+    depends_on: []
+
+  - id: docs-contributing
+    title: "Add CONTRIBUTING.md, issue templates, CoC for open source"
+    agent: rust-engineer
+    scope: workspace
+    type: docs
+    context: |
+      Standard open source files for community contributions.
+    prompt: |
+      Create open source community files.
+
+      File: CONTRIBUTING.md
+      - How to set up dev environment (cargo, node for frontend)
+      - Code style: cargo fmt, cargo clippy
+      - PR process: fork, branch, test, PR
+      - Commit format: type(scope): description
+      - Architecture: link to docs/architecture.md
+      - Where to start: "good first issue" labels
+
+      File: .github/ISSUE_TEMPLATE/bug_report.md
+      - Standard bug report template: description, steps to reproduce, expected, actual, environment
+
+      File: .github/ISSUE_TEMPLATE/feature_request.md
+      - Feature request template: description, use case, alternatives considered
+
+      File: .github/PULL_REQUEST_TEMPLATE.md
+      - PR template: description, type of change, checklist (tests, clippy, docs)
+
+      File: CODE_OF_CONDUCT.md
+      - Contributor Covenant v2.1 (standard)
+
+      File: CHANGELOG.md
+      - Initial entry for v1.0.0 with high-level feature list
+
+      COMMIT: docs: add CONTRIBUTING, issue/PR templates, Code of Conduct, CHANGELOG
+    test: "test -f CONTRIBUTING.md"
+    depends_on: []

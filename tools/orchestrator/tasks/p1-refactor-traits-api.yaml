@@ -1,0 +1,178 @@
+phase: "p1-refactor-traits-api"
+description: "Phase 1 refactor: define core traits for v1.0 crates, stabilize public API"
+
+tasks:
+  - id: refactor-core-traits
+    title: "Define DataSource, OutputSink, ServiceDiscovery traits in core"
+    agent: rust-engineer
+    scope: core
+    type: refactor
+    context: |
+      Phase 2 will add 5 new crates (config, discovery, prober, output, api).
+      Each implements a trait from core. Define these traits NOW so Phase 2
+      crates are pure adapters — additive, no rewrites.
+
+      Traits to define:
+      - DataSource — for Prometheus scraper, network prober, log parser
+      - OutputSink — for Slack, Discord, Telegram, stdout, file
+      - ServiceDiscovery — for port scanner, K8s API
+      - ConfigProvider — for TOML/YAML loading (may be overkill, simple struct might suffice)
+
+      Keep traits minimal — only methods that are clearly needed.
+    prompt: |
+      Define adapter traits in aether-core for Phase 2 crates.
+
+      File: crates/aether-core/src/traits.rs (extend existing)
+
+      Add:
+      ```rust
+      /// A source of metrics data (Prometheus, prober, log parser).
+      #[async_trait]
+      pub trait DataSource: Send + Sync {
+          /// Collect metrics from this source. Returns samples to store.
+          async fn collect(&self) -> Result<Vec<MetricSample>, Box<dyn std::error::Error + Send + Sync>>;
+
+          /// Human-readable name of this data source.
+          fn name(&self) -> &str;
+      }
+
+      /// A destination for diagnostic alerts.
+      #[async_trait]
+      pub trait OutputSink: Send + Sync {
+          /// Send a diagnostic finding to this output.
+          async fn send(&self, diagnostic: &Diagnostic) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
+
+          /// Human-readable name of this output.
+          fn name(&self) -> &str;
+
+          /// Minimum severity this sink cares about.
+          fn min_severity(&self) -> DiagnosticSeverity;
+      }
+
+      /// Discovers services/targets in the infrastructure.
+      #[async_trait]
+      pub trait ServiceDiscovery: Send + Sync {
+          /// Scan for available targets. Returns newly discovered ones.
+          async fn discover(&self) -> Result<Vec<Target>, Box<dyn std::error::Error + Send + Sync>>;
+
+          /// Human-readable name of this discovery mechanism.
+          fn name(&self) -> &str;
+      }
+      ```
+
+      File: crates/aether-core/src/models.rs (extend)
+      Add supporting types if not already present:
+      ```rust
+      #[derive(Debug, Clone, Serialize, Deserialize)]
+      pub struct MetricSample {
+          pub name: String,
+          pub value: f64,
+          pub labels: HashMap<String, String>,
+          pub timestamp: SystemTime,
+      }
+
+      #[derive(Debug, Clone, Serialize, Deserialize)]
+      pub struct Target {
+          pub name: String,
+          pub kind: TargetKind,
+          pub endpoints: Vec<String>,
+          pub labels: HashMap<String, String>,
+      }
+
+      #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+      pub enum TargetKind {
+          Process,
+          Service,
+          Container,
+          Pod,
+      }
+      ```
+
+      File: crates/aether-core/src/lib.rs
+      - Re-export new traits and types
+      - Add async-trait to Cargo.toml if not present
+
+      Tests:
+      - Compile-time only — verify traits are object-safe: `let _: Box<dyn DataSource>;`
+
+      COMMIT: feat(core): define DataSource, OutputSink, ServiceDiscovery adapter traits
+    test: "cargo test -p aether-core"
+    depends_on: []
+
+  - id: refactor-pub-api-review
+    title: "Review and tighten pub vs pub(crate) across all crates"
+    agent: rust-engineer
+    scope: workspace
+    type: refactor
+    context: |
+      Systematic review of all crate APIs. For a public library:
+      - pub: only items that external consumers need
+      - pub(crate): everything else
+      - lib.rs: only pub mod + pub use re-exports
+
+      Focus on crates that will become library APIs:
+      aether-core, aether-analyze, aether-metrics, aether-web
+    prompt: |
+      Review public API surface of all library crates.
+
+      For EACH crate in crates/ (except aether-terminal which is a binary):
+
+      Step 1: Read lib.rs — check what's re-exported
+      Step 2: For each pub item, ask: "Does code OUTSIDE this crate use it?"
+        - If yes → keep pub
+        - If no → change to pub(crate)
+      Step 3: Ensure lib.rs has clean re-exports
+
+      Focus areas (from audit findings):
+      - aether-web: api, ws, embedded modules should be pub(crate) (if not already fixed)
+      - aether-analyze: MetricKey should be pub(crate) (if not already fixed)
+      - aether-mcp: after arbiter consolidation, check what's still needed as pub
+      - aether-predict: check if internal types are unnecessarily pub
+      - aether-script: check codegen internals
+
+      Rules from CLAUDE.md:
+      - pub(crate) by default
+      - pub only for cross-crate API
+      - lib.rs: only pub mod and pub use, zero logic
+
+      Don't change types that ARE used cross-crate (check with grep).
+
+      COMMIT: refactor(workspace): tighten pub API surface — pub(crate) for internal items
+    test: "cargo check --workspace"
+    depends_on: []
+
+  - id: refactor-non-exhaustive
+    title: "Add #[non_exhaustive] to public enums that will grow"
+    agent: rust-engineer
+    scope: core
+    type: refactor
+    context: |
+      For a public library, enums that will get new variants need #[non_exhaustive]
+      to maintain semver compatibility. Key enums:
+      - ProcessState (may add more states)
+      - Protocol (will add more protocols)
+      - AgentAction (will add more action types)
+      - TargetKind (new in this phase)
+      - IntegrationEvent (new in this phase)
+      - DiagnosticSeverity
+    prompt: |
+      Add #[non_exhaustive] to public enums in aether-core that will grow.
+
+      File: crates/aether-core/src/models.rs
+      - Add #[non_exhaustive] before: ProcessState, Protocol, ConnectionState, TargetKind
+
+      File: crates/aether-core/src/events.rs
+      - Add #[non_exhaustive] before: SystemEvent, GameEvent, AgentAction, IntegrationEvent
+
+      File: crates/aether-core/src/diagnostics types (wherever DiagnosticSeverity lives)
+      - Add #[non_exhaustive] before severity enum
+
+      Rules:
+      - Only on enums that are pub and exported from the crate
+      - Don't add on internal (pub(crate)) enums
+      - Each enum with #[non_exhaustive] needs a _ => wildcard in external match arms
+      - Check that existing match arms in OTHER crates have wildcard fallbacks
+
+      COMMIT: refactor(core): add #[non_exhaustive] to public enums for semver safety
+    test: "cargo check --workspace"
+    depends_on: [refactor-core-traits]

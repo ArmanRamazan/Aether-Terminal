@@ -1,0 +1,106 @@
+phase: "p2-core-types"
+description: "Phase 2: extend aether-core with Target, ServiceHealth, ProbeResult types"
+
+tasks:
+  - id: core-target-types
+    title: "Add Target, ServiceHealth, ProbeResult types to aether-core"
+    agent: rust-engineer
+    scope: core
+    type: feat
+    context: |
+      These types support Phase 2 crates (discovery, prober, scraper).
+      They represent discovered services and their health status.
+      Must integrate with existing MetricStore and diagnostic pipeline.
+    prompt: |
+      Add production monitoring types to aether-core.
+
+      File: crates/aether-core/src/models.rs (extend)
+      ```rust
+      /// A monitored service or endpoint discovered or configured.
+      #[derive(Debug, Clone, Serialize, Deserialize)]
+      pub struct Target {
+          pub id: String,
+          pub name: String,
+          pub kind: TargetKind,
+          pub endpoints: Vec<Endpoint>,
+          pub labels: HashMap<String, String>,
+          pub discovered_at: SystemTime,
+      }
+
+      /// If Target was already added by refactor-core-traits, merge fields.
+      /// Don't duplicate — extend the existing struct.
+
+      #[derive(Debug, Clone, Serialize, Deserialize)]
+      pub struct Endpoint {
+          pub url: String,
+          pub endpoint_type: EndpointType,
+      }
+
+      #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+      #[non_exhaustive]
+      pub enum EndpointType {
+          Prometheus,
+          Health,
+          TcpProbe,
+          Logs,
+      }
+
+      /// Health status of a monitored target.
+      #[derive(Debug, Clone, Serialize, Deserialize)]
+      pub struct ServiceHealth {
+          pub target_id: String,
+          pub status: HealthStatus,
+          pub last_check: SystemTime,
+          pub probe_results: Vec<ProbeResult>,
+      }
+
+      #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+      #[non_exhaustive]
+      pub enum HealthStatus {
+          Healthy,
+          Degraded,
+          Failed,
+          Unknown,
+      }
+
+      /// Result of a single probe check.
+      #[derive(Debug, Clone, Serialize, Deserialize)]
+      pub struct ProbeResult {
+          pub target_id: String,
+          pub check_type: CheckType,
+          pub status: ProbeStatus,
+          pub latency_ms: f64,
+          pub details: Option<String>,
+          pub timestamp: SystemTime,
+      }
+
+      #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+      #[non_exhaustive]
+      pub enum CheckType {
+          HttpHealth,
+          TcpConnect,
+          DnsResolve,
+          TlsCertificate,
+      }
+
+      #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+      #[non_exhaustive]
+      pub enum ProbeStatus {
+          Ok,
+          Degraded,
+          Failed,
+          Timeout,
+      }
+      ```
+
+      File: crates/aether-core/src/lib.rs
+      - Re-export all new types
+
+      Tests:
+      - test_target_serialization_roundtrip
+      - test_probe_result_construction
+      - test_health_status_defaults
+
+      COMMIT: feat(core): add Target, ServiceHealth, ProbeResult types for production monitoring
+    test: "cargo test -p aether-core"
+    depends_on: []

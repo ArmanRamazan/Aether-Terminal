@@ -1,0 +1,66 @@
+phase: "p2-scraper"
+description: "Phase 2: extend aether-metrics with active Prometheus scraping"
+
+tasks:
+  - id: metrics-active-scrape
+    title: "Add active Prometheus /metrics scraping to aether-metrics"
+    agent: rust-engineer
+    scope: metrics
+    type: feat
+    context: |
+      aether-metrics already has a PromQL consumer and text encoder.
+      Extend it with an active scraper that pulls /metrics from discovered targets.
+      Implements DataSource trait from aether-core.
+
+      The scraper should:
+      - HTTP GET target's /metrics endpoint
+      - Parse Prometheus text format (OpenMetrics)
+      - Extract metric name, value, labels, type
+      - Return Vec<MetricSample> for MetricStore
+    prompt: |
+      Add active Prometheus scraping to aether-metrics.
+
+      Step 1: Read existing code
+      - Read crates/aether-metrics/src/lib.rs — understand current structure
+      - Read existing consumer/encoder modules
+
+      Step 2: Add Prometheus text parser
+      File: crates/aether-metrics/src/scrape/parser.rs
+      - Parse Prometheus text exposition format:
+        ```
+        # HELP http_requests_total Total HTTP requests
+        # TYPE http_requests_total counter
+        http_requests_total{method="GET",status="200"} 1234 1706000000
+        ```
+      - Extract: metric_name, labels (HashMap), value (f64), timestamp (optional)
+      - Handle: counter, gauge, histogram (_bucket, _sum, _count), summary
+      - Return Vec<MetricSample>
+
+      Step 3: Add scraper
+      File: crates/aether-metrics/src/scrape/scraper.rs
+      - pub struct PrometheusScraper { client: reqwest::Client, interval: Duration, timeout: Duration }
+      - impl DataSource for PrometheusScraper:
+        - collect() → scrape all registered targets → parse → Vec<MetricSample>
+      - pub async fn scrape_target(&self, url: &str) -> Result<Vec<MetricSample>>
+        - HTTP GET, parse response body
+
+      Step 4: Module structure
+      File: crates/aether-metrics/src/scrape/mod.rs
+      - pub mod parser, scraper
+
+      Step 5: Update lib.rs
+      - Add pub mod scrape
+
+      Step 6: Add reqwest to Cargo.toml if not present
+
+      Tests:
+      - test_parse_counter — parse counter line
+      - test_parse_gauge — parse gauge line
+      - test_parse_histogram — parse histogram bucket/sum/count
+      - test_parse_with_labels — verify label extraction
+      - test_parse_multiline — full sample /metrics output
+      - test_scraper_construction
+
+      COMMIT: feat(metrics): add active Prometheus /metrics scraper with text format parser
+    test: "cargo test -p aether-metrics"
+    depends_on: []

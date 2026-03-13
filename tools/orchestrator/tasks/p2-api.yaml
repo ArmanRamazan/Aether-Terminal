@@ -1,0 +1,146 @@
+phase: "p2-api"
+description: "Phase 2: aether-api crate — gRPC server and event bus for external integrations"
+
+tasks:
+  - id: api-crate-init
+    title: "Initialize aether-api with gRPC server and proto definitions"
+    agent: rust-engineer
+    scope: api
+    type: feat
+    context: |
+      New crate: aether-api. gRPC server for machine-to-machine communication.
+      Future projects (Autoscaler, Service Graph, Auto-Fix Agent) will consume this API.
+      Uses tonic (pure-Rust gRPC) and prost (protobuf codegen).
+
+      Key RPCs:
+      - GetDiagnostics — current active diagnostics
+      - GetTargets — discovered targets
+      - StreamEvents — server-streaming of IntegrationEvents
+      - ExecuteAction — propose action through Arbiter
+    prompt: |
+      Create the aether-api crate with gRPC server.
+
+      Step 1: Scaffold
+      - Create crates/aether-api/
+      - Workspace Cargo.toml: add member
+      - Cargo.toml deps: aether-core (path), tonic (features = ["default"]), prost, tokio, thiserror, tracing, async-trait
+      - Add build-dependency: tonic-build
+
+      Step 2: Proto definition
+      File: crates/aether-api/proto/aether.proto
+      ```protobuf
+      syntax = "proto3";
+      package aether.v1;
+
+      service AetherService {
+          rpc GetDiagnostics(GetDiagnosticsRequest) returns (GetDiagnosticsResponse);
+          rpc GetTargets(GetTargetsRequest) returns (GetTargetsResponse);
+          rpc StreamEvents(StreamEventsRequest) returns (stream IntegrationEvent);
+          rpc ExecuteAction(ExecuteActionRequest) returns (ExecuteActionResponse);
+      }
+
+      message GetDiagnosticsRequest {
+          optional string severity_filter = 1;
+          optional string target_filter = 2;
+      }
+      message GetDiagnosticsResponse {
+          repeated Diagnostic diagnostics = 1;
+      }
+      message Diagnostic {
+          uint64 id = 1;
+          string target_name = 2;
+          string severity = 3;
+          string category = 4;
+          string summary = 5;
+          string recommendation = 6;
+      }
+
+      message GetTargetsRequest {}
+      message GetTargetsResponse {
+          repeated Target targets = 1;
+      }
+      message Target {
+          string id = 1;
+          string name = 2;
+          string kind = 3;
+          repeated string endpoints = 4;
+      }
+
+      message StreamEventsRequest {
+          optional string severity_filter = 1;
+      }
+      message IntegrationEvent {
+          string event_type = 1;
+          string payload = 2;
+          uint64 timestamp = 3;
+      }
+
+      message ExecuteActionRequest {
+          string action_type = 1;
+          string target = 2;
+          map<string, string> parameters = 3;
+      }
+      message ExecuteActionResponse {
+          string action_id = 1;
+          string status = 2;
+      }
+      ```
+
+      Step 3: Build script
+      File: crates/aether-api/build.rs
+      - tonic_build::compile_protos("proto/aether.proto")
+
+      Step 4: Server implementation
+      File: crates/aether-api/src/server.rs
+      - pub struct AetherGrpcServer { diagnostics, targets, event_bus, arbiter }
+      - Implement the generated AetherService trait
+      - GetDiagnostics: read from shared diagnostics Vec
+      - GetTargets: read from shared targets Vec
+      - StreamEvents: subscribe to EventBus, stream to client
+      - ExecuteAction: create AgentAction, push to ArbiterQueue
+
+      Step 5: Error + lib
+      File: crates/aether-api/src/error.rs
+      File: crates/aether-api/src/lib.rs
+
+      Tests:
+      - test_server_construction
+      - test_proto_compiles — build.rs generates code
+
+      COMMIT: feat(api): initialize aether-api with gRPC server and proto definitions
+    test: "cargo test -p aether-api"
+    depends_on: []
+
+  - id: api-event-stream
+    title: "Implement StreamEvents with EventBus integration"
+    agent: rust-engineer
+    scope: api
+    type: feat
+    context: |
+      Wire the gRPC StreamEvents RPC to the EventBus from aether-core.
+      Clients subscribe and receive real-time diagnostic events.
+      This is the primary integration point for future projects.
+    prompt: |
+      Implement the StreamEvents RPC.
+
+      File: crates/aether-api/src/server.rs
+      - In the stream_events implementation:
+        - Subscribe to EventBus (call event_bus.subscribe())
+        - Filter by severity if requested
+        - Convert IntegrationEvent → proto IntegrationEvent
+        - Yield via tonic::Response::new(ReceiverStream)
+      - Handle client disconnect gracefully (drop subscription)
+
+      File: crates/aether-api/src/convert.rs (new)
+      - Conversion functions: aether_core types ↔ proto types
+      - impl From<core::Diagnostic> for proto::Diagnostic
+      - impl From<core::IntegrationEvent> for proto::IntegrationEvent
+      - impl From<core::Target> for proto::Target
+
+      Tests:
+      - test_event_conversion — core type → proto type roundtrip
+      - test_stream_receives_published_event — publish to bus, verify stream gets it
+
+      COMMIT: feat(api): implement StreamEvents with EventBus integration
+    test: "cargo test -p aether-api"
+    depends_on: [api-crate-init]

@@ -1,0 +1,153 @@
+phase: "p1-refactor-arbiter-events"
+description: "Phase 1 refactor: unify ArbiterQueue, design event bus traits, error handling"
+
+tasks:
+  - id: refactor-event-bus-trait
+    title: "Define EventBus trait in aether-core"
+    agent: rust-engineer
+    scope: core
+    type: refactor
+    context: |
+      Preparation for gRPC streaming API and inter-project communication.
+      Define a trait that abstracts event publishing/subscribing.
+      The trait will be implemented by:
+      - In-process broadcast channel (current)
+      - gRPC streaming (Phase 2, aether-api)
+
+      Keep it simple — YAGNI. Just the trait + in-process impl for now.
+    prompt: |
+      Define EventBus trait and in-process implementation in aether-core.
+
+      File: crates/aether-core/src/events.rs (extend existing)
+      - Define integration events:
+        ```rust
+        #[derive(Debug, Clone, Serialize, Deserialize)]
+        pub enum IntegrationEvent {
+            DiagnosticCreated { diagnostic_id: u64, severity: String, summary: String },
+            DiagnosticResolved { diagnostic_id: u64 },
+            ActionProposed { action_id: String, description: String },
+            ActionApproved { action_id: String },
+            ActionDenied { action_id: String },
+            ActionExecuted { action_id: String, success: bool },
+            TargetDiscovered { name: String, kind: String },
+            TargetLost { name: String },
+        }
+        ```
+
+      File: crates/aether-core/src/event_bus.rs (new)
+      - Define trait:
+        ```rust
+        #[async_trait]
+        pub trait EventBus: Send + Sync {
+            async fn publish(&self, event: IntegrationEvent);
+            fn subscribe(&self) -> tokio::sync::broadcast::Receiver<IntegrationEvent>;
+        }
+        ```
+      - Implement InProcessEventBus:
+        ```rust
+        pub struct InProcessEventBus {
+            sender: tokio::sync::broadcast::Sender<IntegrationEvent>,
+        }
+        impl InProcessEventBus {
+            pub fn new(capacity: usize) -> Self { ... }
+        }
+        ```
+
+      File: crates/aether-core/src/lib.rs
+      - Add pub mod event_bus
+      - Re-export: EventBus, InProcessEventBus, IntegrationEvent
+
+      Tests:
+      - test_publish_subscribe — publish event, verify subscriber receives it
+      - test_multiple_subscribers — 2 subscribers both receive same event
+
+      COMMIT: feat(core): add EventBus trait and InProcessEventBus implementation
+    test: "cargo test -p aether-core"
+    depends_on: []
+
+  - id: refactor-error-handling-web
+    title: "Unify error handling pattern across aether-web"
+    agent: rust-engineer
+    scope: web
+    type: refactor
+    context: |
+      After fix-web-expect-panics replaced .expect() calls, ensure the error
+      handling pattern is consistent. Every handler should use the same approach.
+
+      Define a WebError type that implements IntoResponse for axum.
+      All handlers return Result<impl IntoResponse, WebError>.
+    prompt: |
+      Unify error handling in aether-web with a proper WebError → IntoResponse pattern.
+
+      Step 1: Read current crates/aether-web/src/error.rs
+
+      Step 2: Ensure WebError covers all cases:
+      - File: crates/aether-web/src/error.rs
+        ```rust
+        #[derive(Debug, thiserror::Error)]
+        pub enum WebError {
+            #[error("internal server error")]
+            Internal,
+            #[error("not found: {0}")]
+            NotFound(String),
+            #[error("bad request: {0}")]
+            BadRequest(String),
+        }
+
+        impl IntoResponse for WebError {
+            fn into_response(self) -> Response {
+                let status = match &self {
+                    WebError::Internal => StatusCode::INTERNAL_SERVER_ERROR,
+                    WebError::NotFound(_) => StatusCode::NOT_FOUND,
+                    WebError::BadRequest(_) => StatusCode::BAD_REQUEST,
+                };
+                let body = serde_json::json!({ "error": self.to_string() });
+                (status, axum::Json(body)).into_response()
+            }
+        }
+        ```
+
+      Step 3: Update SharedState helpers to return WebError:
+      - File: crates/aether-web/src/state.rs
+        - read_world() → Result<..., WebError>
+        - read_arbiter() → Result<..., WebError>
+
+      Step 4: Update all handlers in api.rs to return Result<impl IntoResponse, WebError>
+      - Use ? operator consistently
+      - No more StatusCode returns directly — use WebError variants
+
+      COMMIT: refactor(web): unify error handling with WebError IntoResponse pattern
+    test: "cargo test -p aether-web"
+    depends_on: []
+
+  - id: refactor-shared-state-dedup
+    title: "Move diagnostic deduplication into SharedState"
+    agent: rust-engineer
+    scope: web
+    type: refactor
+    context: |
+      After fix-diagnostic-dedup in main.rs, the dedup logic lives in main.rs.
+      For cleaner architecture, SharedState or a DiagnosticStore should own this logic.
+      This way both TUI and Web get consistent deduplication.
+    prompt: |
+      Extract diagnostic storage + dedup into a reusable component.
+
+      Option A: Add methods to a DiagnosticStore in aether-core
+      Option B: Add upsert methods to the existing Vec<Diagnostic> wrapper
+
+      Choose the simpler approach that doesn't over-engineer.
+
+      File: crates/aether-core/src/diagnostics.rs (new, if needed)
+      OR just add a helper function in main.rs — if it's < 20 lines, don't create a whole module.
+
+      The key requirement:
+      - Upsert by (target_name, category) — replace existing, push if new
+      - Capacity limit (200) — evict lowest severity first
+      - Used by main.rs when receiving from analyze engine
+
+      If this is simple enough for a helper function in main.rs, keep it there.
+      Only extract to core if TUI and Web both need independent dedup logic.
+
+      COMMIT: refactor(terminal): extract diagnostic dedup into reusable helper
+    test: "cargo test --workspace"
+    depends_on: []

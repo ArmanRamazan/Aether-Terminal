@@ -1,0 +1,190 @@
+phase: "p0-bugfix-critical"
+description: "Fix 4 critical bugs blocking public release"
+
+tasks:
+  - id: fix-snapshot-self-loop
+    title: "Fix apply_snapshot self-loop bug in WorldGraph"
+    agent: rust-engineer
+    scope: core
+    type: fix
+    context: |
+      BUG-1: In aether-core/src/graph.rs line 171, apply_snapshot passes source_pid
+      as both arguments to add_connection, creating self-loops instead of directed edges.
+
+      Current code:
+        self.add_connection(edge.source_pid, edge.source_pid, edge.clone());
+
+      NetworkEdge has source_pid but no dest_pid field. The dest field is SocketAddr.
+      This means snapshot-based edge reconstruction is fundamentally broken.
+
+      Options:
+      1. Add dest_pid: Option<u32> to NetworkEdge — proper fix
+      2. Remove edge re-insertion entirely (edges are ephemeral from live connections)
+
+      Choose option 1: add dest_pid to NetworkEdge so edges can be reconstructed.
+    prompt: |
+      Fix the self-loop bug in apply_snapshot.
+
+      File: crates/aether-core/src/models.rs
+      - Add `pub dest_pid: Option<u32>` field to NetworkEdge struct
+      - Update Default or construction sites if any
+
+      File: crates/aether-core/src/graph.rs
+      - Fix line ~171 in apply_snapshot:
+        Change: self.add_connection(edge.source_pid, edge.source_pid, edge.clone());
+        To: if let Some(dest) = edge.dest_pid {
+                self.add_connection(edge.source_pid, dest, edge.clone());
+            }
+      - Update add_connection signature if needed
+
+      File: crates/aether-core/src/graph.rs (tests)
+      - Add test: test_apply_snapshot_with_edges
+        - Create snapshot with 2 processes and 1 edge between them
+        - Apply snapshot, verify edge_count() == 1
+        - Verify edge connects correct PIDs (not self-loop)
+      - Update existing test_apply_snapshot if it constructs NetworkEdge
+
+      Update any other files that construct NetworkEdge to include dest_pid field.
+      Search workspace-wide for `NetworkEdge {` or `NetworkEdge::` constructors.
+
+      COMMIT: fix(core): fix apply_snapshot self-loop — add dest_pid to NetworkEdge
+    test: "cargo test -p aether-core"
+    depends_on: []
+
+  - id: fix-arbiter-isolation
+    title: "Fix web server using isolated ArbiterQueue"
+    agent: rust-engineer
+    scope: orchestrator
+    type: fix
+    context: |
+      BUG-2 + ARCH-1: Two separate ArbiterQueue types exist:
+      - aether_core::ArbiterQueue (in crates/aether-core/src/arbiter.rs)
+      - aether_mcp::arbiter::ArbiterQueue (in crates/aether-mcp/src/arbiter.rs)
+
+      In main.rs:
+      - Line ~124: creates arbiter from aether_mcp::arbiter::ArbiterQueue
+      - Line ~434: web server gets NEW aether_core::ArbiterQueue::default()
+
+      Result: Web UI approve/deny operates on empty isolated queue. Zero effect.
+
+      Fix: Consolidate to ONE ArbiterQueue in aether-core. Remove duplicate from aether-mcp.
+      Pass the same Arc<Mutex<ArbiterQueue>> to all consumers (TUI, Web, MCP).
+    prompt: |
+      Consolidate ArbiterQueue to a single implementation in aether-core.
+
+      Step 1: Compare both ArbiterQueue implementations
+      - Read crates/aether-core/src/arbiter.rs
+      - Read crates/aether-mcp/src/arbiter.rs
+      - Identify features unique to the mcp version (likely UUID-based IDs)
+
+      Step 2: Merge into aether-core
+      - File: crates/aether-core/src/arbiter.rs
+        - Ensure it has all needed fields (UUID if mcp version uses it)
+        - Ensure all methods needed by TUI, Web, and MCP are present
+        - Keep the API compatible with existing callers
+
+      Step 3: Remove duplicate from aether-mcp
+      - File: crates/aether-mcp/src/arbiter.rs — delete or empty out
+      - File: crates/aether-mcp/src/lib.rs — remove pub mod arbiter if now empty
+      - Update all imports in aether-mcp to use aether_core::ArbiterQueue
+
+      Step 4: Fix main.rs
+      - File: crates/aether-terminal/src/main.rs
+        - Use ONE ArbiterQueue (from aether_core)
+        - Pass Arc::clone(&arbiter) to SharedState::new for web server
+        - Remove any separate ArbiterQueue creation for web
+        - Ensure TUI, MCP server, and Web server all share the same Arc<Mutex<ArbiterQueue>>
+
+      Step 5: Fix aether-web SharedState
+      - File: crates/aether-web/src/state.rs
+        - Ensure SharedState accepts the arbiter parameter properly
+        - Use aether_core::ArbiterQueue type
+
+      Verify no compile errors across workspace.
+
+      COMMIT: fix(core): consolidate ArbiterQueue — single implementation shared by TUI, Web, MCP
+    test: "cargo test --workspace"
+    depends_on: [fix-snapshot-self-loop]
+
+  - id: fix-api-hardcoded-zeros
+    title: "Fix hardcoded zeros in web API metrics summary"
+    agent: rust-engineer
+    scope: web
+    type: fix
+    context: |
+      BUG-3: In aether-web/src/api.rs lines ~405-406:
+        memory_total_bytes: 0,
+        load_avg: [0.0; 3],
+
+      These are permanently stubbed. The MetricsSummaryResponse advertises them
+      as real data, but API consumers get incorrect values.
+
+      SharedState has access to the world graph which contains process data.
+      System-level metrics (total memory, load avg) may need to come from
+      sysinfo or be stored in SharedState.
+    prompt: |
+      Fix hardcoded zeros in the metrics summary API endpoint.
+
+      Step 1: Read current code
+      - Read crates/aether-web/src/api.rs — find get_metrics_summary handler
+      - Read crates/aether-web/src/state.rs — check what data SharedState holds
+      - Read crates/aether-core/src/models.rs — check if SystemSnapshot has system-level metrics
+
+      Step 2: Add system metrics to SharedState
+      - File: crates/aether-web/src/state.rs
+        - Add system-level fields to SharedState (or a SystemMetrics struct):
+          memory_total_bytes: AtomicU64 (or Arc<RwLock<SystemMetrics>>)
+          load_avg: [f64; 3]
+        - These get updated from the ingestion pipeline
+
+      Step 3: Wire data in main.rs
+      - File: crates/aether-terminal/src/main.rs
+        - After world graph update, also update web SharedState system metrics
+        - Use sysinfo::System to get memory_total and load_average
+
+      Step 4: Fix the API handler
+      - File: crates/aether-web/src/api.rs
+        - Replace hardcoded 0s with actual values from SharedState
+        - memory_total_bytes: state.system_metrics.memory_total
+        - load_avg: state.system_metrics.load_avg
+
+      Step 5: Add test
+      - test_metrics_summary_nonzero — verify memory_total > 0 after state update
+
+      COMMIT: fix(web): wire real system metrics into API summary endpoint
+    test: "cargo test -p aether-web"
+    depends_on: [fix-arbiter-isolation]
+
+  - id: fix-diagnostic-event-dead
+    title: "Remove or wire DiagnosticEvent into pipeline"
+    agent: rust-engineer
+    scope: core
+    type: fix
+    context: |
+      BUG-4: DiagnosticEvent is defined in aether-core/src/events.rs (lines 36-48)
+      and exported from lib.rs, but no code sends or receives it.
+      The actual diagnostic flow uses mpsc::Sender<Vec<Diagnostic>> directly.
+
+      For a public library, exporting types that cannot be integrated creates confusion.
+
+      Decision: REMOVE DiagnosticEvent for now. The event system will be redesigned
+      in Phase 1 (refactor) with proper EventBus traits. Adding it back then
+      with proper integration is cleaner than leaving dead code.
+    prompt: |
+      Remove the unused DiagnosticEvent type.
+
+      Step 1: Read and verify it's unused
+      - Read crates/aether-core/src/events.rs — find DiagnosticEvent
+      - Search workspace for "DiagnosticEvent" to confirm no usage
+
+      Step 2: Remove
+      - File: crates/aether-core/src/events.rs — remove DiagnosticEvent enum/struct
+      - File: crates/aether-core/src/lib.rs — remove DiagnosticEvent from re-exports
+
+      Step 3: Verify
+      - cargo check --workspace must pass
+      - cargo test -p aether-core must pass
+
+      COMMIT: fix(core): remove unused DiagnosticEvent — will redesign in event bus refactor
+    test: "cargo test -p aether-core"
+    depends_on: []

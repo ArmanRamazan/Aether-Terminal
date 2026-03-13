@@ -1,0 +1,285 @@
+phase: "p0-bugfix-medium"
+description: "Fix medium-severity issues: error handling, deduplication, dead code, docs"
+
+tasks:
+  - id: fix-web-expect-panics
+    title: "Replace .expect() with proper error handling in web handlers"
+    agent: rust-engineer
+    scope: web
+    type: fix
+    context: |
+      UNWRAP-1: 14 sites in aether-web use .expect("lock poisoned") in async HTTP handlers.
+      A poisoned RwLock causes ALL subsequent requests to panic, taking the server down.
+
+      Files affected:
+      - crates/aether-web/src/api.rs (lines 168, 205, 221, 249, 267, 279, 295, 320, 329, 339, 354, 375, 398, 422)
+      - crates/aether-web/src/ws.rs (lines 94, 140, 163, 187)
+
+      Replace with: state.world.read().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+      Or create a helper function to reduce boilerplate.
+    prompt: |
+      Replace all .expect("...lock poisoned") with proper error returns in web handlers.
+
+      Step 1: Create a helper in crates/aether-web/src/error.rs (or state.rs)
+      - Add a helper method or macro that converts poisoned lock to HTTP 500:
+        ```rust
+        impl SharedState {
+            pub(crate) fn read_world(&self) -> Result<RwLockReadGuard<WorldGraph>, StatusCode> {
+                self.world.read().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+            }
+            pub(crate) fn read_arbiter(&self) -> Result<MutexGuard<ArbiterQueue>, StatusCode> {
+                self.arbiter.lock().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+            }
+        }
+        ```
+        (Adjust types based on actual SharedState fields)
+
+      Step 2: Replace in crates/aether-web/src/api.rs
+      - Find ALL .expect() calls on lock/read/write
+      - Replace with the helper methods + ? operator
+      - Ensure handler return types support StatusCode errors (axum IntoResponse)
+
+      Step 3: Replace in crates/aether-web/src/ws.rs
+      - Same pattern for WebSocket handlers
+      - For ws, on lock failure: log error and skip the update tick (don't crash)
+
+      Step 4: Verify zero .expect() remain in api.rs and ws.rs
+      - grep for ".expect(" in both files — should be 0 results
+
+      COMMIT: fix(web): replace .expect() panics with proper error handling in HTTP handlers
+    test: "cargo test -p aether-web"
+    depends_on: []
+
+  - id: fix-diagnostic-dedup
+    title: "Fix diagnostic deduplication in main.rs"
+    agent: rust-engineer
+    scope: orchestrator
+    type: fix
+    context: |
+      LEAK-1: In aether-terminal/src/main.rs lines ~341-355, diagnostics are extended
+      without deduplication every tick. AnalyzeEngine sends the same diagnostics every 5s,
+      main.rs does diags.extend(new_diags) unconditionally.
+
+      After 200 entries, oldest get evicted only to be re-added. Web API and TUI
+      show duplicates during the eviction/re-insertion window.
+
+      Fix: Replace extend with upsert — for each new diagnostic, if one with same
+      (target, category) exists, replace it; otherwise push.
+    prompt: |
+      Fix diagnostic deduplication in main.rs.
+
+      File: crates/aether-terminal/src/main.rs
+      - Find the diagnostic channel receive block (looks for new_diags from analyze engine)
+      - Replace `diags.extend(new_diags)` with an upsert loop:
+        ```rust
+        for new_diag in new_diags {
+            if let Some(existing) = diags.iter_mut().find(|d|
+                d.target_name == new_diag.target_name && d.category == new_diag.category
+            ) {
+                *existing = new_diag;
+            } else {
+                diags.push(new_diag);
+            }
+        }
+        ```
+      - Keep the capacity limit (200) but evict by lowest severity first, not oldest:
+        Sort by severity (info < warning < critical), remove from the low end.
+      - Or simply: if over limit, retain only the highest-severity 200.
+
+      COMMIT: fix(terminal): deduplicate diagnostics on receive — upsert by target+category
+    test: "cargo test --workspace"
+    depends_on: []
+
+  - id: fix-counter-rule-broken
+    title: "Fix RuleCondition::Count hardcoded key"
+    agent: rust-engineer
+    scope: analyze
+    type: fix
+    context: |
+      TEST-2: In aether-analyze/src/rules/engine.rs lines ~209-227,
+      RuleCondition::Count ignores the counter variant field and always looks up
+      a hardcoded "counter" metric key that is never populated.
+
+      CounterType variants (ZombieProcesses, OpenFds, ThreadCount) should map to
+      actual metric keys in MetricStore.
+    prompt: |
+      Fix RuleCondition::Count to use actual metric keys.
+
+      Step 1: Read crates/aether-analyze/src/rules/engine.rs — find the Count match arm
+      Step 2: Read crates/aether-analyze/src/rules/types.rs — find CounterType enum
+
+      Step 3: Map CounterType to metric keys:
+      - File: crates/aether-analyze/src/rules/engine.rs
+        - Replace hardcoded "counter" with a match on the counter field:
+          ```rust
+          RuleCondition::Count { counter, op, value } => {
+              let metric_key = match counter {
+                  CounterType::ZombieProcesses => "zombie_count",
+                  CounterType::OpenFds => "open_fds",
+                  CounterType::ThreadCount => "thread_count",
+                  CounterType::ContextSwitches => "context_switches",
+                  // ... map all variants
+              };
+              let current = match last_value(ctx.store, ctx.host, ctx.pid, metric_key) { ... }
+          }
+          ```
+
+      Step 4: Ensure these metric keys are actually populated
+      - Check if ingestion pipeline or collectors push these metrics
+      - If not yet populated, add a TODO comment but at least the mapping is correct
+
+      Step 5: Add test
+      - test_count_condition_maps_counter_type — verify different CounterTypes produce different keys
+
+      COMMIT: fix(analyze): map CounterType variants to actual metric keys in RuleCondition::Count
+    test: "cargo test -p aether-analyze"
+    depends_on: []
+
+  - id: fix-debug-format-api
+    title: "Replace Debug format with stable serialization in web API"
+    agent: rust-engineer
+    scope: web
+    type: fix
+    context: |
+      STYLE-1: In aether-web, format!("{:?}", p.state) is used for API JSON responses.
+      Debug format is not a stable serialization contract — enum renames break clients.
+
+      Files: aether-web/src/api.rs (lines ~300, 447, 480, 494), ws.rs (lines ~104, 116)
+
+      ProcessState and other enums already derive Serialize. Use proper serialization.
+    prompt: |
+      Replace Debug format with stable string serialization in web API responses.
+
+      Step 1: Find all format!("{:?}", ...) in web crate
+      - Read crates/aether-web/src/api.rs — search for "{:?}"
+      - Read crates/aether-web/src/ws.rs — search for "{:?}"
+
+      Step 2: For each occurrence:
+      - If the type derives Serialize, use serde to get a stable string:
+        Instead of: format!("{:?}", p.state)
+        Use: serde_json::to_value(&p.state).map(|v| v.as_str().unwrap_or("unknown").to_string()).unwrap_or_default()
+      - OR implement Display for the enum in aether-core and use format!("{}", p.state)
+      - Prefer Display — it's simpler and more idiomatic
+
+      Step 3: Add Display impls in aether-core if needed
+      - File: crates/aether-core/src/models.rs
+        - impl Display for ProcessState: "running", "sleeping", "zombie", "stopped" (lowercase)
+        - impl Display for Protocol: "tcp", "udp", etc.
+        - impl Display for ConnectionState: "established", "listen", etc.
+
+      Step 4: Update api.rs and ws.rs to use .to_string() or format!("{}", ...)
+
+      COMMIT: fix(web): use stable Display serialization instead of Debug format in API
+    test: "cargo test -p aether-web"
+    depends_on: []
+
+  - id: fix-log-level-silent
+    title: "Report invalid --log-level instead of silently falling back"
+    agent: rust-engineer
+    scope: orchestrator
+    type: fix
+    context: |
+      UNWRAP-2: In aether-terminal/src/main.rs line ~109, invalid --log-level
+      is silently swallowed with unwrap_or_else. User gets no feedback.
+    prompt: |
+      Make invalid --log-level report a warning instead of silent fallback.
+
+      File: crates/aether-terminal/src/main.rs
+      - Find the EnvFilter::try_new block
+      - On error: print a warning to stderr before falling back:
+        ```rust
+        let env_filter = tracing_subscriber::EnvFilter::try_new(&cli.log_level)
+            .unwrap_or_else(|e| {
+                eprintln!("Warning: invalid log level '{}': {}. Using 'info'.", cli.log_level, e);
+                tracing_subscriber::EnvFilter::new("info")
+            });
+        ```
+
+      COMMIT: fix(terminal): warn on invalid --log-level instead of silent fallback
+    test: "cargo check -p aether-terminal"
+    depends_on: []
+
+  - id: fix-duplicate-method
+    title: "Remove duplicate edges_as_pid_pairs method"
+    agent: rust-engineer
+    scope: core
+    type: fix
+    context: |
+      API-1: edges_as_pid_pairs in aether-core/graph.rs is identical to edge_pairs.
+      Doubles the public API surface for no reason.
+    prompt: |
+      Remove the duplicate method edges_as_pid_pairs from WorldGraph.
+
+      Step 1: Search workspace for "edges_as_pid_pairs" to find all callers
+      Step 2: Replace all callers with edge_pairs
+      Step 3: Remove edges_as_pid_pairs from crates/aether-core/src/graph.rs
+      Step 4: Verify cargo check --workspace passes
+
+      COMMIT: fix(core): remove duplicate edges_as_pid_pairs — use edge_pairs
+    test: "cargo test -p aether-core"
+    depends_on: []
+
+  - id: fix-docs-analyze
+    title: "Add doc-comments to AnalyzeEngine and RuleEngine public API"
+    agent: rust-engineer
+    scope: analyze
+    type: docs
+    context: |
+      DOC-1 + DOC-2: AnalyzeEngine and RuleEngine have pub methods without /// doc-comments.
+      CLAUDE.md mandates: "/// doc-comment на каждом pub item".
+    prompt: |
+      Add /// doc-comments to all pub items in aether-analyze.
+
+      File: crates/aether-analyze/src/engine.rs
+      - Add /// to: AnalyzeEngine struct, new(), with_prometheus_rx(), profiles(), active_diagnostics(), stats(), run()
+      - One line is enough for each, describing what it does
+
+      File: crates/aether-analyze/src/rules/engine.rs
+      - Add /// to: RuleEngine struct, new(), add_rule(), disable_rule(), evaluate(), rule_count()
+
+      File: crates/aether-analyze/src/store.rs
+      - Add /// to: MetricStore struct, pub methods
+
+      File: crates/aether-analyze/src/recommendations/generator.rs
+      - Add /// to: RecommendationGenerator struct, pub methods
+
+      Keep doc-comments brief — one line per item. No "This function..." prefix.
+      Example: /// Add a diagnostic rule to the engine. Returns the rule ID.
+
+      COMMIT: docs(analyze): add doc-comments to all public items
+    test: "cargo test -p aether-analyze"
+    depends_on: []
+
+  - id: fix-snapshot-test-edges
+    title: "Add test for apply_snapshot edge reconstruction"
+    agent: rust-engineer
+    scope: core
+    type: test
+    context: |
+      TEST-1: The existing test_apply_snapshot only verifies node reconciliation
+      and asserts edge_count() == 0 because snapshot has no edges.
+      The edge path was never tested — which is how BUG-1 survived.
+
+      After fix-snapshot-self-loop adds dest_pid, this test validates the fix.
+    prompt: |
+      Add a test that verifies apply_snapshot correctly reconstructs edges.
+
+      File: crates/aether-core/src/graph.rs (in #[cfg(test)] mod tests)
+
+      Add test: test_apply_snapshot_reconstructs_edges
+      - Create two ProcessNodes (pid 1 and pid 2)
+      - Create a NetworkEdge with source_pid=1, dest_pid=Some(2)
+      - Build SystemSnapshot with both processes and the edge
+      - Create empty WorldGraph, call apply_snapshot
+      - Assert: process_count() == 2
+      - Assert: edge_count() == 1
+      - Get the edge and verify it connects pid 1 → pid 2 (not a self-loop)
+
+      Add test: test_apply_snapshot_clears_old_edges
+      - Build graph with edge between pid 1 → 2
+      - Apply snapshot with same processes but NO edges
+      - Assert: edge_count() == 0
+
+      COMMIT: test(core): add edge reconstruction tests for apply_snapshot
+    test: "cargo test -p aether-core"
+    depends_on: [fix-snapshot-self-loop]

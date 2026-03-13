@@ -1,0 +1,105 @@
+phase: "p2-output"
+description: "Phase 2: aether-output crate — Slack, Discord, Telegram webhooks + generic output"
+
+tasks:
+  - id: output-crate-init
+    title: "Initialize aether-output with webhook framework"
+    agent: rust-engineer
+    scope: output
+    type: feat
+    context: |
+      New crate: aether-output. Implements OutputSink trait from core.
+      Sends diagnostic alerts to external services.
+      Includes rate limiting and deduplication.
+    prompt: |
+      Create the aether-output crate.
+
+      Step 1: Scaffold
+      - Create crates/aether-output/
+      - Workspace Cargo.toml: add member
+      - Cargo.toml deps: aether-core (path), reqwest (json, rustls-tls), tokio (time), serde (derive), serde_json, thiserror, tracing, async-trait
+
+      Step 2: Output pipeline
+      File: crates/aether-output/src/pipeline.rs
+      - pub struct OutputPipeline { sinks: Vec<Box<dyn OutputSink>>, dedup_window: Duration }
+      - pub async fn dispatch(&self, diagnostic: &Diagnostic)
+        - Check severity against each sink's min_severity
+        - Check dedup: skip if same (target, category) sent within window
+        - Send to all matching sinks concurrently (tokio::join!)
+      - Dedup state: HashMap<(String, String), Instant> — last sent time per (target, category)
+      - Rate limit: max N alerts per minute per sink (configurable, default 10)
+
+      Step 3: Slack webhook
+      File: crates/aether-output/src/slack.rs
+      - pub struct SlackSink { webhook_url: String, client: reqwest::Client }
+      - impl OutputSink for SlackSink
+      - Format diagnostic as Slack Block Kit:
+        - Color attachment based on severity (red/yellow/blue)
+        - Bold summary, target name, evidence list
+        - Recommendation as a quote block
+
+      Step 4: Discord webhook
+      File: crates/aether-output/src/discord.rs
+      - pub struct DiscordSink { webhook_url: String, client: reqwest::Client }
+      - impl OutputSink for DiscordSink
+      - Format as Discord embed: color, title, fields, description
+
+      Step 5: Telegram
+      File: crates/aether-output/src/telegram.rs
+      - pub struct TelegramSink { bot_token: String, chat_id: String, client: reqwest::Client }
+      - impl OutputSink for TelegramSink
+      - Format as Telegram Markdown message via Bot API sendMessage
+
+      Step 6: Error + lib
+      File: crates/aether-output/src/error.rs — OutputError
+      File: crates/aether-output/src/lib.rs
+
+      Tests:
+      - test_pipeline_filters_by_severity — info diagnostic not sent to warning-only sink
+      - test_dedup_within_window — same diagnostic not sent twice within window
+      - test_dedup_after_window — same diagnostic sent after window expires
+      - test_slack_format — verify JSON payload structure
+      - test_discord_format — verify embed structure
+      - test_telegram_format — verify message format
+
+      COMMIT: feat(output): initialize aether-output with Slack, Discord, Telegram webhooks
+    test: "cargo test -p aether-output"
+    depends_on: []
+
+  - id: output-generic
+    title: "Add stdout JSON and file output sinks"
+    agent: rust-engineer
+    scope: output
+    type: feat
+    context: |
+      Generic output for Unix-way piping and log aggregation.
+      stdout JSON lines: pipe to jq, Datadog agent, Fluentd, etc.
+      File: append JSON lines with optional rotation.
+    prompt: |
+      Add generic output sinks to aether-output.
+
+      File: crates/aether-output/src/stdout.rs
+      - pub struct StdoutSink { format: OutputFormat }
+      - OutputFormat: Json, Text
+      - impl OutputSink for StdoutSink
+      - Json: one JSON line per diagnostic (serde_json::to_string)
+      - Text: human-readable "[CRITICAL] api-server: throughput dropped 45%"
+
+      File: crates/aether-output/src/file.rs
+      - pub struct FileSink { path: PathBuf, max_size_bytes: u64, format: OutputFormat }
+      - impl OutputSink for FileSink
+      - Append JSON line to file
+      - If file > max_size: rotate (rename to .1, start new)
+      - Use tokio::fs for async file I/O
+
+      Update pipeline to support these sinks.
+
+      Tests:
+      - test_stdout_json_format — verify valid JSON output
+      - test_stdout_text_format — verify human-readable format
+      - test_file_append — write to temp file, verify content
+      - test_file_rotation — write past max size, verify rotation
+
+      COMMIT: feat(output): add stdout JSON and file output sinks
+    test: "cargo test -p aether-output"
+    depends_on: [output-crate-init]

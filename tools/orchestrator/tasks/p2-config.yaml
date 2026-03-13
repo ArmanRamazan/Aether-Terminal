@@ -1,0 +1,172 @@
+phase: "p2-config"
+description: "Phase 2: aether-config crate — TOML/YAML config with validation and env interpolation"
+
+tasks:
+  - id: config-crate-init
+    title: "Initialize aether-config crate with types and parser"
+    agent: rust-engineer
+    scope: config
+    type: feat
+    context: |
+      New crate: aether-config. Parses aether.toml or aether.yaml.
+      Auto-detects format by file extension.
+      Supports ${ENV_VAR} interpolation.
+
+      Depends only on aether-core (hexagonal architecture).
+      See docs/plans/2026-03-13-v1-production-diagnostics-design.md section 8 for full config format.
+    prompt: |
+      Create the aether-config crate.
+
+      Step 1: Add to workspace
+      - Create crates/aether-config/
+      - Add to root Cargo.toml workspace members
+      - Cargo.toml deps: aether-core (path), serde (derive), toml, serde_yaml, thiserror, regex
+
+      Step 2: Define config types
+      File: crates/aether-config/src/types.rs
+      ```rust
+      #[derive(Debug, Clone, Serialize, Deserialize)]
+      pub struct AetherConfig {
+          #[serde(default)]
+          pub discovery: DiscoveryConfig,
+          #[serde(default)]
+          pub targets: Vec<TargetConfig>,
+          #[serde(default)]
+          pub thresholds: ThresholdConfig,
+          #[serde(default)]
+          pub output: OutputConfig,
+          #[serde(default)]
+          pub api: ApiConfig,
+          #[serde(default)]
+          pub scrape: ScrapeConfig,
+          #[serde(default)]
+          pub probe: ProbeConfig,
+      }
+
+      #[derive(Debug, Clone, Serialize, Deserialize)]
+      pub struct DiscoveryConfig {
+          pub enabled: bool,              // default: true
+          pub scan_ports: Vec<u16>,       // default: [5432, 6379, 8080, 9090]
+          pub kubernetes: bool,           // default: false
+          pub kubernetes_namespace: Option<String>,
+          pub kubernetes_label_selector: Option<String>,
+          pub interval_seconds: u64,      // default: 60
+      }
+
+      #[derive(Debug, Clone, Serialize, Deserialize)]
+      pub struct TargetConfig {
+          pub name: String,
+          pub kind: Option<String>,       // "service", "container", "pod"
+          pub prometheus: Option<String>,  // URL to /metrics
+          pub health: Option<String>,      // URL to health endpoint
+          pub probe_tcp: Option<String>,   // host:port
+          pub logs: Option<String>,        // file path glob
+          pub labels: HashMap<String, String>,
+      }
+
+      #[derive(Debug, Clone, Serialize, Deserialize)]
+      pub struct ThresholdConfig {
+          pub throughput_drop_percent: f64,     // default: 30
+          pub latency_p99_ms: f64,             // default: 500
+          pub connection_pool_percent: f64,    // default: 80
+          pub error_rate_percent: f64,         // default: 5
+          pub tls_expiry_days: u32,            // default: 30
+          pub health_check_timeout_ms: u64,    // default: 5000
+      }
+
+      #[derive(Debug, Clone, Serialize, Deserialize)]
+      pub struct OutputConfig {
+          pub slack: Option<WebhookConfig>,
+          pub discord: Option<WebhookConfig>,
+          pub telegram: Option<TelegramConfig>,
+          pub stdout: Option<StdoutConfig>,
+          pub file: Option<FileConfig>,
+      }
+
+      // ... remaining nested configs (WebhookConfig, TelegramConfig, etc.)
+      // See design doc for full structure
+
+      #[derive(Debug, Clone, Serialize, Deserialize)]
+      pub struct ApiConfig {
+          pub grpc: Option<GrpcConfig>,
+          pub events: Option<EventsConfig>,
+      }
+
+      #[derive(Debug, Clone, Serialize, Deserialize)]
+      pub struct ScrapeConfig {
+          pub interval_seconds: u64,   // default: 15
+          pub timeout_seconds: u64,    // default: 5
+      }
+
+      #[derive(Debug, Clone, Serialize, Deserialize)]
+      pub struct ProbeConfig {
+          pub interval_seconds: u64,   // default: 30
+          pub timeout_seconds: u64,    // default: 5
+      }
+      ```
+      Implement Default for all config types with sensible defaults.
+
+      Step 3: Config loader
+      File: crates/aether-config/src/loader.rs
+      - pub fn load(path: &Path) -> Result<AetherConfig, ConfigError>
+      - Auto-detect format by extension (.toml → toml::from_str, .yaml/.yml → serde_yaml)
+      - Before parsing: interpolate ${ENV_VAR} patterns using regex + std::env::var
+      - Validate after loading: targets have at least a name, ports are valid, URLs parse
+
+      Step 4: Error type
+      File: crates/aether-config/src/error.rs
+      - ConfigError: ParseError, ValidationError, IoError, UnsupportedFormat
+
+      Step 5: lib.rs
+      File: crates/aether-config/src/lib.rs
+      - pub mod types, loader, error
+      - Re-export AetherConfig, load
+
+      Tests:
+      - test_load_toml — parse a sample TOML string
+      - test_load_yaml — parse a sample YAML string
+      - test_defaults — AetherConfig::default() has sensible values
+      - test_env_interpolation — ${TEST_VAR} gets replaced
+      - test_invalid_format — .json returns UnsupportedFormat error
+
+      COMMIT: feat(config): initialize aether-config with TOML/YAML parsing and validation
+    test: "cargo test -p aether-config"
+    depends_on: []
+
+  - id: config-cli-integration
+    title: "Add --config flag to CLI and wire config into main.rs"
+    agent: rust-engineer
+    scope: orchestrator
+    type: feat
+    context: |
+      Add --config <path> CLI flag. Config values merge with CLI args.
+      Priority: CLI flags > env vars > config file > defaults.
+    prompt: |
+      Wire aether-config into the CLI.
+
+      File: crates/aether-terminal/Cargo.toml
+      - Add dependency: aether-config = { path = "../aether-config" }
+
+      File: crates/aether-terminal/src/main.rs
+      - Add to clap CLI struct:
+        ```rust
+        #[arg(long, value_name = "PATH")]
+        config: Option<PathBuf>,
+        ```
+      - In main(), after CLI parsing:
+        - If --config provided: load config file
+        - Merge: CLI flags override config file values
+        - Store config in a shared location accessible by all components
+      - Pass relevant config sections to components that need them:
+        - thresholds → analyze engine
+        - output → future output sinks
+        - discovery → future discovery engine
+        - For now, just load and store — wiring happens when crates are ready
+
+      Tests:
+      - Verify cargo check passes
+      - Verify --help shows --config option
+
+      COMMIT: feat(terminal): add --config flag for TOML/YAML configuration
+    test: "cargo check -p aether-terminal"
+    depends_on: [config-crate-init]

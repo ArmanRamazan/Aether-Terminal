@@ -1,0 +1,127 @@
+phase: "p2-integration"
+description: "Phase 2: wire all new crates into main.rs and end-to-end pipeline"
+
+tasks:
+  - id: wire-discovery-main
+    title: "Wire aether-discovery into main.rs orchestration"
+    agent: rust-engineer
+    scope: orchestrator
+    type: feat
+    context: |
+      Connect discovery engine to main.rs. On startup:
+      1. Load config (targets + discovery settings)
+      2. Run auto-discovery
+      3. Merge discovered targets with config targets
+      4. Pass targets to scraper and prober
+    prompt: |
+      Wire aether-discovery into the main orchestration loop.
+
+      File: crates/aether-terminal/Cargo.toml
+      - Add: aether-discovery = { path = "../aether-discovery" }
+
+      File: crates/aether-terminal/src/main.rs
+      - After config loading:
+        1. Create DiscoveryEngine from config.discovery settings
+        2. Run initial discovery: let discovered = discovery.discover().await?
+        3. Merge with config.targets
+        4. Store targets in Arc<RwLock<Vec<Target>>>
+        5. Spawn periodic re-discovery task (interval from config)
+      - On new targets discovered: log and add to shared target list
+      - Pass targets to scraper and prober when they start
+
+      COMMIT: feat(terminal): wire auto-discovery into main orchestration loop
+    test: "cargo check -p aether-terminal"
+    depends_on: []
+
+  - id: wire-scraper-prober-main
+    title: "Wire scraper and prober into main.rs data pipeline"
+    agent: rust-engineer
+    scope: orchestrator
+    type: feat
+    context: |
+      Connect Prometheus scraper and network prober to the main data pipeline.
+      Scraped metrics and probe results flow into MetricStore.
+      AnalyzeEngine reads from MetricStore to generate diagnostics.
+    prompt: |
+      Wire aether-metrics scraper and aether-prober into main.rs.
+
+      File: crates/aether-terminal/Cargo.toml
+      - Add: aether-prober = { path = "../aether-prober" }
+      - aether-metrics should already be a dependency
+
+      File: crates/aether-terminal/src/main.rs
+      - Create PrometheusScraper from config.scrape settings
+      - Create ProberEngine from config.probe settings
+      - Both implement DataSource trait
+      - Spawn tokio tasks:
+        1. Scraper task: loop { scraper.collect() → push samples to MetricStore }
+        2. Prober task: loop { prober.collect() → push samples to MetricStore }
+      - AnalyzeEngine already reads from MetricStore — no changes needed there
+      - Use shared targets list from discovery step
+
+      Pipeline:
+        Discovery → Targets → Scraper + Prober → MetricStore → AnalyzeEngine → Diagnostics
+
+      COMMIT: feat(terminal): wire Prometheus scraper and network prober into data pipeline
+    test: "cargo check -p aether-terminal"
+    depends_on: [wire-discovery-main]
+
+  - id: wire-output-main
+    title: "Wire aether-output pipeline into diagnostic flow"
+    agent: rust-engineer
+    scope: orchestrator
+    type: feat
+    context: |
+      Connect output pipeline to diagnostic events.
+      When AnalyzeEngine produces a diagnostic, dispatch through OutputPipeline.
+    prompt: |
+      Wire aether-output into the diagnostic dispatch flow.
+
+      File: crates/aether-terminal/Cargo.toml
+      - Add: aether-output = { path = "../aether-output" }
+
+      File: crates/aether-terminal/src/main.rs
+      - Create OutputPipeline from config.output settings:
+        - If config.output.slack → add SlackSink
+        - If config.output.discord → add DiscordSink
+        - If config.output.telegram → add TelegramSink
+        - If config.output.stdout → add StdoutSink
+        - If config.output.file → add FileSink
+      - In the diagnostic receive block (where we get new_diags from analyze engine):
+        - For each new diagnostic: pipeline.dispatch(&diagnostic).await
+        - Run dispatch in spawned task to not block main loop
+      - Also dispatch through EventBus (for gRPC subscribers)
+
+      COMMIT: feat(terminal): wire output pipeline for diagnostic alerts
+    test: "cargo check -p aether-terminal"
+    depends_on: [wire-scraper-prober-main]
+
+  - id: wire-grpc-main
+    title: "Wire aether-api gRPC server into main.rs"
+    agent: rust-engineer
+    scope: orchestrator
+    type: feat
+    context: |
+      Start gRPC server alongside TUI/Web if configured.
+      Share diagnostics, targets, event bus, and arbiter with gRPC handlers.
+    prompt: |
+      Wire aether-api gRPC server into main.rs.
+
+      File: crates/aether-terminal/Cargo.toml
+      - Add: aether-api = { path = "../aether-api" }
+
+      File: crates/aether-terminal/src/main.rs
+      - If config.api.grpc.enabled:
+        1. Create AetherGrpcServer with shared state:
+           - diagnostics: Arc<Mutex<Vec<Diagnostic>>>
+           - targets: Arc<RwLock<Vec<Target>>>
+           - event_bus: Arc<InProcessEventBus>
+           - arbiter: Arc<Mutex<ArbiterQueue>>
+        2. Spawn gRPC server task on configured bind address
+        3. Log: "gRPC API listening on {addr}"
+      - Create EventBus early in main (before other components)
+      - Publish IntegrationEvents when diagnostics change
+
+      COMMIT: feat(terminal): wire gRPC API server with shared diagnostics and event bus
+    test: "cargo check -p aether-terminal"
+    depends_on: [wire-output-main]

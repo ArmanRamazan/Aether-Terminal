@@ -1,0 +1,76 @@
+phase: "p2-prober"
+description: "Phase 2: aether-prober crate — HTTP health, TCP latency, DNS, TLS checks"
+
+tasks:
+  - id: prober-crate-init
+    title: "Initialize aether-prober with HTTP and TCP checks"
+    agent: rust-engineer
+    scope: prober
+    type: feat
+    context: |
+      New crate: aether-prober. Implements DataSource trait from core.
+      Active checks against discovered targets.
+      Returns ProbeResult types defined in aether-core.
+    prompt: |
+      Create the aether-prober crate.
+
+      Step 1: Scaffold
+      - Create crates/aether-prober/
+      - Workspace Cargo.toml: add member
+      - Cargo.toml deps: aether-core (path), tokio (net, time), reqwest (rustls-tls), thiserror, tracing, async-trait
+
+      Step 2: HTTP prober
+      File: crates/aether-prober/src/http.rs
+      - pub struct HttpProber { client: reqwest::Client, timeout: Duration }
+      - pub async fn check(&self, url: &str) -> ProbeResult
+        - GET request, measure latency
+        - Status: Ok if 2xx, Degraded if 3xx/4xx, Failed if 5xx/error
+        - Details: status code, response time
+
+      Step 3: TCP prober
+      File: crates/aether-prober/src/tcp.rs
+      - pub struct TcpProber { timeout: Duration }
+      - pub async fn check(&self, addr: &str) -> ProbeResult
+        - TcpStream::connect with timeout, measure RTT
+        - Status: Ok if connected, Failed if refused, Timeout if timed out
+        - Latency: connection time in ms
+
+      Step 4: DNS prober
+      File: crates/aether-prober/src/dns.rs
+      - pub struct DnsProber { timeout: Duration }
+      - pub async fn check(&self, hostname: &str) -> ProbeResult
+        - tokio::net::lookup_host, measure resolution time
+        - Status: Ok if resolved, Failed if not
+        - Details: resolved IPs, resolution time
+
+      Step 5: TLS prober
+      File: crates/aether-prober/src/tls.rs
+      - pub struct TlsProber { timeout: Duration }
+      - pub async fn check(&self, addr: &str) -> ProbeResult
+        - TLS handshake, extract certificate info
+        - Check: expiry date, days remaining
+        - Status: Ok if >30 days, Degraded if <30, Failed if expired
+        - Details: issuer, expiry date, days remaining
+
+      Step 6: ProberEngine
+      File: crates/aether-prober/src/engine.rs
+      - pub struct ProberEngine { http, tcp, dns, tls, interval, targets }
+      - Implement DataSource trait from aether-core
+      - collect() → for each target, run appropriate probes → Vec<MetricSample>
+        - Convert ProbeResults to MetricSamples for MetricStore
+        - e.g. metric "probe_latency_ms" with labels {target, check_type}
+      - pub async fn run(&self, targets: Vec<Target>) → runs probes on interval
+
+      Step 7: Error + lib
+      File: crates/aether-prober/src/error.rs
+      File: crates/aether-prober/src/lib.rs
+
+      Tests:
+      - test_http_probe_localhost — probe http://localhost (may 404, but should not panic)
+      - test_tcp_probe_connect — probe localhost:22 or similar
+      - test_dns_resolve — resolve "localhost"
+      - test_probe_result_to_metric_sample
+
+      COMMIT: feat(prober): initialize aether-prober with HTTP, TCP, DNS, TLS checks
+    test: "cargo test -p aether-prober"
+    depends_on: []

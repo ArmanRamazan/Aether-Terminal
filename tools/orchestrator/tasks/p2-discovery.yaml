@@ -1,0 +1,114 @@
+phase: "p2-discovery"
+description: "Phase 2: aether-discovery crate — auto-discovery of services via ports and K8s API"
+
+tasks:
+  - id: discovery-crate-init
+    title: "Initialize aether-discovery with port scanner and known patterns"
+    agent: rust-engineer
+    scope: discovery
+    type: feat
+    context: |
+      New crate: aether-discovery. Implements ServiceDiscovery trait from core.
+      Scans ports, probes /metrics endpoints, matches known service patterns.
+
+      Known patterns:
+      - PostgreSQL: 5432
+      - Redis: 6379
+      - MySQL: 3306
+      - MongoDB: 27017
+      - Elasticsearch: 9200
+      - nginx: 80/443
+      - Generic HTTP: 8080, 9090 (check /metrics, /health)
+
+      Depends only on aether-core.
+    prompt: |
+      Create the aether-discovery crate.
+
+      Step 1: Scaffold
+      - Create crates/aether-discovery/
+      - Add to workspace Cargo.toml
+      - Cargo.toml deps: aether-core (path), tokio (net, time), thiserror, tracing, async-trait
+
+      Step 2: Port scanner
+      File: crates/aether-discovery/src/scanner.rs
+      - pub struct PortScanner { ports: Vec<u16>, timeout: Duration }
+      - impl PortScanner:
+        - pub fn new(ports: Vec<u16>) -> Self
+        - pub async fn scan(&self, host: &str) -> Vec<OpenPort>
+        - For each port: tokio::net::TcpStream::connect with timeout
+        - OpenPort { port, service_hint: Option<String> }
+        - Match known ports to service names
+
+      Step 3: Metrics probe
+      File: crates/aether-discovery/src/probe.rs
+      - pub struct MetricsProbe { timeout: Duration }
+      - impl MetricsProbe:
+        - pub async fn check(&self, url: &str) -> Option<MetricsEndpoint>
+        - HTTP GET to /metrics, check for OpenMetrics/Prometheus text format
+        - MetricsEndpoint { url, metric_count: usize }
+
+      Step 4: Discovery engine
+      File: crates/aether-discovery/src/engine.rs
+      - pub struct DiscoveryEngine { scanner, probe, known_patterns, interval }
+      - Implement ServiceDiscovery trait from aether-core
+      - discover() → scan ports → for each open port, try /metrics probe → build Target list
+      - Known patterns: map port → (service_name, TargetKind, expected metrics path)
+
+      Step 5: Error + lib
+      File: crates/aether-discovery/src/error.rs — DiscoveryError enum
+      File: crates/aether-discovery/src/lib.rs — pub mod, re-exports
+
+      Tests:
+      - test_known_port_mapping — 5432 → "postgresql"
+      - test_scan_localhost — scan a port range on localhost (should find something)
+      - test_discovery_engine_construction
+
+      COMMIT: feat(discovery): initialize aether-discovery with port scanner and service patterns
+    test: "cargo test -p aether-discovery"
+    depends_on: []
+
+  - id: discovery-kubernetes
+    title: "Add Kubernetes API discovery (feature-gated)"
+    agent: rust-engineer
+    scope: discovery
+    type: feat
+    context: |
+      K8s discovery via kube crate. Feature-gated: #[cfg(feature = "kubernetes")].
+      Queries pods, services, endpoints by namespace and label selector.
+      Implements ServiceDiscovery trait.
+    prompt: |
+      Add Kubernetes discovery to aether-discovery behind a feature flag.
+
+      Step 1: Add feature to Cargo.toml
+      - File: crates/aether-discovery/Cargo.toml
+        ```toml
+        [features]
+        default = []
+        kubernetes = ["kube", "k8s-openapi"]
+
+        [dependencies]
+        kube = { version = "0.93", features = ["client", "runtime"], optional = true }
+        k8s-openapi = { version = "0.22", features = ["latest"], optional = true }
+        ```
+
+      Step 2: K8s discovery
+      File: crates/aether-discovery/src/kubernetes.rs
+      - #[cfg(feature = "kubernetes")]
+      - pub struct KubernetesDiscovery { client, namespace, label_selector }
+      - impl KubernetesDiscovery:
+        - pub async fn new(namespace: Option<String>, label_selector: Option<String>) -> Result<Self>
+        - Uses kube::Client::try_default() for in-cluster or kubeconfig auth
+      - impl ServiceDiscovery for KubernetesDiscovery:
+        - discover() → list pods → extract container ports → build Target list
+        - Include pod name, namespace, labels
+        - TargetKind::Pod for individual pods, TargetKind::Service for K8s services
+
+      Step 3: Update lib.rs
+      - #[cfg(feature = "kubernetes")] pub mod kubernetes;
+
+      Tests:
+      - test_k8s_target_construction — unit test with mock data (no real cluster needed)
+
+      COMMIT: feat(discovery): add Kubernetes API discovery (feature-gated)
+    test: "cargo test -p aether-discovery"
+    depends_on: [discovery-crate-init]

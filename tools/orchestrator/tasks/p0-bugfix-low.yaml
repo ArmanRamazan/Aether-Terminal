@@ -1,0 +1,69 @@
+phase: "p0-bugfix-low"
+description: "Fix low-severity issues: visibility, capacity, cleanup"
+
+tasks:
+  - id: fix-web-pub-visibility
+    title: "Change internal web modules from pub to pub(crate)"
+    agent: rust-engineer
+    scope: web
+    type: fix
+    context: |
+      PRIV-1: aether-web/src/lib.rs exports all modules as pub mod.
+      Only server, state, and error are used from outside. api, ws, embedded are internal.
+    prompt: |
+      Restrict visibility of internal modules in aether-web.
+
+      File: crates/aether-web/src/lib.rs
+      - Change `pub mod api` to `pub(crate) mod api`
+      - Change `pub mod ws` to `pub(crate) mod ws`
+      - Change `pub mod embedded` to `pub(crate) mod embedded`
+      - Keep `pub mod server`, `pub mod state`, `pub mod error`
+
+      Verify: cargo check --workspace — if anything outside aether-web uses these
+      modules directly, it will fail. Fix any such imports.
+
+      COMMIT: fix(web): restrict internal modules to pub(crate)
+    test: "cargo check --workspace"
+    depends_on: []
+
+  - id: fix-metric-key-visibility
+    title: "Change MetricKey to pub(crate) in aether-analyze"
+    agent: rust-engineer
+    scope: analyze
+    type: fix
+    context: |
+      PRIV-2: MetricKey in aether-analyze/src/store.rs is pub but used only internally.
+    prompt: |
+      File: crates/aether-analyze/src/store.rs
+      - Change `pub struct MetricKey` to `pub(crate) struct MetricKey`
+      - Change its pub fields to pub(crate) if they exist
+      - Remove MetricKey from lib.rs re-exports if present
+
+      Verify: cargo check --workspace
+
+      COMMIT: fix(analyze): restrict MetricKey visibility to pub(crate)
+    test: "cargo check --workspace"
+    depends_on: []
+
+  - id: fix-timeseries-capacity
+    title: "Fix VecDeque pre-allocation cap in TimeSeries"
+    agent: rust-engineer
+    scope: core
+    type: fix
+    context: |
+      TIMESERIES-1: In aether-core/src/metrics.rs line ~62:
+        samples: VecDeque::with_capacity(capacity.min(256))
+
+      For DEFAULT_CAPACITY=3600, this caps pre-allocation at 256,
+      causing many reallocations. The .min(256) defeats the purpose.
+    prompt: |
+      Fix VecDeque pre-allocation in TimeSeries::new.
+
+      File: crates/aether-core/src/metrics.rs
+      - Find: VecDeque::with_capacity(capacity.min(256))
+      - Replace with: VecDeque::with_capacity(capacity)
+      - with_capacity only reserves memory, doesn't impose a limit
+
+      COMMIT: fix(core): remove artificial capacity cap in TimeSeries pre-allocation
+    test: "cargo test -p aether-core"
+    depends_on: []
