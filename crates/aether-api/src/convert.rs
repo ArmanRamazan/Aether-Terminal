@@ -40,10 +40,10 @@ impl From<&Diagnostic> for proto::Diagnostic {
 impl From<&Target> for proto::Target {
     fn from(t: &Target) -> Self {
         proto::Target {
-            id: t.name.clone(),
+            id: t.id.clone(),
             name: t.name.clone(),
             kind: t.kind.to_string(),
-            endpoints: t.endpoints.clone(),
+            endpoints: t.endpoints.iter().map(|e| e.url.clone()).collect(),
         }
     }
 }
@@ -106,10 +106,11 @@ mod tests {
     use super::*;
     use aether_core::events::IntegrationEvent;
     use aether_core::{
-        DiagCategory, DiagTarget, Diagnostic, Evidence, HostId, Recommendation, RecommendedAction,
-        Severity, Target, TargetKind, Urgency,
+        DiagCategory, DiagTarget, Diagnostic, Endpoint, EndpointType, Evidence, HostId,
+        Recommendation, RecommendedAction, Severity, Target, TargetKind, Urgency,
     };
     use std::collections::HashMap;
+    use std::time::SystemTime;
 
     #[test]
     fn test_event_conversion_diagnostic_created() {
@@ -195,13 +196,18 @@ mod tests {
     #[test]
     fn test_target_conversion() {
         let target = Target {
+            id: "svc-1".to_string(),
             name: "my-svc".to_string(),
             kind: TargetKind::Service,
-            endpoints: vec!["http://localhost:8080".to_string()],
+            endpoints: vec![Endpoint {
+                url: "http://localhost:8080".to_string(),
+                endpoint_type: EndpointType::Health,
+            }],
             labels: HashMap::new(),
+            discovered_at: SystemTime::now(),
         };
         let proto_target: proto::Target = (&target).into();
-        assert_eq!(proto_target.id, "my-svc");
+        assert_eq!(proto_target.id, "svc-1");
         assert_eq!(proto_target.name, "my-svc");
         assert_eq!(proto_target.endpoints, vec!["http://localhost:8080"]);
     }
