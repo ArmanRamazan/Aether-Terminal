@@ -10,7 +10,8 @@ use tokio_util::sync::CancellationToken;
 use aether_analyze::engine::{AnalyzeConfig, AnalyzeEngine};
 use aether_config::AetherConfig;
 use aether_config::types::TargetConfig;
-use aether_core::events::SystemEvent;
+use aether_core::event_bus::EventBus;
+use aether_core::events::{IntegrationEvent, SystemEvent};
 use aether_core::models::{
     DiagCategory, DiagTarget, Diagnostic, Endpoint, EndpointType, Evidence, Recommendation,
     RecommendedAction, Severity, Target, TargetKind, Urgency,
@@ -35,6 +36,9 @@ use aether_metrics::scraper::PrometheusScraper;
 use aether_output::{
     DiscordSink, FileSink, OutputFormat, OutputPipeline, SlackSink, StdoutSink, TelegramSink,
 };
+use aether_api::AetherGrpcServer;
+use aether_api::proto::aether_service_server::AetherServiceServer;
+use aether_core::event_bus::InProcessEventBus;
 use aether_prober::ProberEngine;
 use aether_script::engine::ScriptEngine;
 use aether_script::hot_reload::HotReloader;
@@ -185,6 +189,7 @@ async fn main() -> anyhow::Result<()> {
 
     let world = Arc::new(RwLock::new(WorldGraph::new()));
     let arbiter = Arc::new(Mutex::new(ArbiterQueue::default()));
+    let event_bus = Arc::new(InProcessEventBus::new(256));
     let (action_tx, mut action_rx) = mpsc::channel::<AgentAction>(64);
 
     let probe = Arc::new(SysinfoProbe::new());
@@ -556,6 +561,7 @@ async fn main() -> anyhow::Result<()> {
         let collector_diags = Arc::clone(&diagnostics);
         let collector_cancel = cancel.child_token();
         let collector_pipeline = Arc::clone(&output_pipeline);
+        let collector_bus = Arc::clone(&event_bus);
         tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -572,6 +578,14 @@ async fn main() -> anyhow::Result<()> {
                                             pipeline.dispatch(&diag).await;
                                         });
                                     }
+                                }
+                                // Publish integration events for each diagnostic
+                                for diag in &new_diags {
+                                    collector_bus.publish(IntegrationEvent::DiagnosticCreated {
+                                        diagnostic_id: diag.id,
+                                        severity: format!("{}", diag.severity),
+                                        summary: diag.summary.clone(),
+                                    }).await;
                                 }
                                 if let Ok(mut diags) = collector_diags.lock() {
                                     upsert_diagnostics(&mut diags, new_diags);
@@ -621,6 +635,41 @@ async fn main() -> anyhow::Result<()> {
         });
 
         tracing::info!("Prometheus /metrics endpoint on port {port}");
+    }
+
+    // Spawn gRPC API server if configured
+    if let Some(ref grpc_cfg) = config.api.grpc {
+        if grpc_cfg.enabled {
+            let grpc_targets = {
+                let snapshot = targets.read().map(|t| t.clone()).unwrap_or_default();
+                Arc::new(Mutex::new(snapshot))
+            };
+            let grpc_server = AetherGrpcServer::new(
+                Arc::clone(&diagnostics),
+                grpc_targets,
+                Arc::clone(&event_bus),
+                Arc::clone(&arbiter),
+            );
+            let addr = grpc_cfg.bind.clone();
+            let grpc_cancel = cancel.child_token();
+            tokio::spawn(async move {
+                let addr = match addr.parse() {
+                    Ok(a) => a,
+                    Err(e) => {
+                        tracing::error!("invalid gRPC bind address: {e}");
+                        return;
+                    }
+                };
+                tracing::info!("gRPC API listening on {addr}");
+                if let Err(e) = tonic::transport::Server::builder()
+                    .add_service(AetherServiceServer::new(grpc_server))
+                    .serve_with_shutdown(addr, grpc_cancel.cancelled())
+                    .await
+                {
+                    tracing::error!("gRPC server error: {e}");
+                }
+            });
+        }
     }
 
     // Mode handling
