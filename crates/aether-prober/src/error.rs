@@ -12,6 +12,14 @@ pub enum ProberError {
     #[error("tcp probe failed: {0}")]
     Tcp(String),
 
+    /// DNS resolution failed.
+    #[error("dns probe failed: {0}")]
+    Dns(String),
+
+    /// TLS handshake failed.
+    #[error("tls probe failed: {0}")]
+    Tls(String),
+
     /// Target list lock poisoned.
     #[error("targets lock poisoned")]
     LockPoisoned,

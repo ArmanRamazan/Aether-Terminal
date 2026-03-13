@@ -403,6 +403,8 @@ pub enum EndpointType {
     Prometheus,
     Health,
     TcpProbe,
+    DnsProbe,
+    TlsProbe,
     Logs,
 }
 
@@ -412,6 +414,8 @@ impl fmt::Display for EndpointType {
             Self::Prometheus => f.write_str("prometheus"),
             Self::Health => f.write_str("health"),
             Self::TcpProbe => f.write_str("tcp_probe"),
+            Self::DnsProbe => f.write_str("dns_probe"),
+            Self::TlsProbe => f.write_str("tls_probe"),
             Self::Logs => f.write_str("logs"),
         }
     }
