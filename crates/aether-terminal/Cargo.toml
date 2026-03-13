@@ -21,6 +21,7 @@ aether-metrics = { path = "../aether-metrics" }
 aether-config = { path = "../aether-config" }
 aether-discovery = { path = "../aether-discovery" }
 aether-prober = { path = "../aether-prober" }
+aether-output = { path = "../aether-output" }
 arc-swap = "1"
 clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }

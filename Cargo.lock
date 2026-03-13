@@ -151,6 +151,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "aether-output"
+version = "0.1.0"
+dependencies = [
+ "aether-core",
+ "async-trait",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "aether-predict"
 version = "0.1.0"
 dependencies = [
@@ -223,6 +237,7 @@ dependencies = [
  "aether-ingestion",
  "aether-mcp",
  "aether-metrics",
+ "aether-output",
  "aether-predict",
  "aether-prober",
  "aether-render",

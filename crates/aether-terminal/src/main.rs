@@ -32,6 +32,9 @@ use aether_render::PredictionDisplay;
 use aether_metrics::consumer::PrometheusConsumer;
 use aether_metrics::exporter::server::MetricsExporter;
 use aether_metrics::scraper::PrometheusScraper;
+use aether_output::{
+    DiscordSink, FileSink, OutputFormat, OutputPipeline, SlackSink, StdoutSink, TelegramSink,
+};
 use aether_prober::ProberEngine;
 use aether_script::engine::ScriptEngine;
 use aether_script::hot_reload::HotReloader;
@@ -486,6 +489,53 @@ async fn main() -> anyhow::Result<()> {
     // Drop the original sender so channel closes when all spawned senders finish
     drop(metrics_tx);
 
+    // Build output pipeline from config
+    let output_pipeline = {
+        let mut sinks: Vec<Box<dyn aether_core::traits::OutputSink>> = Vec::new();
+
+        if let Some(ref slack) = config.output.slack {
+            let sev = parse_severity(&slack.severity);
+            sinks.push(Box::new(SlackSink::new(slack.webhook_url.clone(), sev)));
+            tracing::info!("output: Slack sink enabled (min severity: {sev})");
+        }
+        if let Some(ref discord) = config.output.discord {
+            let sev = parse_severity(&discord.severity);
+            sinks.push(Box::new(DiscordSink::new(discord.webhook_url.clone(), sev)));
+            tracing::info!("output: Discord sink enabled (min severity: {sev})");
+        }
+        if let Some(ref telegram) = config.output.telegram {
+            let sev = parse_severity(&telegram.severity);
+            sinks.push(Box::new(TelegramSink::new(
+                telegram.bot_token.clone(),
+                telegram.chat_id.clone(),
+                sev,
+            )));
+            tracing::info!("output: Telegram sink enabled (min severity: {sev})");
+        }
+        if let Some(ref stdout_cfg) = config.output.stdout {
+            if stdout_cfg.enabled {
+                let sev = parse_severity(&stdout_cfg.severity);
+                let fmt = OutputFormat::from_str_config(&stdout_cfg.format);
+                sinks.push(Box::new(StdoutSink::new(fmt, sev)));
+                tracing::info!("output: stdout sink enabled (format: {}, min severity: {sev})", stdout_cfg.format);
+            }
+        }
+        if let Some(ref file_cfg) = config.output.file {
+            let sev = parse_severity(&file_cfg.severity);
+            sinks.push(Box::new(FileSink::new(
+                std::path::PathBuf::from(&file_cfg.path),
+                file_cfg.max_size_mb,
+                sev,
+            )));
+            tracing::info!("output: file sink enabled (path: {}, min severity: {sev})", file_cfg.path);
+        }
+
+        if !sinks.is_empty() {
+            tracing::info!(sink_count = sinks.len(), "output pipeline initialized");
+        }
+        Arc::new(OutputPipeline::new(sinks, Duration::from_secs(60)))
+    };
+
     // Spawn diagnostic engine unless --no-analyze
     if !cli.no_analyze {
         let interval_secs = cli.analyze_interval.unwrap_or(5);
@@ -505,6 +555,7 @@ async fn main() -> anyhow::Result<()> {
 
         let collector_diags = Arc::clone(&diagnostics);
         let collector_cancel = cancel.child_token();
+        let collector_pipeline = Arc::clone(&output_pipeline);
         tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -512,6 +563,16 @@ async fn main() -> anyhow::Result<()> {
                     batch = diag_rx.recv() => {
                         match batch {
                             Some(new_diags) => {
+                                // Dispatch each new diagnostic through the output pipeline
+                                if collector_pipeline.sink_count() > 0 {
+                                    for diag in &new_diags {
+                                        let pipeline = Arc::clone(&collector_pipeline);
+                                        let diag = diag.clone();
+                                        tokio::spawn(async move {
+                                            pipeline.dispatch(&diag).await;
+                                        });
+                                    }
+                                }
                                 if let Ok(mut diags) = collector_diags.lock() {
                                     upsert_diagnostics(&mut diags, new_diags);
                                 }
@@ -966,6 +1027,15 @@ async fn try_init_ebpf(
     });
 
     Ok(bridge)
+}
+
+/// Parse a severity string from config into a Severity enum.
+fn parse_severity(s: &str) -> Severity {
+    match s {
+        "critical" => Severity::Critical,
+        "warning" => Severity::Warning,
+        _ => Severity::Info,
+    }
 }
 
 /// Upsert diagnostics by (target, category) key. Evicts lowest-severity when over capacity.
