@@ -1,3 +1,3 @@
 pub mod consumer;
-pub mod error;
+pub(crate) mod error;
 pub mod exporter;

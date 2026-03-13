@@ -1,9 +1,9 @@
 //! Deterministic diagnostic engine with layered analysis for Aether Terminal.
 
-pub mod analyzers;
-pub mod collectors;
+pub(crate) mod analyzers;
+pub(crate) mod collectors;
 pub mod engine;
-pub mod error;
-pub mod recommendations;
-pub mod rules;
-pub mod store;
+pub(crate) mod error;
+pub(crate) mod recommendations;
+pub(crate) mod rules;
+pub(crate) mod store;

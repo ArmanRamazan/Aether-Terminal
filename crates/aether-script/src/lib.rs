@@ -4,7 +4,7 @@
 //! type-checked and compiled to native code via Cranelift for fast evaluation.
 
 pub mod ast;
-pub mod codegen;
+pub(crate) mod codegen;
 pub mod engine;
 pub mod error;
 pub mod hot_reload;

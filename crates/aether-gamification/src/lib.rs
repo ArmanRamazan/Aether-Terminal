@@ -3,8 +3,8 @@
 //! Calculates health points based on process metrics, tracks experience and ranks,
 //! manages achievement unlocks, and persists state to SQLite.
 
-pub mod achievements;
-pub mod error;
-pub mod hp;
-pub mod storage;
-pub mod xp;
+pub(crate) mod achievements;
+pub(crate) mod error;
+pub(crate) mod hp;
+pub(crate) mod storage;
+pub(crate) mod xp;
