@@ -417,6 +417,7 @@ mod tests {
     fn make_edge(source_pid: u32, port: u16, proto: Protocol, bps: u64) -> NetworkEdge {
         NetworkEdge {
             source_pid,
+            dest_pid: None,
             dest: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)), port),
             protocol: proto,
             bytes_per_sec: bps,

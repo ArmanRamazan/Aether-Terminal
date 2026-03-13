@@ -168,7 +168,9 @@ impl WorldGraph {
             self.graph.remove_edge(idx);
         }
         for edge in &snapshot.edges {
-            self.add_connection(edge.source_pid, edge.source_pid, edge.clone());
+            if let Some(dest) = edge.dest_pid {
+                self.add_connection(edge.source_pid, dest, edge.clone());
+            }
         }
     }
 }
@@ -205,6 +207,7 @@ mod tests {
     fn make_edge(source_pid: u32) -> NetworkEdge {
         NetworkEdge {
             source_pid,
+            dest_pid: None,
             dest: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8080),
             protocol: Protocol::TCP,
             bytes_per_sec: 1024,
@@ -354,5 +357,28 @@ mod tests {
         assert_eq!(g.find_by_pid(2).unwrap().cpu_percent, 77.0);
         assert!(g.find_by_pid(4).is_some());
         assert_eq!(g.edge_count(), 0);
+    }
+
+    #[test]
+    fn test_apply_snapshot_with_edges() {
+        let mut g = WorldGraph::new();
+
+        let mut edge = make_edge(1);
+        edge.dest_pid = Some(2);
+
+        let snapshot = SystemSnapshot {
+            processes: vec![make_process(1), make_process(2)],
+            edges: vec![edge],
+            timestamp: std::time::SystemTime::now(),
+        };
+
+        g.apply_snapshot(&snapshot);
+
+        assert_eq!(g.process_count(), 2);
+        assert_eq!(g.edge_count(), 1, "snapshot edge should be added");
+
+        let pairs = g.edge_pairs();
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(pairs[0], (1, 2), "edge should connect pid 1 → 2, not self-loop");
     }
 }

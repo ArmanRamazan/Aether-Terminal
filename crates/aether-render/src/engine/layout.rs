@@ -224,6 +224,7 @@ mod tests {
     fn make_edge(source_pid: u32) -> aether_core::models::NetworkEdge {
         aether_core::models::NetworkEdge {
             source_pid,
+            dest_pid: None,
             dest: std::net::SocketAddr::new(
                 std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
                 8080,
