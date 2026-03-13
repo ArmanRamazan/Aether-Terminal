@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 aether-core = { path = "../aether-core" }
 async-trait = "0.1"
+futures = "0.3"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 tokio = { version = "1", features = ["time", "fs", "sync"] }
 serde = { version = "1", features = ["derive"] }

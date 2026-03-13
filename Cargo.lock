@@ -156,6 +156,7 @@ version = "0.1.0"
 dependencies = [
  "aether-core",
  "async-trait",
+ "futures",
  "reqwest",
  "serde",
  "serde_json",

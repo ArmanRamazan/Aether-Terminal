@@ -5,11 +5,14 @@ use std::time::{Duration, Instant};
 use aether_core::models::Diagnostic;
 use aether_core::traits::OutputSink;
 
-/// Routes diagnostics to registered output sinks with severity filtering and dedup.
+/// Routes diagnostics to registered output sinks with severity filtering, dedup, and rate limiting.
 pub struct OutputPipeline {
     sinks: Vec<Box<dyn OutputSink>>,
     dedup_window: Duration,
+    max_per_minute: u32,
     last_sent: Mutex<HashMap<(String, String), Instant>>,
+    /// Per-sink send timestamps for rate limiting (sink index -> timestamps).
+    rate_state: Mutex<HashMap<usize, Vec<Instant>>>,
 }
 
 impl OutputPipeline {
@@ -18,14 +21,22 @@ impl OutputPipeline {
         Self {
             sinks,
             dedup_window,
+            max_per_minute: 10,
             last_sent: Mutex::new(HashMap::new()),
+            rate_state: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Set the maximum alerts per minute per sink.
+    pub fn with_max_per_minute(mut self, max: u32) -> Self {
+        self.max_per_minute = max;
+        self
     }
 
     /// Dispatch a diagnostic to all matching sinks.
     ///
-    /// Filters by severity and dedup window. Sends to each matching sink
-    /// concurrently. Errors are logged but do not propagate.
+    /// Filters by severity, dedup window, and rate limit. Sends to each
+    /// matching sink concurrently. Errors are logged but do not propagate.
     pub async fn dispatch(&self, diagnostic: &Diagnostic) {
         let dedup_key = (
             format!("{:?}", diagnostic.target),
@@ -47,13 +58,47 @@ impl OutputPipeline {
             last.insert(dedup_key, now);
         }
 
-        for sink in &self.sinks {
-            if diagnostic.severity >= sink.min_severity() {
+        // Collect futures for matching sinks
+        let mut futures = Vec::new();
+        let now = Instant::now();
+        let one_minute = Duration::from_secs(60);
+
+        for (idx, sink) in self.sinks.iter().enumerate() {
+            if diagnostic.severity < sink.min_severity() {
+                continue;
+            }
+
+            // Check rate limit
+            let allowed = {
+                let mut rates = match self.rate_state.lock() {
+                    Ok(g) => g,
+                    Err(e) => e.into_inner(),
+                };
+                let timestamps = rates.entry(idx).or_default();
+                // Remove entries older than 1 minute
+                timestamps.retain(|t| now.duration_since(*t) < one_minute);
+                if timestamps.len() >= self.max_per_minute as usize {
+                    false
+                } else {
+                    timestamps.push(now);
+                    true
+                }
+            };
+
+            if !allowed {
+                tracing::warn!(sink = sink.name(), "rate limit exceeded, skipping");
+                continue;
+            }
+
+            futures.push(async move {
                 if let Err(e) = sink.send(diagnostic).await {
                     tracing::warn!(sink = sink.name(), "output dispatch error: {e}");
                 }
-            }
+            });
         }
+
+        // Send concurrently
+        futures::future::join_all(futures).await;
     }
 
     /// Number of registered sinks.
@@ -181,5 +226,37 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(20)).await;
         pipeline.dispatch(&make_diag(Severity::Critical)).await;
         assert_eq!(count.load(Ordering::Relaxed), 2, "should send after window expires");
+    }
+
+    #[tokio::test]
+    async fn test_rate_limit_per_sink() {
+        let count = Arc::new(AtomicUsize::new(0));
+        let pipeline = OutputPipeline::new(
+            vec![Box::new(MockSink {
+                name: "all",
+                min_severity: Severity::Info,
+                send_count: Arc::clone(&count),
+            })],
+            Duration::from_secs(0), // no dedup
+        )
+        .with_max_per_minute(3);
+
+        // Use different categories to avoid dedup
+        for i in 0..5 {
+            let mut diag = make_diag(Severity::Critical);
+            diag.id = i;
+            // Vary target pid to create different dedup keys
+            diag.target = DiagTarget::Process {
+                pid: i as u32,
+                name: format!("proc-{i}"),
+            };
+            pipeline.dispatch(&diag).await;
+        }
+
+        assert_eq!(
+            count.load(Ordering::Relaxed),
+            3,
+            "should stop at rate limit"
+        );
     }
 }
