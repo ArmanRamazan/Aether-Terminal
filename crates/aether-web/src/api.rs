@@ -165,10 +165,12 @@ pub struct MetricsHistoryResponse {
 // ── Handlers ──────────────────────────────────────────────────────────
 
 /// GET /api/processes — all processes as JSON array.
-pub async fn list_processes(State(state): State<SharedState>) -> Json<Vec<ProcessResponse>> {
-    let world = state.world.read().expect("world lock poisoned");
+pub async fn list_processes(
+    State(state): State<SharedState>,
+) -> Result<Json<Vec<ProcessResponse>>, StatusCode> {
+    let world = state.read_world()?;
     let processes = world.processes().map(process_to_response).collect();
-    Json(processes)
+    Ok(Json(processes))
 }
 
 /// GET /api/processes/:pid — single process with its connections.
@@ -176,7 +178,7 @@ pub async fn get_process(
     State(state): State<SharedState>,
     Path(pid): Path<u32>,
 ) -> Result<Json<ProcessDetailResponse>, StatusCode> {
-    let world = state.world.read().expect("world lock poisoned");
+    let world = state.read_world()?;
 
     let node = world.find_by_pid(pid).ok_or(StatusCode::NOT_FOUND)?;
     let process = process_to_response(node);
@@ -202,8 +204,8 @@ pub async fn get_process(
 /// GET /api/connections — all edges as JSON array.
 pub async fn list_connections(
     State(state): State<SharedState>,
-) -> Json<Vec<ConnectionResponse>> {
-    let world = state.world.read().expect("world lock poisoned");
+) -> Result<Json<Vec<ConnectionResponse>>, StatusCode> {
+    let world = state.read_world()?;
     let connections = world
         .edge_pairs_with_data()
         .into_iter()
@@ -214,12 +216,14 @@ pub async fn list_connections(
             bytes_per_sec: edge.bytes_per_sec,
         })
         .collect();
-    Json(connections)
+    Ok(Json(connections))
 }
 
 /// GET /api/stats — aggregate system statistics.
-pub async fn get_stats(State(state): State<SharedState>) -> Json<StatsResponse> {
-    let world = state.world.read().expect("world lock poisoned");
+pub async fn get_stats(
+    State(state): State<SharedState>,
+) -> Result<Json<StatsResponse>, StatusCode> {
+    let world = state.read_world()?;
     let count = world.process_count();
 
     let (total_cpu, total_memory, total_hp) =
@@ -235,19 +239,19 @@ pub async fn get_stats(State(state): State<SharedState>) -> Json<StatsResponse> 
         0.0
     };
 
-    Json(StatsResponse {
+    Ok(Json(StatsResponse {
         process_count: count,
         total_cpu,
         total_memory,
         avg_hp,
-    })
+    }))
 }
 
 /// GET /api/arbiter/pending — pending arbiter actions.
 pub async fn list_pending_actions(
     State(state): State<SharedState>,
-) -> Json<Vec<ArbiterActionResponse>> {
-    let arbiter = state.arbiter.lock().expect("arbiter lock poisoned");
+) -> Result<Json<Vec<ArbiterActionResponse>>, StatusCode> {
+    let arbiter = state.lock_arbiter()?;
     let actions = arbiter
         .pending()
         .iter()
@@ -258,18 +262,18 @@ pub async fn list_pending_actions(
             pid: entry.pid,
         })
         .collect();
-    Json(actions)
+    Ok(Json(actions))
 }
 
 /// POST /api/arbiter/:id/approve — approve a pending action.
 pub async fn approve_action(
     State(state): State<SharedState>,
     Path(id): Path<String>,
-) -> StatusCode {
-    let mut arbiter = state.arbiter.lock().expect("arbiter lock poisoned");
+) -> Result<StatusCode, StatusCode> {
+    let mut arbiter = state.lock_arbiter()?;
     match arbiter.approve(&id) {
-        Ok(_) => StatusCode::OK,
-        Err(_) => StatusCode::NOT_FOUND,
+        Ok(_) => Ok(StatusCode::OK),
+        Err(_) => Ok(StatusCode::NOT_FOUND),
     }
 }
 
@@ -277,11 +281,11 @@ pub async fn approve_action(
 pub async fn deny_action(
     State(state): State<SharedState>,
     Path(id): Path<String>,
-) -> StatusCode {
-    let mut arbiter = state.arbiter.lock().expect("arbiter lock poisoned");
+) -> Result<StatusCode, StatusCode> {
+    let mut arbiter = state.lock_arbiter()?;
     match arbiter.deny(&id) {
-        Ok(_) => StatusCode::OK,
-        Err(_) => StatusCode::NOT_FOUND,
+        Ok(_) => Ok(StatusCode::OK),
+        Err(_) => Ok(StatusCode::NOT_FOUND),
     }
 }
 
@@ -291,8 +295,8 @@ pub async fn deny_action(
 pub async fn list_diagnostics(
     State(state): State<SharedState>,
     Query(filter): Query<DiagnosticFilter>,
-) -> Json<Vec<DiagnosticResponse>> {
-    let diags = state.diagnostics.lock().expect("diagnostics lock poisoned");
+) -> Result<Json<Vec<DiagnosticResponse>>, StatusCode> {
+    let diags = state.lock_diagnostics()?;
     let results = diags
         .iter()
         .filter(|d| {
@@ -310,15 +314,15 @@ pub async fn list_diagnostics(
         })
         .map(diagnostic_to_response)
         .collect();
-    Json(results)
+    Ok(Json(results))
 }
 
 /// GET /api/diagnostics/stats — severity counts.
 pub async fn get_diagnostic_stats(
     State(state): State<SharedState>,
-) -> Json<DiagnosticStatsResponse> {
-    let diags = state.diagnostics.lock().expect("diagnostics lock poisoned");
-    Json(compute_diagnostic_stats(&diags))
+) -> Result<Json<DiagnosticStatsResponse>, StatusCode> {
+    let diags = state.lock_diagnostics()?;
+    Ok(Json(compute_diagnostic_stats(&diags)))
 }
 
 /// GET /api/diagnostics/:id — single diagnostic detail.
@@ -326,7 +330,7 @@ pub async fn get_diagnostic(
     State(state): State<SharedState>,
     Path(id): Path<u64>,
 ) -> Result<Json<DiagnosticResponse>, StatusCode> {
-    let diags = state.diagnostics.lock().expect("diagnostics lock poisoned");
+    let diags = state.lock_diagnostics()?;
     let diag = diags.iter().find(|d| d.id == id).ok_or(StatusCode::NOT_FOUND)?;
     Ok(Json(diagnostic_to_response(diag)))
 }
@@ -335,14 +339,14 @@ pub async fn get_diagnostic(
 pub async fn dismiss_diagnostic(
     State(state): State<SharedState>,
     Path(id): Path<u64>,
-) -> StatusCode {
-    let mut diags = state.diagnostics.lock().expect("diagnostics lock poisoned");
+) -> Result<StatusCode, StatusCode> {
+    let mut diags = state.lock_diagnostics()?;
     let before = diags.len();
     diags.retain(|d| d.id != id);
     if diags.len() < before {
-        StatusCode::OK
+        Ok(StatusCode::OK)
     } else {
-        StatusCode::NOT_FOUND
+        Ok(StatusCode::NOT_FOUND)
     }
 }
 
@@ -350,29 +354,31 @@ pub async fn dismiss_diagnostic(
 pub async fn execute_diagnostic(
     State(state): State<SharedState>,
     Path(id): Path<u64>,
-) -> StatusCode {
-    let diags = state.diagnostics.lock().expect("diagnostics lock poisoned");
+) -> Result<StatusCode, StatusCode> {
+    let diags = state.lock_diagnostics()?;
     let diag = match diags.iter().find(|d| d.id == id) {
         Some(d) => d,
-        None => return StatusCode::NOT_FOUND,
+        None => return Ok(StatusCode::NOT_FOUND),
     };
 
     let agent_action = recommended_to_agent_action(&diag.recommendation.action);
     let Some(action) = agent_action else {
-        return StatusCode::UNPROCESSABLE_ENTITY;
+        return Ok(StatusCode::UNPROCESSABLE_ENTITY);
     };
 
     drop(diags);
-    let mut arbiter = state.arbiter.lock().expect("arbiter lock poisoned");
+    let mut arbiter = state.lock_arbiter()?;
     arbiter.submit("diagnostic-engine".to_string(), action);
-    StatusCode::OK
+    Ok(StatusCode::OK)
 }
 
 // ── Metrics Handlers ─────────────────────────────────────────────────
 
 /// GET /api/metrics/summary — current metric values.
-pub async fn get_metrics_summary(State(state): State<SharedState>) -> Json<MetricsSummaryResponse> {
-    let world = state.world.read().expect("world lock poisoned");
+pub async fn get_metrics_summary(
+    State(state): State<SharedState>,
+) -> Result<Json<MetricsSummaryResponse>, StatusCode> {
+    let world = state.read_world()?;
 
     let count = world.process_count();
     let (total_cpu, total_memory) =
@@ -395,16 +401,16 @@ pub async fn get_metrics_summary(State(state): State<SharedState>) -> Json<Metri
 
     drop(world);
 
-    let diags = state.diagnostics.lock().expect("diagnostics lock poisoned");
+    let diags = state.lock_diagnostics()?;
     let diag_stats = compute_diagnostic_stats(&diags);
     drop(diags);
 
-    let sys = state.system_metrics.read().expect("system_metrics lock poisoned");
+    let sys = state.read_system_metrics()?;
     let memory_total_bytes = sys.memory_total_bytes;
     let load_avg = sys.load_avg;
     drop(sys);
 
-    Json(MetricsSummaryResponse {
+    Ok(Json(MetricsSummaryResponse {
         cpu_percent: total_cpu,
         memory_used_bytes: total_memory,
         memory_total_bytes,
@@ -416,15 +422,15 @@ pub async fn get_metrics_summary(State(state): State<SharedState>) -> Json<Metri
         },
         process_count: count as u32,
         top_cpu_processes: top_cpu,
-    })
+    }))
 }
 
 /// GET /api/metrics/history — time-series data for a named metric.
 pub async fn get_metrics_history(
     State(state): State<SharedState>,
     Query(query): Query<MetricsHistoryQuery>,
-) -> Json<MetricsHistoryResponse> {
-    let store = state.metrics.lock().expect("metrics lock poisoned");
+) -> Result<Json<MetricsHistoryResponse>, StatusCode> {
+    let store = state.lock_metrics()?;
     let samples = store
         .history(&query.metric, query.duration)
         .into_iter()
@@ -434,10 +440,10 @@ pub async fn get_metrics_history(
         })
         .collect();
 
-    Json(MetricsHistoryResponse {
+    Ok(Json(MetricsHistoryResponse {
         metric: query.metric,
         samples,
-    })
+    }))
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────

@@ -54,7 +54,9 @@ async fn handle_socket(socket: WebSocket, state: SharedState) {
         let mut interval = tokio::time::interval(PUSH_INTERVAL);
         loop {
             interval.tick().await;
-            let update = build_world_update(&push_state);
+            let Some(update) = build_world_update(&push_state) else {
+                continue;
+            };
             record_metrics(&push_state, &update);
             let json = match serde_json::to_string(&update) {
                 Ok(j) => j,
@@ -90,8 +92,14 @@ async fn handle_socket(socket: WebSocket, state: SharedState) {
     }
 }
 
-fn build_world_update(state: &SharedState) -> WorldUpdate {
-    let world = state.world.read().expect("world lock poisoned");
+fn build_world_update(state: &SharedState) -> Option<WorldUpdate> {
+    let world = match state.world.read() {
+        Ok(w) => w,
+        Err(_) => {
+            tracing::error!("world lock poisoned, skipping update");
+            return None;
+        }
+    };
 
     let processes = world
         .processes()
@@ -137,12 +145,18 @@ fn build_world_update(state: &SharedState) -> WorldUpdate {
         .unwrap_or_default()
         .as_millis() as u64;
 
-    let diags = state.diagnostics.lock().expect("diagnostics lock poisoned");
+    let diags = match state.diagnostics.lock() {
+        Ok(d) => d,
+        Err(_) => {
+            tracing::error!("diagnostics lock poisoned, skipping update");
+            return None;
+        }
+    };
     let diagnostics = diags.iter().map(diagnostic_to_response).collect();
     let diagnostic_stats = compute_diagnostic_stats(&diags);
     drop(diags);
 
-    WorldUpdate {
+    Some(WorldUpdate {
         type_: "world_state",
         processes,
         connections,
@@ -155,12 +169,18 @@ fn build_world_update(state: &SharedState) -> WorldUpdate {
         diagnostics,
         diagnostic_stats,
         timestamp,
-    }
+    })
 }
 
 /// Record current stats into the metric store for historical queries.
 fn record_metrics(state: &SharedState, update: &WorldUpdate) {
-    let mut store = state.metrics.lock().expect("metrics lock poisoned");
+    let mut store = match state.metrics.lock() {
+        Ok(s) => s,
+        Err(_) => {
+            tracing::error!("metrics lock poisoned, skipping record");
+            return;
+        }
+    };
     let ts = update.timestamp;
     store.push("cpu", ts, update.stats.total_cpu as f64);
     store.push("memory", ts, update.stats.total_memory as f64);
@@ -177,7 +197,13 @@ fn handle_client_message(msg: ClientMessage, state: &SharedState) {
             tracing::debug!("client selected process {pid}");
         }
         ClientMessage::ArbiterAction { action, action_id } => {
-            let mut arbiter = state.arbiter.lock().expect("arbiter lock poisoned");
+            let mut arbiter = match state.arbiter.lock() {
+                Ok(a) => a,
+                Err(_) => {
+                    tracing::error!("arbiter lock poisoned, cannot process action");
+                    return;
+                }
+            };
             let result = match action.as_str() {
                 "approve" => arbiter.approve(&action_id).map(|_| ()),
                 "deny" => arbiter.deny(&action_id),
@@ -266,7 +292,7 @@ mod tests {
             world.add_process(make_process(2));
         }
 
-        let update = build_world_update(&state);
+        let update = build_world_update(&state).expect("should build update");
         let json = serde_json::to_value(&update).unwrap();
 
         assert_eq!(json["type"], "world_state");
@@ -317,7 +343,7 @@ mod tests {
             diags.push(make_diagnostic(2, Severity::Critical));
         }
 
-        let update = build_world_update(&state);
+        let update = build_world_update(&state).expect("should build update");
         let json = serde_json::to_value(&update).unwrap();
 
         let diag_arr = json["diagnostics"].as_array().unwrap();
