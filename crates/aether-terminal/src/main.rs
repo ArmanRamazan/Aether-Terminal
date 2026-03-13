@@ -106,7 +106,13 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     let env_filter = tracing_subscriber::EnvFilter::try_new(&cli.log_level)
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+        .unwrap_or_else(|e| {
+            eprintln!(
+                "Warning: invalid log level '{}': {}. Using 'info'.",
+                cli.log_level, e
+            );
+            tracing_subscriber::EnvFilter::new("info")
+        });
 
     if cli.mcp_stdio {
         // Stdio MCP mode: logs go to stderr so stdout stays clean for JSON-RPC.
