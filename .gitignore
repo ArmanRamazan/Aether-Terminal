@@ -14,3 +14,14 @@ __pycache__/
 
 # Rust
 target/
+
+# Frontend build artifacts
+crates/aether-web/frontend/dist/
+crates/aether-web/frontend/tsconfig.tsbuildinfo
+node_modules/
+
+# Orchestrator ephemeral
+tools/orchestrator/.pipeline-pid
+
+# Superpowers runtime
+.superpowers/
