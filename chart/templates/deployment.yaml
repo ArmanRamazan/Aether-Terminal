@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-aether-terminal
+  labels:
+    app: aether-terminal
+    release: {{ .Release.Name }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: aether-terminal
+      release: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app: aether-terminal
+        release: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: aether-terminal
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - "--config"
+            - "/etc/aether/aether.yaml"
+            - "--web"
+            - "8080"
+          ports:
+            - name: web
+              containerPort: 8080
+              protocol: TCP
+            - name: grpc
+              containerPort: 50051
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/aether
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: {{ .Release.Name }}-aether-config

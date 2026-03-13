@@ -1,0 +1,28 @@
+replicaCount: 1
+image:
+  repository: ghcr.io/arman-ramazan/aether-terminal
+  tag: latest
+  pullPolicy: IfNotPresent
+service:
+  web:
+    port: 8080
+  grpc:
+    port: 50051
+config:
+  discovery:
+    enabled: true
+    kubernetes: true
+  thresholds:
+    throughput_drop_percent: 30
+    latency_p99_ms: 500
+  output:
+    stdout:
+      enabled: true
+      format: json
+resources:
+  limits:
+    cpu: 500m
+    memory: 256Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
