@@ -59,7 +59,7 @@ impl TimeSeries {
         Self {
             name: name.into(),
             labels: BTreeMap::new(),
-            samples: VecDeque::with_capacity(capacity.min(256)),
+            samples: VecDeque::with_capacity(capacity),
             capacity,
         }
     }
