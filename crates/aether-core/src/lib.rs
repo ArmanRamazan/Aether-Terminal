@@ -5,6 +5,7 @@
 
 pub mod arbiter;
 pub mod error;
+pub mod event_bus;
 pub mod events;
 pub mod graph;
 pub mod metrics;
@@ -14,7 +15,8 @@ pub mod traits;
 // Re-export key types for convenience.
 pub use arbiter::{ArbiterQueue, PendingAction};
 pub use error::CoreError;
-pub use events::{AgentAction, GameEvent, SystemEvent};
+pub use event_bus::{EventBus, InProcessEventBus};
+pub use events::{AgentAction, GameEvent, IntegrationEvent, SystemEvent};
 pub use graph::WorldGraph;
 pub use metrics::{HostId, MetricSample, TimeSeries};
 pub use models::{
