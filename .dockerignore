@@ -1,0 +1,7 @@
+target/
+.git/
+.superpowers/
+node_modules/
+*.md
+docs/
+tools/
