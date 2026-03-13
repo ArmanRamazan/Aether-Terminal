@@ -35,6 +35,7 @@ pub enum ProcessState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworkEdge {
     pub source_pid: u32,
+    pub dest_pid: Option<u32>,
     pub dest: SocketAddr,
     pub protocol: Protocol,
     pub bytes_per_sec: u64,
@@ -223,6 +224,7 @@ mod tests {
     fn sample_edge() -> NetworkEdge {
         NetworkEdge {
             source_pid: 1234,
+            dest_pid: None,
             dest: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080),
             protocol: Protocol::TCP,
             bytes_per_sec: 4096,

@@ -424,6 +424,7 @@ mod tests {
     fn make_edge(source_pid: u32) -> NetworkEdge {
         NetworkEdge {
             source_pid,
+            dest_pid: None,
             dest: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4)), 443),
             protocol: Protocol::TCP,
             bytes_per_sec: 1024,
