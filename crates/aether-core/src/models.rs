@@ -26,6 +26,7 @@ pub struct ProcessNode {
 
 /// OS-level process state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum ProcessState {
     Running,
     Sleeping,
@@ -57,6 +58,7 @@ pub struct NetworkEdge {
 
 /// Network protocol classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum Protocol {
     TCP,
     UDP,
@@ -83,6 +85,7 @@ impl fmt::Display for Protocol {
 
 /// TCP connection state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum ConnectionState {
     Established,
     Listen,
@@ -131,6 +134,7 @@ pub enum DiagTarget {
 
 /// Severity of a diagnostic finding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum Severity {
     /// Informational, no action needed.
     Info,

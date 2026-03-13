@@ -324,7 +324,7 @@ fn format_diag_cell(pid: u32, diagnostics: &[Diagnostic]) -> Cell<'static> {
     let (icon, color) = match diag.severity {
         Severity::Critical => ("\u{25a0}", Palette::DIAGNOSTIC_CRITICAL),
         Severity::Warning => ("\u{25a0}", Palette::DIAGNOSTIC_WARNING),
-        Severity::Info => ("\u{25cf}", Palette::DIAGNOSTIC_INFO),
+        Severity::Info | _ => ("\u{25cf}", Palette::DIAGNOSTIC_INFO),
     };
 
     let summary: String = if diag.summary.chars().count() > 15 {
@@ -591,6 +591,7 @@ fn format_state(state: ProcessState) -> String {
         ProcessState::Sleeping => "Sleep".to_string(),
         ProcessState::Zombie => "Zombie".to_string(),
         ProcessState::Stopped => "Stop".to_string(),
+        _ => format!("{state:?}"),
     }
 }
 

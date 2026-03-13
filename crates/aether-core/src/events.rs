@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 /// OS-level events produced by ingestion/eBPF layers.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum SystemEvent {
     /// A new process appeared in the system.
     ProcessCreated { pid: u32, name: String },
@@ -24,6 +25,7 @@ pub enum SystemEvent {
 
 /// Gamification events produced by the gamification crate.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum GameEvent {
     /// A process's HP changed (damage or healing).
     HpChanged { pid: u32, delta: f32, new_hp: f32 },
@@ -35,6 +37,7 @@ pub enum GameEvent {
 
 /// Actions requested by AI agents through MCP.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum AgentAction {
     /// Kill a process by PID.
     KillProcess { pid: u32 },
@@ -51,6 +54,7 @@ pub enum AgentAction {
 /// Used for communication between Aether ecosystem projects
 /// (diagnostics, actions, target discovery) via [`crate::event_bus::EventBus`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum IntegrationEvent {
     /// A new diagnostic was created.
     DiagnosticCreated {

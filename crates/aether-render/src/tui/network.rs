@@ -379,7 +379,7 @@ fn protocol_index(proto: Protocol) -> usize {
         Protocol::QUIC => 3,
         Protocol::HTTP => 4,
         Protocol::HTTPS => 5,
-        Protocol::Unknown => 6,
+        Protocol::Unknown | _ => 6,
     }
 }
 

@@ -670,7 +670,7 @@ fn rule_action_to_diagnostic(action: &RuleAction) -> Diagnostic {
     let urgency = match severity {
         Severity::Critical => Urgency::Immediate,
         Severity::Warning => Urgency::Soon,
-        Severity::Info => Urgency::Informational,
+        Severity::Info | _ => Urgency::Informational,
     };
 
     Diagnostic {
@@ -732,6 +732,9 @@ fn execute_action(action: &AgentAction) {
         }
         AgentAction::CustomScript { command } => {
             tracing::info!("custom script '{command}' requested (not yet implemented)");
+        }
+        _ => {
+            tracing::warn!("unknown agent action: {action:?}");
         }
     }
 }

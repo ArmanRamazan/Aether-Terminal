@@ -133,7 +133,7 @@ impl XpTracker {
         let amount = match severity {
             Severity::Critical => 50,
             Severity::Warning => 20,
-            Severity::Info => 5,
+            Severity::Info | _ => 5,
         };
         self.add_xp(amount, "diagnostic resolved");
     }
