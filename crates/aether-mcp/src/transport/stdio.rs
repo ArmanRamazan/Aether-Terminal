@@ -58,7 +58,7 @@ mod tests {
 
     use aether_core::{AgentAction, WorldGraph};
 
-    use crate::arbiter::ArbiterQueue;
+    use aether_core::ArbiterQueue;
 
     use crate::server::McpServer;
 

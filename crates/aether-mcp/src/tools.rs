@@ -8,7 +8,7 @@ use aether_core::models::{Diagnostic, ProcessState, Severity};
 use aether_core::{AgentAction, WorldGraph};
 use aether_predict::models::PredictedAnomaly;
 
-use crate::arbiter::ArbiterQueue;
+use aether_core::ArbiterQueue;
 
 /// Maximum number of processes returned to prevent AI token overflow.
 const MAX_PROCESSES: usize = 50;

@@ -55,9 +55,10 @@ pub struct StatsResponse {
 /// JSON representation of a pending arbiter action.
 #[derive(Debug, Serialize)]
 pub struct ArbiterActionResponse {
-    pub id: usize,
+    pub id: String,
     pub source: String,
     pub action: String,
+    pub pid: u32,
 }
 
 /// JSON representation of a diagnostic finding.
@@ -249,11 +250,12 @@ pub async fn list_pending_actions(
     let arbiter = state.arbiter.lock().expect("arbiter lock poisoned");
     let actions = arbiter
         .pending()
-        .enumerate()
-        .map(|(id, entry)| ArbiterActionResponse {
-            id,
+        .iter()
+        .map(|entry| ArbiterActionResponse {
+            id: entry.id.clone(),
             source: entry.source.clone(),
             action: format_action(&entry.action),
+            pid: entry.pid,
         })
         .collect();
     Json(actions)
@@ -262,26 +264,24 @@ pub async fn list_pending_actions(
 /// POST /api/arbiter/:id/approve — approve a pending action.
 pub async fn approve_action(
     State(state): State<SharedState>,
-    Path(id): Path<usize>,
+    Path(id): Path<String>,
 ) -> StatusCode {
     let mut arbiter = state.arbiter.lock().expect("arbiter lock poisoned");
-    if arbiter.approve(id) {
-        StatusCode::OK
-    } else {
-        StatusCode::NOT_FOUND
+    match arbiter.approve(&id) {
+        Ok(_) => StatusCode::OK,
+        Err(_) => StatusCode::NOT_FOUND,
     }
 }
 
 /// POST /api/arbiter/:id/deny — deny a pending action.
 pub async fn deny_action(
     State(state): State<SharedState>,
-    Path(id): Path<usize>,
+    Path(id): Path<String>,
 ) -> StatusCode {
     let mut arbiter = state.arbiter.lock().expect("arbiter lock poisoned");
-    if arbiter.deny(id) {
-        StatusCode::OK
-    } else {
-        StatusCode::NOT_FOUND
+    match arbiter.deny(&id) {
+        Ok(_) => StatusCode::OK,
+        Err(_) => StatusCode::NOT_FOUND,
     }
 }
 

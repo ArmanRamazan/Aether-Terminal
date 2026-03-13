@@ -3,7 +3,6 @@
 //! Exposes system topology, process inspection, and action execution as MCP tools.
 //! Supports stdio transport (Claude Desktop) and SSE/HTTP (realtime agents).
 
-pub mod arbiter;
 pub mod error;
 pub mod server;
 pub mod tools;
