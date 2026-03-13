@@ -4,8 +4,10 @@
 //! - [`SystemEvent`] — OS-level process/topology changes
 //! - [`GameEvent`] — gamification state changes (HP, XP, achievements)
 //! - [`AgentAction`] — commands from AI agents via MCP
+//! - [`IntegrationEvent`] — cross-project integration events for EventBus
 
 use crate::models::SystemSnapshot;
+use serde::{Deserialize, Serialize};
 
 /// OS-level events produced by ingestion/eBPF layers.
 #[derive(Debug, Clone)]
@@ -42,6 +44,37 @@ pub enum AgentAction {
     Inspect { pid: u32 },
     /// Execute a custom DSL script command.
     CustomScript { command: String },
+}
+
+/// Cross-project integration events for the EventBus.
+///
+/// Used for communication between Aether ecosystem projects
+/// (diagnostics, actions, target discovery) via [`crate::event_bus::EventBus`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum IntegrationEvent {
+    /// A new diagnostic was created.
+    DiagnosticCreated {
+        diagnostic_id: u64,
+        severity: String,
+        summary: String,
+    },
+    /// A diagnostic was resolved.
+    DiagnosticResolved { diagnostic_id: u64 },
+    /// An action was proposed for Arbiter review.
+    ActionProposed {
+        action_id: String,
+        description: String,
+    },
+    /// An action was approved by the Arbiter.
+    ActionApproved { action_id: String },
+    /// An action was denied by the Arbiter.
+    ActionDenied { action_id: String },
+    /// An action was executed.
+    ActionExecuted { action_id: String, success: bool },
+    /// A new monitoring target was discovered.
+    TargetDiscovered { name: String, kind: String },
+    /// A monitoring target was lost.
+    TargetLost { name: String },
 }
 
 #[cfg(test)]
