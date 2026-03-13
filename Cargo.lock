@@ -64,6 +64,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "aether-discovery"
+version = "0.1.0"
+dependencies = [
+ "aether-core",
+ "async-trait",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "aether-ebpf"
 version = "0.1.0"
 dependencies = [

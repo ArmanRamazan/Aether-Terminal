@@ -15,4 +15,5 @@ members = [
     "crates/aether-metrics",
     "crates/aether-api",
     "crates/aether-config",
+    "crates/aether-discovery",
 ]

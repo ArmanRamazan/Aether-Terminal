@@ -1,0 +1,11 @@
+[package]
+name = "aether-discovery"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+aether-core = { path = "../aether-core" }
+tokio = { version = "1", features = ["net", "time"] }
+thiserror = "2"
+tracing = "0.1"
+async-trait = "0.1"
