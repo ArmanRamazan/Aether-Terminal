@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 aether-core = { path = "../aether-core" }
+async-trait = "0.1"
 axum = "0.8"
 tokio = { version = "1", features = ["full"] }
 tokio-util = "0.7"

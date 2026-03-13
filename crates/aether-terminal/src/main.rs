@@ -31,6 +31,8 @@ use aether_render::tui::rules::RulesDisplayState;
 use aether_render::PredictionDisplay;
 use aether_metrics::consumer::PrometheusConsumer;
 use aether_metrics::exporter::server::MetricsExporter;
+use aether_metrics::scraper::PrometheusScraper;
+use aether_prober::ProberEngine;
 use aether_script::engine::ScriptEngine;
 use aether_script::hot_reload::HotReloader;
 use aether_script::runtime::{CompiledRuleSet, RuleAction};
@@ -383,25 +385,106 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!("prediction engine enabled");
     }
 
-    // Spawn Prometheus consumer if --prometheus is set or config has scrape targets
-    // CLI flag --prometheus overrides config
-    let prometheus_rx = if let Some(ref prom_url) = cli.prometheus {
+    // Shared metric channel: all remote metric sources fan-in here → AnalyzeEngine.
+    // Multiple senders (consumer, scraper, prober), one receiver.
+    let (metrics_tx, metrics_rx) = mpsc::channel::<Vec<aether_core::TimeSeries>>(128);
+
+    // Spawn Prometheus consumer if --prometheus is set (polls Prometheus server API)
+    if let Some(ref prom_url) = cli.prometheus {
         let interval_secs = cli.prometheus_interval
             .unwrap_or(config.scrape.interval_seconds);
         let consumer = PrometheusConsumer::new(
             prom_url,
             std::time::Duration::from_secs(interval_secs),
         )?;
-        let (prom_tx, prom_rx) = mpsc::channel(64);
+        let consumer_tx = metrics_tx.clone();
         let prom_cancel = cancel.child_token();
         tokio::spawn(async move {
-            consumer.run(prom_tx, prom_cancel).await;
+            consumer.run(consumer_tx, prom_cancel).await;
         });
         tracing::info!("Prometheus consumer polling {prom_url} every {interval_secs}s");
-        Some(prom_rx)
-    } else {
-        None
-    };
+    }
+
+    // Spawn Prometheus scraper: scrapes /metrics endpoints on discovered targets
+    {
+        let scraper = PrometheusScraper::new(
+            Arc::clone(&targets),
+            Duration::from_secs(config.scrape.timeout_seconds),
+        );
+        let scraper_tx = metrics_tx.clone();
+        let scraper_cancel = cancel.child_token();
+        let scrape_interval = Duration::from_secs(config.scrape.interval_seconds);
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(scrape_interval);
+            ticker.tick().await; // skip immediate tick — let discovery populate targets first
+            loop {
+                tokio::select! {
+                    _ = scraper_cancel.cancelled() => break,
+                    _ = ticker.tick() => {
+                        match scraper.scrape().await {
+                            Ok(series) if !series.is_empty() => {
+                                if scraper_tx.send(series).await.is_err() {
+                                    break;
+                                }
+                            }
+                            Ok(_) => {}
+                            Err(e) => {
+                                tracing::warn!("prometheus scraper error: {e}");
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        tracing::info!(
+            interval_secs = config.scrape.interval_seconds,
+            "prometheus scraper enabled"
+        );
+    }
+
+    // Spawn network prober: HTTP health + TCP connectivity checks on targets
+    {
+        let prober = ProberEngine::new(
+            Arc::clone(&targets),
+            Duration::from_secs(config.probe.timeout_seconds),
+        );
+        let prober_tx = metrics_tx.clone();
+        let prober_cancel = cancel.child_token();
+        let probe_interval = Duration::from_secs(config.probe.interval_seconds);
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(probe_interval);
+            ticker.tick().await; // skip immediate tick
+            loop {
+                tokio::select! {
+                    _ = prober_cancel.cancelled() => break,
+                    _ = ticker.tick() => {
+                        match prober.probe().await {
+                            Ok(metrics) if !metrics.is_empty() => {
+                                // Convert CollectedMetric → TimeSeries for MetricStore
+                                let series = collected_to_timeseries(metrics);
+                                if !series.is_empty()
+                                    && prober_tx.send(series).await.is_err()
+                                {
+                                    break;
+                                }
+                            }
+                            Ok(_) => {}
+                            Err(e) => {
+                                tracing::warn!("network prober error: {e}");
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        tracing::info!(
+            interval_secs = config.probe.interval_seconds,
+            "network prober enabled"
+        );
+    }
+
+    // Drop the original sender so channel closes when all spawned senders finish
+    drop(metrics_tx);
 
     // Spawn diagnostic engine unless --no-analyze
     if !cli.no_analyze {
@@ -412,9 +495,7 @@ async fn main() -> anyhow::Result<()> {
             ..Default::default()
         };
         let mut engine = AnalyzeEngine::new(config);
-        if let Some(rx) = prometheus_rx {
-            engine = engine.with_prometheus_rx(rx);
-        }
+        engine = engine.with_prometheus_rx(metrics_rx);
         let (diag_tx, mut diag_rx) = mpsc::channel::<Vec<Diagnostic>>(32);
         let analyze_cancel = cancel.child_token();
         let analyze_world = Arc::clone(&world);
@@ -951,6 +1032,26 @@ fn target_from_config(tc: &TargetConfig) -> Target {
         labels: tc.labels.clone(),
         discovered_at: SystemTime::now(),
     }
+}
+
+/// Convert collected metrics (from prober/scraper) into TimeSeries for MetricStore.
+fn collected_to_timeseries(metrics: Vec<aether_core::models::CollectedMetric>) -> Vec<aether_core::TimeSeries> {
+    use std::collections::BTreeMap;
+    use std::time::Instant;
+
+    let now = Instant::now();
+    metrics
+        .into_iter()
+        .map(|m| {
+            let mut ts = aether_core::TimeSeries::new(&m.name, 3600);
+            ts.labels = m.labels.into_iter().collect::<BTreeMap<_, _>>();
+            ts.push_sample(aether_core::MetricSample {
+                timestamp: now,
+                value: m.value,
+            });
+            ts
+        })
+        .collect()
 }
 
 /// Merge discovered targets into the list, skipping duplicates by id.

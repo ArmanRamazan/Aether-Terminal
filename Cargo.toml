@@ -16,4 +16,5 @@ members = [
     "crates/aether-api",
     "crates/aether-config",
     "crates/aether-discovery",
+    "crates/aether-prober",
 ]

@@ -136,6 +136,7 @@ name = "aether-metrics"
 version = "0.1.0"
 dependencies = [
  "aether-core",
+ "async-trait",
  "axum 0.8.8",
  "glam",
  "http-body-util",
@@ -162,6 +163,18 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tract-onnx",
+]
+
+[[package]]
+name = "aether-prober"
+version = "0.1.0"
+dependencies = [
+ "aether-core",
+ "async-trait",
+ "reqwest",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -211,6 +224,7 @@ dependencies = [
  "aether-mcp",
  "aether-metrics",
  "aether-predict",
+ "aether-prober",
  "aether-render",
  "aether-script",
  "aether-web",
