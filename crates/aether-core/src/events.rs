@@ -1,11 +1,11 @@
 //! Event types for inter-crate communication via tokio channels.
 //!
-//! Three event families:
+//! Event families:
 //! - [`SystemEvent`] — OS-level process/topology changes
 //! - [`GameEvent`] — gamification state changes (HP, XP, achievements)
 //! - [`AgentAction`] — commands from AI agents via MCP
 
-use crate::models::{Diagnostic, RecommendedAction, SystemSnapshot};
+use crate::models::SystemSnapshot;
 
 /// OS-level events produced by ingestion/eBPF layers.
 #[derive(Debug, Clone)]
@@ -29,22 +29,6 @@ pub enum GameEvent {
     XpEarned { amount: u32, reason: String },
     /// An achievement was unlocked.
     AchievementUnlocked { id: String, name: String },
-}
-
-/// Diagnostic events from the analysis engine.
-#[derive(Debug, Clone)]
-pub enum DiagnosticEvent {
-    /// A new batch of diagnostics from the analyze engine.
-    DiagnosticsUpdated(Vec<Diagnostic>),
-    /// A diagnostic was resolved (issue no longer present).
-    DiagnosticResolved { id: u64 },
-    /// A diagnostic was dismissed by the user.
-    DiagnosticDismissed { id: u64 },
-    /// User or agent requested an action for a diagnostic.
-    DiagnosticActionRequested {
-        diagnostic_id: u64,
-        action: RecommendedAction,
-    },
 }
 
 /// Actions requested by AI agents through MCP.
@@ -210,93 +194,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_diagnostic_event_updated_holds_diagnostics() {
-        use crate::metrics::HostId;
-        use crate::models::{
-            DiagCategory, DiagTarget, Evidence, Recommendation, Severity, Urgency,
-        };
-        use std::time::Instant;
-
-        let diag = Diagnostic {
-            id: 1,
-            host: HostId::new("localhost"),
-            target: DiagTarget::Process {
-                pid: 42,
-                name: "nginx".to_string(),
-            },
-            severity: Severity::Warning,
-            category: DiagCategory::CpuSaturation,
-            summary: "High CPU usage".to_string(),
-            evidence: vec![Evidence {
-                metric: "cpu_percent".to_string(),
-                current: 95.0,
-                threshold: 90.0,
-                trend: None,
-                context: "CPU at 95%".to_string(),
-            }],
-            recommendation: Recommendation {
-                action: RecommendedAction::ReduceLoad {
-                    suggestion: "Consider renice".to_string(),
-                },
-                reason: "CPU consistently above threshold".to_string(),
-                urgency: Urgency::Soon,
-                auto_executable: false,
-            },
-            detected_at: Instant::now(),
-            resolved_at: None,
-        };
-
-        let event = DiagnosticEvent::DiagnosticsUpdated(vec![diag]);
-        match &event {
-            DiagnosticEvent::DiagnosticsUpdated(diags) => {
-                assert_eq!(diags.len(), 1, "should hold one diagnostic");
-                assert_eq!(diags[0].id, 1);
-                assert_eq!(diags[0].summary, "High CPU usage");
-            }
-            _ => panic!("wrong variant"),
-        }
-    }
-
-    #[test]
-    fn test_diagnostic_event_clone() {
-        let event = DiagnosticEvent::DiagnosticResolved { id: 42 };
-        let cloned = event.clone();
-        match cloned {
-            DiagnosticEvent::DiagnosticResolved { id } => assert_eq!(id, 42),
-            _ => panic!("wrong variant"),
-        }
-
-        let event2 = DiagnosticEvent::DiagnosticDismissed { id: 7 };
-        let cloned2 = event2.clone();
-        match cloned2 {
-            DiagnosticEvent::DiagnosticDismissed { id } => assert_eq!(id, 7),
-            _ => panic!("wrong variant"),
-        }
-
-        let event3 = DiagnosticEvent::DiagnosticActionRequested {
-            diagnostic_id: 10,
-            action: RecommendedAction::KillProcess {
-                pid: 5,
-                reason: "runaway process".to_string(),
-            },
-        };
-        let cloned3 = event3.clone();
-        match cloned3 {
-            DiagnosticEvent::DiagnosticActionRequested {
-                diagnostic_id,
-                action,
-            } => {
-                assert_eq!(diagnostic_id, 10);
-                match action {
-                    RecommendedAction::KillProcess { pid, reason } => {
-                        assert_eq!(pid, 5);
-                        assert_eq!(reason, "runaway process");
-                    }
-                    _ => panic!("wrong action variant"),
-                }
-            }
-            _ => panic!("wrong variant"),
-        }
-    }
 }
