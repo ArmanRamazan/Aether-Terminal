@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -6,6 +7,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use aether_analyze::engine::{AnalyzeConfig, AnalyzeEngine};
+use aether_config::AetherConfig;
 use aether_core::events::SystemEvent;
 use aether_core::models::{
     DiagCategory, DiagTarget, Diagnostic, Evidence, Recommendation, RecommendedAction, Severity,
@@ -36,6 +38,10 @@ use aether_script::runtime::{CompiledRuleSet, RuleAction};
     about = "Cinematic 3D TUI system monitor"
 )]
 struct Cli {
+    /// Path to configuration file (TOML or YAML)
+    #[arg(long, value_name = "PATH")]
+    config: Option<PathBuf>,
+
     /// Logging level (trace, debug, info, warn, error)
     #[arg(long, default_value = "info")]
     log_level: String,
@@ -125,6 +131,14 @@ async fn main() -> anyhow::Result<()> {
             .with_env_filter(env_filter)
             .init();
     }
+
+    // Load configuration file if --config provided
+    let config = if let Some(ref config_path) = cli.config {
+        tracing::info!("loading config from {}", config_path.display());
+        Arc::new(aether_config::load(config_path)?)
+    } else {
+        Arc::new(AetherConfig::default())
+    };
 
     let world = Arc::new(RwLock::new(WorldGraph::new()));
     let arbiter = Arc::new(Mutex::new(ArbiterQueue::default()));
@@ -299,9 +313,11 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!("prediction engine enabled");
     }
 
-    // Spawn Prometheus consumer if --prometheus is set (before AnalyzeEngine so we can pass rx)
+    // Spawn Prometheus consumer if --prometheus is set or config has scrape targets
+    // CLI flag --prometheus overrides config
     let prometheus_rx = if let Some(ref prom_url) = cli.prometheus {
-        let interval_secs = cli.prometheus_interval.unwrap_or(15);
+        let interval_secs = cli.prometheus_interval
+            .unwrap_or(config.scrape.interval_seconds);
         let consumer = PrometheusConsumer::new(
             prom_url,
             std::time::Duration::from_secs(interval_secs),
