@@ -4,8 +4,10 @@
 //! - [`SystemProbe`] — implemented by `aether-ingestion` (sysinfo) and `aether-ebpf`
 //! - [`Storage`] — implemented by `aether-gamification` (SQLite)
 
+use async_trait::async_trait;
+
 use crate::error::CoreError;
-use crate::models::SystemSnapshot;
+use crate::models::{CollectedMetric, Diagnostic, Severity, SystemSnapshot, Target};
 
 /// A session record for gamification persistence.
 #[derive(Debug, Clone)]
@@ -51,6 +53,43 @@ pub trait Storage: Send + Sync + 'static {
     ) -> impl std::future::Future<Output = Result<Vec<Ranking>, CoreError>> + Send;
 }
 
+// ---------------------------------------------------------------------------
+// Phase 2 adapter traits (object-safe via async_trait)
+// ---------------------------------------------------------------------------
+
+/// A source of metrics data (Prometheus scraper, prober, log parser).
+#[async_trait]
+pub trait DataSource: Send + Sync {
+    /// Collect metrics from this source.
+    async fn collect(&self) -> Result<Vec<CollectedMetric>, Box<dyn std::error::Error + Send + Sync>>;
+
+    /// Human-readable name of this data source.
+    fn name(&self) -> &str;
+}
+
+/// A destination for diagnostic alerts (Slack, Discord, file, stdout).
+#[async_trait]
+pub trait OutputSink: Send + Sync {
+    /// Send a diagnostic finding to this output.
+    async fn send(&self, diagnostic: &Diagnostic) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
+
+    /// Human-readable name of this output.
+    fn name(&self) -> &str;
+
+    /// Minimum severity this sink cares about.
+    fn min_severity(&self) -> Severity;
+}
+
+/// Discovers services and targets in the infrastructure (port scan, K8s API).
+#[async_trait]
+pub trait ServiceDiscovery: Send + Sync {
+    /// Scan for available targets.
+    async fn discover(&self) -> Result<Vec<Target>, Box<dyn std::error::Error + Send + Sync>>;
+
+    /// Human-readable name of this discovery mechanism.
+    fn name(&self) -> &str;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -82,5 +121,13 @@ mod tests {
         assert_eq!(cloned.session_id, 1);
         assert_eq!(cloned.total_xp, 500);
         assert_eq!(cloned.rank, "Silver");
+    }
+
+    /// Verify Phase 2 traits are object-safe (compile-time check).
+    #[test]
+    fn test_adapter_traits_are_object_safe() {
+        let _: Option<Box<dyn DataSource>> = None;
+        let _: Option<Box<dyn OutputSink>> = None;
+        let _: Option<Box<dyn ServiceDiscovery>> = None;
     }
 }

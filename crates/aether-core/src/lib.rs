@@ -20,7 +20,10 @@ pub use events::{AgentAction, GameEvent, IntegrationEvent, SystemEvent};
 pub use graph::WorldGraph;
 pub use metrics::{HostId, MetricSample, TimeSeries};
 pub use models::{
-    ConnectionState, DiagCategory, DiagTarget, Diagnostic, Evidence, NetworkEdge, ProcessNode,
-    ProcessState, Protocol, Recommendation, RecommendedAction, Severity, SystemSnapshot, Urgency,
+    CollectedMetric, ConnectionState, DiagCategory, DiagTarget, Diagnostic, Evidence, NetworkEdge,
+    ProcessNode, ProcessState, Protocol, Recommendation, RecommendedAction, Severity,
+    SystemSnapshot, Target, TargetKind, Urgency,
 };
-pub use traits::{GameSession, Ranking, Storage, SystemProbe};
+pub use traits::{
+    DataSource, GameSession, OutputSink, Ranking, ServiceDiscovery, Storage, SystemProbe,
+};

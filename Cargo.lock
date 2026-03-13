@@ -27,6 +27,7 @@ dependencies = [
 name = "aether-core"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "glam",
  "petgraph",
  "serde",
