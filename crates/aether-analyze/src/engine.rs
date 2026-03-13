@@ -13,6 +13,7 @@ use aether_core::models::{Diagnostic, Severity};
 use aether_core::WorldGraph;
 
 use crate::analyzers::capacity::CapacityAnalyzer;
+use crate::analyzers::correlator::{self, DiagnosticCorrelator};
 use crate::analyzers::trend::TrendAnalyzer;
 use crate::collectors::cgroup::CgroupCollector;
 use crate::collectors::procfs::ProcfsCollector;
@@ -195,7 +196,7 @@ impl AnalyzeEngine {
             .evaluate(&self.store, &self.config.host, &limits_map);
 
         // 4. Generate diagnostics from findings.
-        let new_diags: Vec<Diagnostic> = findings
+        let mut new_diags: Vec<Diagnostic> = findings
             .iter()
             .map(|f| {
                 self.generator.generate(
@@ -208,21 +209,34 @@ impl AnalyzeEngine {
             })
             .collect();
 
+        // 5. Correlate: find cross-source relationships and enrich recommendations.
+        let groups = DiagnosticCorrelator::correlate(&new_diags);
+        for group in &groups {
+            let note = correlator::correlation_note(group, &new_diags);
+            for &idx in &group.diagnostics {
+                if let Some(diag) = new_diags.get_mut(idx) {
+                    diag.recommendation.reason =
+                        format!("{}. {}", diag.recommendation.reason, note);
+                }
+            }
+        }
+
         debug!(
             findings = findings.len(),
             new_diags = new_diags.len(),
+            correlations = groups.len(),
             profiles = self.profiles.len(),
             "tick complete"
         );
 
-        // 5. Resolve: remove active diagnostics no longer present.
+        // 6. Resolve: remove active diagnostics no longer present.
         self.active_diagnostics.retain(|active| {
             new_diags
                 .iter()
                 .any(|new| same_target_category(active, new))
         });
 
-        // 6. Merge: add new diagnostics not already active, update existing.
+        // 7. Merge: add new diagnostics not already active, update existing.
         for new in new_diags {
             if let Some(existing) = self
                 .active_diagnostics
@@ -237,7 +251,7 @@ impl AnalyzeEngine {
             }
         }
 
-        // 7. Update stats.
+        // 8. Update stats.
         self.stats.evaluations += 1;
         self.stats.rules_fired += findings.len() as u64;
         self.update_severity_counts();
