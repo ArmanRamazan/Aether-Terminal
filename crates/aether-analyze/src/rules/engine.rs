@@ -9,7 +9,7 @@ use aether_core::models::DiagTarget;
 use crate::analyzers::trend::TrendAnalyzer;
 use crate::store::MetricStore;
 
-use super::types::{LimitSource, ProcessLimits, Rule, RuleCondition, RuleFinding};
+use super::types::{CounterType, LimitSource, ProcessLimits, Rule, RuleCondition, RuleFinding};
 
 /// Evaluates diagnostic rules against metric data.
 pub struct RuleEngine {
@@ -207,13 +207,20 @@ fn eval_condition(
         }
 
         RuleCondition::Count {
-            counter: _,
+            counter,
             op,
             value,
         } => {
-            // Counter evaluation requires external data not yet available.
-            // Placeholder: looks for a "counter" metric in the store.
-            let current = match last_value(ctx.store, ctx.host, ctx.pid, "counter") {
+            let metric_key = match counter {
+                CounterType::ZombieProcesses => "zombie_count",
+                CounterType::RestartCount => "restart_count",
+                CounterType::OpenFds => "open_fds",
+                CounterType::ThreadCount => "thread_count",
+                CounterType::OomKills => "oom_kills",
+                CounterType::DStateProcesses => "dstate_count",
+                CounterType::ListenQueueOverflows => "listen_queue_overflows",
+            };
+            let current = match last_value(ctx.store, ctx.host, ctx.pid, metric_key) {
                 Some(v) => v,
                 None => return false,
             };
@@ -222,7 +229,7 @@ fn eval_condition(
                 return false;
             }
 
-            matched_values.push(("counter".to_string(), current));
+            matched_values.push((metric_key.to_string(), current));
             true
         }
 
@@ -283,7 +290,7 @@ mod tests {
 
     use crate::store::MetricStore;
 
-    use super::super::types::{CompareOp, RuleCondition};
+    use super::super::types::{CompareOp, CounterType, RuleCondition};
     use super::*;
 
     fn store_push(store: &mut MetricStore, host: &HostId, pid: u32, metric: &str, value: f64) {
@@ -556,5 +563,45 @@ mod tests {
 
         let findings = engine.evaluate(&store, &host, &HashMap::new());
         assert!(findings.is_empty(), "disabled rule should not fire");
+    }
+
+    #[test]
+    fn test_count_condition_maps_counter_type() {
+        let host = HostId::new("local");
+
+        let cases: &[(CounterType, &str)] = &[
+            (CounterType::ZombieProcesses, "zombie_count"),
+            (CounterType::OpenFds, "open_fds"),
+            (CounterType::ThreadCount, "thread_count"),
+            (CounterType::RestartCount, "restart_count"),
+            (CounterType::OomKills, "oom_kills"),
+            (CounterType::DStateProcesses, "dstate_count"),
+            (CounterType::ListenQueueOverflows, "listen_queue_overflows"),
+        ];
+
+        for (counter, expected_key) in cases {
+            let store = make_store_with_metric(&host, 1, expected_key, 5.0);
+
+            let mut engine = RuleEngine::new();
+            engine.add_rule(make_rule(
+                "count_rule",
+                RuleCondition::Count {
+                    counter: counter.clone(),
+                    op: CompareOp::Gt,
+                    value: 3,
+                },
+            ));
+
+            let findings = engine.evaluate(&store, &host, &HashMap::new());
+            assert_eq!(
+                findings.len(),
+                1,
+                "{expected_key}: 5 > 3 should match"
+            );
+            assert_eq!(
+                findings[0].matched_values[0].0, *expected_key,
+                "matched key should be {expected_key}"
+            );
+        }
     }
 }
