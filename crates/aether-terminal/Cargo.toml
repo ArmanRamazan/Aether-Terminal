@@ -18,6 +18,7 @@ aether-script = { path = "../aether-script" }
 aether-web = { path = "../aether-web" }
 aether-analyze = { path = "../aether-analyze" }
 aether-metrics = { path = "../aether-metrics" }
+aether-config = { path = "../aether-config" }
 arc-swap = "1"
 clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }

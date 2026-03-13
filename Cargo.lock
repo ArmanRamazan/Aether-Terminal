@@ -189,6 +189,7 @@ name = "aether-terminal"
 version = "0.1.0"
 dependencies = [
  "aether-analyze",
+ "aether-config",
  "aether-core",
  "aether-ebpf",
  "aether-gamification",
