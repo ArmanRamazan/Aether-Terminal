@@ -4,6 +4,6 @@
 //! telemetry through a dual-tick ingestion pipeline.
 
 pub mod ebpf_bridge;
-pub mod error;
+pub(crate) mod error;
 pub mod pipeline;
 pub mod sysinfo_probe;

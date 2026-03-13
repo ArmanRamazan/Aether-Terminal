@@ -4,9 +4,9 @@
 //! Feature-gated behind `predict` — compiles as no-op without it.
 
 pub mod engine;
-pub mod error;
-pub mod features;
+pub(crate) mod error;
+pub(crate) mod features;
 #[cfg(feature = "predict")]
-pub mod inference;
+pub(crate) mod inference;
 pub mod models;
-pub mod window;
+pub(crate) mod window;
