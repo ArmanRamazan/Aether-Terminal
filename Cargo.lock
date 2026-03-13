@@ -204,6 +204,7 @@ dependencies = [
  "aether-analyze",
  "aether-config",
  "aether-core",
+ "aether-discovery",
  "aether-ebpf",
  "aether-gamification",
  "aether-ingestion",

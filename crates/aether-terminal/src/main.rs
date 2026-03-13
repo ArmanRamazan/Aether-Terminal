@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, SystemTime};
 
 use clap::Parser;
 use tokio::sync::mpsc;
@@ -8,13 +9,16 @@ use tokio_util::sync::CancellationToken;
 
 use aether_analyze::engine::{AnalyzeConfig, AnalyzeEngine};
 use aether_config::AetherConfig;
+use aether_config::types::TargetConfig;
 use aether_core::events::SystemEvent;
 use aether_core::models::{
-    DiagCategory, DiagTarget, Diagnostic, Evidence, Recommendation, RecommendedAction, Severity,
-    Urgency,
+    DiagCategory, DiagTarget, Diagnostic, Endpoint, EndpointType, Evidence, Recommendation,
+    RecommendedAction, Severity, Target, TargetKind, Urgency,
 };
 use aether_core::metrics::HostId;
+use aether_core::traits::ServiceDiscovery;
 use aether_core::{AgentAction, WorldGraph};
+use aether_discovery::DiscoveryEngine;
 use aether_ingestion::ebpf_bridge::EbpfBridge;
 use aether_ingestion::pipeline::IngestionPipeline;
 use aether_ingestion::sysinfo_probe::SysinfoProbe;
@@ -140,6 +144,40 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(AetherConfig::default())
     };
 
+    // --- Service Discovery ---
+    // Convert static config targets to core Target type
+    let mut targets: Vec<Target> = config
+        .targets
+        .iter()
+        .map(target_from_config)
+        .collect();
+
+    // Run auto-discovery if enabled
+    let discovery_engine = if config.discovery.enabled {
+        let engine = DiscoveryEngine::new(
+            "127.0.0.1".to_owned(),
+            config.discovery.scan_ports.clone(),
+            Duration::from_secs(config.discovery.interval_seconds),
+        );
+        match engine.discover().await {
+            Ok(discovered) => {
+                let new_count = merge_targets(&mut targets, discovered);
+                if new_count > 0 {
+                    tracing::info!(new_count, "auto-discovery found new targets");
+                }
+            }
+            Err(e) => {
+                tracing::warn!("initial discovery failed: {e}, continuing with config targets");
+            }
+        }
+        Some(engine)
+    } else {
+        None
+    };
+
+    let targets = Arc::new(RwLock::new(targets));
+    tracing::info!(count = targets.read().map(|t| t.len()).unwrap_or(0), "monitoring targets loaded");
+
     let world = Arc::new(RwLock::new(WorldGraph::new()));
     let arbiter = Arc::new(Mutex::new(ArbiterQueue::default()));
     let (action_tx, mut action_rx) = mpsc::channel::<AgentAction>(64);
@@ -169,6 +207,38 @@ async fn main() -> anyhow::Result<()> {
             tracing::error!("ingestion pipeline error: {e}");
         }
     });
+
+    // Spawn periodic re-discovery task
+    if let Some(engine) = discovery_engine {
+        let rediscovery_targets = Arc::clone(&targets);
+        let rediscovery_cancel = cancel.child_token();
+        let interval = engine.interval();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(interval);
+            ticker.tick().await; // skip immediate tick (already ran initial discovery)
+            loop {
+                tokio::select! {
+                    _ = rediscovery_cancel.cancelled() => break,
+                    _ = ticker.tick() => {
+                        match engine.discover().await {
+                            Ok(discovered) => {
+                                if let Ok(mut tgt) = rediscovery_targets.write() {
+                                    let new_count = merge_targets(&mut tgt, discovered);
+                                    if new_count > 0 {
+                                        tracing::info!(new_count, "re-discovery found new targets");
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!("periodic discovery failed: {e}");
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        tracing::info!(interval_secs = interval.as_secs(), "periodic re-discovery enabled");
+    }
 
     // Shared diagnostics state (populated by AnalyzeEngine + script bridge, read by TUI)
     let diagnostics: Arc<Mutex<Vec<Diagnostic>>> = Arc::new(Mutex::new(Vec::new()));
@@ -836,6 +906,65 @@ fn upsert_diagnostics(diags: &mut Vec<Diagnostic>, new_diags: impl IntoIterator<
         let excess = diags.len() - MAX_DIAGNOSTICS;
         diags.drain(..excess);
     }
+}
+
+/// Convert a config target definition into a core Target.
+fn target_from_config(tc: &TargetConfig) -> Target {
+    let kind = match tc.kind.as_deref() {
+        Some("container") => TargetKind::Container,
+        Some("pod") => TargetKind::Pod,
+        Some("process") => TargetKind::Process,
+        _ => TargetKind::Service,
+    };
+
+    let mut endpoints = Vec::new();
+    if let Some(ref url) = tc.prometheus {
+        endpoints.push(Endpoint {
+            url: url.clone(),
+            endpoint_type: EndpointType::Prometheus,
+        });
+    }
+    if let Some(ref url) = tc.health {
+        endpoints.push(Endpoint {
+            url: url.clone(),
+            endpoint_type: EndpointType::Health,
+        });
+    }
+    if let Some(ref addr) = tc.probe_tcp {
+        endpoints.push(Endpoint {
+            url: format!("tcp://{addr}"),
+            endpoint_type: EndpointType::TcpProbe,
+        });
+    }
+    if let Some(ref path) = tc.logs {
+        endpoints.push(Endpoint {
+            url: path.clone(),
+            endpoint_type: EndpointType::Logs,
+        });
+    }
+
+    Target {
+        id: format!("cfg-{}", tc.name),
+        name: tc.name.clone(),
+        kind,
+        endpoints,
+        labels: tc.labels.clone(),
+        discovered_at: SystemTime::now(),
+    }
+}
+
+/// Merge discovered targets into the list, skipping duplicates by id.
+/// Returns the number of newly added targets.
+fn merge_targets(existing: &mut Vec<Target>, discovered: Vec<Target>) -> usize {
+    let mut added = 0;
+    for target in discovered {
+        if !existing.iter().any(|t| t.id == target.id) {
+            tracing::info!(id = %target.id, name = %target.name, "discovered new target");
+            existing.push(target);
+            added += 1;
+        }
+    }
+    added
 }
 
 #[cfg(not(all(target_os = "linux", feature = "ebpf")))]
