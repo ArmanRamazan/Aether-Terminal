@@ -101,7 +101,7 @@ fn build_world_update(state: &SharedState) -> WorldUpdate {
             name: p.name.clone(),
             cpu_percent: p.cpu_percent,
             mem_bytes: p.mem_bytes,
-            state: format!("{:?}", p.state),
+            state: p.state.to_string(),
             hp: p.hp,
             xp: p.xp,
             position: p.position_3d.to_array(),
@@ -114,7 +114,7 @@ fn build_world_update(state: &SharedState) -> WorldUpdate {
         .map(|(from, to, edge)| ConnectionResponse {
             from_pid: from,
             to_pid: to,
-            protocol: format!("{:?}", edge.protocol),
+            protocol: edge.protocol.to_string(),
             bytes_per_sec: edge.bytes_per_sec,
         })
         .collect();

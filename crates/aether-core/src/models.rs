@@ -1,5 +1,6 @@
 //! Core data models for process nodes, network edges, and system snapshots.
 
+use std::fmt;
 use std::time::Instant;
 
 use glam::Vec3;
@@ -31,6 +32,17 @@ pub enum ProcessState {
     Stopped,
 }
 
+impl fmt::Display for ProcessState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Running => f.write_str("running"),
+            Self::Sleeping => f.write_str("sleeping"),
+            Self::Zombie => f.write_str("zombie"),
+            Self::Stopped => f.write_str("stopped"),
+        }
+    }
+}
+
 /// A network connection represented as an edge in the world graph.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworkEdge {
@@ -54,6 +66,20 @@ pub enum Protocol {
     Unknown,
 }
 
+impl fmt::Display for Protocol {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TCP => f.write_str("tcp"),
+            Self::UDP => f.write_str("udp"),
+            Self::DNS => f.write_str("dns"),
+            Self::QUIC => f.write_str("quic"),
+            Self::HTTP => f.write_str("http"),
+            Self::HTTPS => f.write_str("https"),
+            Self::Unknown => f.write_str("unknown"),
+        }
+    }
+}
+
 /// TCP connection state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConnectionState {
@@ -61,6 +87,17 @@ pub enum ConnectionState {
     Listen,
     TimeWait,
     CloseWait,
+}
+
+impl fmt::Display for ConnectionState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Established => f.write_str("established"),
+            Self::Listen => f.write_str("listen"),
+            Self::TimeWait => f.write_str("time_wait"),
+            Self::CloseWait => f.write_str("close_wait"),
+        }
+    }
 }
 
 /// A point-in-time snapshot of the entire system.
@@ -102,6 +139,16 @@ pub enum Severity {
     Critical,
 }
 
+impl fmt::Display for Severity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Info => f.write_str("info"),
+            Self::Warning => f.write_str("warning"),
+            Self::Critical => f.write_str("critical"),
+        }
+    }
+}
+
 /// Category describing the root cause of a diagnostic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[non_exhaustive]
@@ -121,6 +168,28 @@ pub enum DiagCategory {
     CapacityRisk,
     CorrelatedAnomaly,
     ScriptRule,
+}
+
+impl fmt::Display for DiagCategory {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MemoryLeak => f.write_str("memory_leak"),
+            Self::MemoryPressure => f.write_str("memory_pressure"),
+            Self::CpuSaturation => f.write_str("cpu_saturation"),
+            Self::CpuSpike => f.write_str("cpu_spike"),
+            Self::DiskPressure => f.write_str("disk_pressure"),
+            Self::DiskIoHeavy => f.write_str("disk_io_heavy"),
+            Self::FdExhaustion => f.write_str("fd_exhaustion"),
+            Self::ConnectionSurge => f.write_str("connection_surge"),
+            Self::ZombieAccumulation => f.write_str("zombie_accumulation"),
+            Self::ThreadExplosion => f.write_str("thread_explosion"),
+            Self::CrashLoop => f.write_str("crash_loop"),
+            Self::ConfigMismatch => f.write_str("config_mismatch"),
+            Self::CapacityRisk => f.write_str("capacity_risk"),
+            Self::CorrelatedAnomaly => f.write_str("correlated_anomaly"),
+            Self::ScriptRule => f.write_str("script_rule"),
+        }
+    }
 }
 
 /// A piece of evidence supporting a diagnostic finding.
@@ -151,6 +220,24 @@ pub enum RecommendedAction {
     NoAction { reason: String },
 }
 
+impl fmt::Display for RecommendedAction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ScaleUp { resource, from, to } => {
+                write!(f, "scale_up({resource}: {from} -> {to})")
+            }
+            Self::Restart { reason } => write!(f, "restart({reason})"),
+            Self::RaiseLimits { limit_name, from, to } => {
+                write!(f, "raise_limits({limit_name}: {from} -> {to})")
+            }
+            Self::ReduceLoad { suggestion } => write!(f, "reduce_load({suggestion})"),
+            Self::Investigate { what } => write!(f, "investigate({what})"),
+            Self::KillProcess { pid, reason } => write!(f, "kill_process(pid={pid}: {reason})"),
+            Self::NoAction { reason } => write!(f, "no_action({reason})"),
+        }
+    }
+}
+
 /// How urgently a recommendation should be acted upon.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Urgency {
@@ -162,6 +249,17 @@ pub enum Urgency {
     Planning,
     /// FYI only.
     Informational,
+}
+
+impl fmt::Display for Urgency {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Immediate => f.write_str("immediate"),
+            Self::Soon => f.write_str("soon"),
+            Self::Planning => f.write_str("planning"),
+            Self::Informational => f.write_str("informational"),
+        }
+    }
 }
 
 /// A recommendation attached to a diagnostic.
@@ -330,6 +428,52 @@ mod tests {
             let restored: ConnectionState = serde_json::from_str(&json).unwrap();
             assert_eq!(restored, state);
         }
+    }
+
+    #[test]
+    fn test_process_state_display() {
+        assert_eq!(ProcessState::Running.to_string(), "running");
+        assert_eq!(ProcessState::Sleeping.to_string(), "sleeping");
+        assert_eq!(ProcessState::Zombie.to_string(), "zombie");
+        assert_eq!(ProcessState::Stopped.to_string(), "stopped");
+    }
+
+    #[test]
+    fn test_protocol_display() {
+        assert_eq!(Protocol::TCP.to_string(), "tcp");
+        assert_eq!(Protocol::UDP.to_string(), "udp");
+        assert_eq!(Protocol::HTTPS.to_string(), "https");
+        assert_eq!(Protocol::Unknown.to_string(), "unknown");
+    }
+
+    #[test]
+    fn test_severity_display() {
+        assert_eq!(Severity::Info.to_string(), "info");
+        assert_eq!(Severity::Warning.to_string(), "warning");
+        assert_eq!(Severity::Critical.to_string(), "critical");
+    }
+
+    #[test]
+    fn test_diag_category_display() {
+        assert_eq!(DiagCategory::MemoryLeak.to_string(), "memory_leak");
+        assert_eq!(DiagCategory::CpuSpike.to_string(), "cpu_spike");
+        assert_eq!(DiagCategory::ScriptRule.to_string(), "script_rule");
+    }
+
+    #[test]
+    fn test_urgency_display() {
+        assert_eq!(Urgency::Immediate.to_string(), "immediate");
+        assert_eq!(Urgency::Soon.to_string(), "soon");
+        assert_eq!(Urgency::Planning.to_string(), "planning");
+        assert_eq!(Urgency::Informational.to_string(), "informational");
+    }
+
+    #[test]
+    fn test_recommended_action_display() {
+        let action = RecommendedAction::Restart {
+            reason: "memory leak".to_string(),
+        };
+        assert_eq!(action.to_string(), "restart(memory leak)");
     }
 
     #[test]
