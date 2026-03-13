@@ -364,4 +364,54 @@ mod tests {
         assert_eq!(pairs.len(), 1);
         assert_eq!(pairs[0], (1, 2), "edge should connect pid 1 → 2, not self-loop");
     }
+
+    #[test]
+    fn test_apply_snapshot_reconstructs_edges() {
+        let mut g = WorldGraph::new();
+
+        let edge = NetworkEdge {
+            source_pid: 1,
+            dest_pid: Some(2),
+            dest: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8080),
+            protocol: Protocol::TCP,
+            bytes_per_sec: 512,
+            state: ConnectionState::Established,
+        };
+
+        let snapshot = SystemSnapshot {
+            processes: vec![make_process(1), make_process(2)],
+            edges: vec![edge],
+            timestamp: std::time::SystemTime::now(),
+        };
+
+        g.apply_snapshot(&snapshot);
+
+        assert_eq!(g.process_count(), 2, "both processes should exist");
+        assert_eq!(g.edge_count(), 1, "one edge should be reconstructed");
+
+        let pairs = g.edge_pairs();
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(pairs[0].0, 1, "edge source should be pid 1");
+        assert_eq!(pairs[0].1, 2, "edge dest should be pid 2, not a self-loop");
+    }
+
+    #[test]
+    fn test_apply_snapshot_clears_old_edges() {
+        let mut g = WorldGraph::new();
+        g.add_process(make_process(1));
+        g.add_process(make_process(2));
+        g.add_connection(1, 2, make_edge(1));
+        assert_eq!(g.edge_count(), 1, "pre-condition: one edge exists");
+
+        let snapshot = SystemSnapshot {
+            processes: vec![make_process(1), make_process(2)],
+            edges: vec![],
+            timestamp: std::time::SystemTime::now(),
+        };
+
+        g.apply_snapshot(&snapshot);
+
+        assert_eq!(g.process_count(), 2, "processes should remain");
+        assert_eq!(g.edge_count(), 0, "old edges should be cleared");
+    }
 }
