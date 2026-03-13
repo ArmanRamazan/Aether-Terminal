@@ -434,6 +434,30 @@ async fn main() -> anyhow::Result<()> {
             Arc::clone(&arbiter),
             Arc::clone(&diagnostics),
         );
+
+        // Spawn periodic system metrics updater (memory_total, load_avg)
+        let metrics_state = web_state.clone();
+        let metrics_cancel = cancel.child_token();
+        tokio::spawn(async move {
+            use sysinfo::System;
+            let mut sys = System::new();
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+            loop {
+                tokio::select! {
+                    _ = metrics_cancel.cancelled() => break,
+                    _ = interval.tick() => {
+                        sys.refresh_memory();
+                        let memory_total = sys.total_memory();
+                        let load_avg = System::load_average();
+                        metrics_state.update_system_metrics(
+                            memory_total,
+                            [load_avg.one, load_avg.five, load_avg.fifteen],
+                        );
+                    }
+                }
+            }
+        });
+
         let web_cancel = cancel.child_token();
         tokio::spawn(async move {
             aether_web::serve(web_state, port, web_cancel).await;

@@ -68,6 +68,22 @@ impl Default for MetricStore {
     }
 }
 
+/// System-level metrics not tied to individual processes.
+#[derive(Debug, Clone, Copy)]
+pub struct SystemMetrics {
+    pub memory_total_bytes: u64,
+    pub load_avg: [f64; 3],
+}
+
+impl Default for SystemMetrics {
+    fn default() -> Self {
+        Self {
+            memory_total_bytes: 0,
+            load_avg: [0.0; 3],
+        }
+    }
+}
+
 /// Shared application state passed to axum handlers.
 ///
 /// All fields are `Arc`-wrapped, so cloning is cheap.
@@ -77,6 +93,7 @@ pub struct SharedState {
     pub(crate) arbiter: Arc<Mutex<ArbiterQueue>>,
     pub(crate) diagnostics: Arc<Mutex<Vec<Diagnostic>>>,
     pub(crate) metrics: Arc<Mutex<MetricStore>>,
+    pub(crate) system_metrics: Arc<RwLock<SystemMetrics>>,
 }
 
 impl SharedState {
@@ -91,6 +108,15 @@ impl SharedState {
             arbiter,
             diagnostics,
             metrics: Arc::new(Mutex::new(MetricStore::default())),
+            system_metrics: Arc::new(RwLock::new(SystemMetrics::default())),
+        }
+    }
+
+    /// Update system-level metrics (memory total, load average).
+    pub fn update_system_metrics(&self, memory_total_bytes: u64, load_avg: [f64; 3]) {
+        if let Ok(mut m) = self.system_metrics.write() {
+            m.memory_total_bytes = memory_total_bytes;
+            m.load_avg = load_avg;
         }
     }
 }
@@ -120,6 +146,10 @@ mod tests {
         assert!(
             Arc::ptr_eq(&state.metrics, &cloned.metrics),
             "clone shares same metrics Arc"
+        );
+        assert!(
+            Arc::ptr_eq(&state.system_metrics, &cloned.system_metrics),
+            "clone shares same system_metrics Arc"
         );
     }
 

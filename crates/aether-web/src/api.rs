@@ -399,11 +399,16 @@ pub async fn get_metrics_summary(State(state): State<SharedState>) -> Json<Metri
     let diag_stats = compute_diagnostic_stats(&diags);
     drop(diags);
 
+    let sys = state.system_metrics.read().expect("system_metrics lock poisoned");
+    let memory_total_bytes = sys.memory_total_bytes;
+    let load_avg = sys.load_avg;
+    drop(sys);
+
     Json(MetricsSummaryResponse {
         cpu_percent: total_cpu,
         memory_used_bytes: total_memory,
-        memory_total_bytes: 0,
-        load_avg: [0.0; 3],
+        memory_total_bytes,
+        load_avg,
         diagnostics_active: DiagnosticsActive {
             critical: diag_stats.critical,
             warning: diag_stats.warning,
@@ -834,6 +839,40 @@ mod tests {
         assert_eq!(json["warning"], 1);
         assert_eq!(json["info"], 1);
         assert_eq!(json["total"], 4);
+    }
+
+    #[tokio::test]
+    async fn test_metrics_summary_returns_system_metrics() {
+        let state = test_state();
+        {
+            let mut world = state.world.write().unwrap();
+            world.add_process(make_process(1, 25.0, 1024, 100.0));
+        }
+        state.update_system_metrics(16_000_000_000, [1.5, 1.2, 0.9]);
+
+        let app = router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/metrics/summary")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["memory_total_bytes"], 16_000_000_000u64);
+        assert_eq!(json["load_avg"][0], 1.5);
+        assert_eq!(json["load_avg"][1], 1.2);
+        assert_eq!(json["load_avg"][2], 0.9);
+        assert_eq!(json["process_count"], 1);
+        assert!(json["memory_used_bytes"].as_u64().unwrap() > 0);
     }
 
     #[tokio::test]

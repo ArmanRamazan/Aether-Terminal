@@ -178,6 +178,7 @@ dependencies = [
  "crossterm",
  "open",
  "ratatui",
+ "sysinfo",
  "tokio",
  "tokio-util",
  "tracing",
