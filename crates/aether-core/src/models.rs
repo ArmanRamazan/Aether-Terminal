@@ -1,7 +1,8 @@
 //! Core data models for process nodes, network edges, and system snapshots.
 
+use std::collections::HashMap;
 use std::fmt;
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 
 use glam::Vec3;
 use serde::{Deserialize, Serialize};
@@ -298,6 +299,53 @@ pub struct Diagnostic {
     pub detected_at: Instant,
     /// When it was resolved, if ever.
     pub resolved_at: Option<Instant>,
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2 adapter types
+// ---------------------------------------------------------------------------
+
+/// A metric sample collected from an external data source.
+///
+/// Distinct from [`crate::metrics::MetricSample`] which is an internal
+/// time-series observation (value + Instant). This type carries full
+/// metadata for samples arriving from Prometheus scrapers, probers, etc.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CollectedMetric {
+    pub name: String,
+    pub value: f64,
+    pub labels: HashMap<String, String>,
+    pub timestamp: SystemTime,
+}
+
+/// An infrastructure target discovered by service discovery.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Target {
+    pub name: String,
+    pub kind: TargetKind,
+    pub endpoints: Vec<String>,
+    pub labels: HashMap<String, String>,
+}
+
+/// Classification of a discovered target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum TargetKind {
+    Process,
+    Service,
+    Container,
+    Pod,
+}
+
+impl fmt::Display for TargetKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Process => f.write_str("process"),
+            Self::Service => f.write_str("service"),
+            Self::Container => f.write_str("container"),
+            Self::Pod => f.write_str("pod"),
+        }
+    }
 }
 
 #[cfg(test)]
