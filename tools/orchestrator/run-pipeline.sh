@@ -72,7 +72,7 @@ for arg in "$@"; do
   case "$arg" in
     --auto) AUTO=true ;;
     --dry-run|--skip-verify) FLAGS+=("$arg"); ORCH_FLAGS+=("$arg") ;;
-    --ms[0-9]|--ms[0-9][0-9]) MILESTONES+=("$arg") ;;
+    --ms[0-9]|--ms[0-9][0-9]|--p[0-9]|--p[0-9][0-9]) MILESTONES+=("$arg") ;;
     *) FILES+=("$arg") ;;
   esac
 done
@@ -99,6 +99,7 @@ if [[ ${#FILES[@]} -eq 0 ]]; then
   echo "  --dry-run        Preview without executing"
   echo "  --skip-verify    Skip VERIFY phase"
   echo "  --msN            Expand to all tasks/msN-*.yaml (e.g. --ms2 --ms3)"
+  echo "  --pN             Expand to all tasks/pN-*.yaml (e.g. --p0 --p1)"
   echo ""
   echo "Stop a running pipeline:"
   echo "  $0 --stop                           # from another terminal"
@@ -106,6 +107,7 @@ if [[ ${#FILES[@]} -eq 0 ]]; then
   echo "  Ctrl+C                               # from same terminal"
   echo ""
   echo "Examples:"
+  echo "  $0 --auto --p0 --p1 --p2             # all Phase 0 + 1 + 2 sprints"
   echo "  $0 --auto --ms2 --ms3               # all MS2 + MS3 sprints"
   echo "  $0 --auto tasks/ms2-*.yaml          # same with glob"
   echo "  $0 --dry-run --ms2                   # preview MS2"
