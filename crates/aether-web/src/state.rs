@@ -1,5 +1,7 @@
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard};
+
+use axum::http::StatusCode;
 
 use aether_core::models::Diagnostic;
 use aether_core::{ArbiterQueue, WorldGraph};
@@ -110,6 +112,43 @@ impl SharedState {
             metrics: Arc::new(Mutex::new(MetricStore::default())),
             system_metrics: Arc::new(RwLock::new(SystemMetrics::default())),
         }
+    }
+
+    /// Acquire a read lock on the world graph, returning HTTP 500 on poison.
+    pub(crate) fn read_world(&self) -> Result<RwLockReadGuard<'_, WorldGraph>, StatusCode> {
+        self.world
+            .read()
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+    }
+
+    /// Lock the arbiter queue, returning HTTP 500 on poison.
+    pub(crate) fn lock_arbiter(&self) -> Result<MutexGuard<'_, ArbiterQueue>, StatusCode> {
+        self.arbiter
+            .lock()
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+    }
+
+    /// Lock the diagnostics list, returning HTTP 500 on poison.
+    pub(crate) fn lock_diagnostics(&self) -> Result<MutexGuard<'_, Vec<Diagnostic>>, StatusCode> {
+        self.diagnostics
+            .lock()
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+    }
+
+    /// Lock the metric store, returning HTTP 500 on poison.
+    pub(crate) fn lock_metrics(&self) -> Result<MutexGuard<'_, MetricStore>, StatusCode> {
+        self.metrics
+            .lock()
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+    }
+
+    /// Acquire a read lock on system metrics, returning HTTP 500 on poison.
+    pub(crate) fn read_system_metrics(
+        &self,
+    ) -> Result<RwLockReadGuard<'_, SystemMetrics>, StatusCode> {
+        self.system_metrics
+            .read()
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
     }
 
     /// Update system-level metrics (memory total, load average).
