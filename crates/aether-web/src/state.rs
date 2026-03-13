@@ -1,10 +1,10 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard};
 
-use axum::http::StatusCode;
-
 use aether_core::models::Diagnostic;
 use aether_core::{ArbiterQueue, WorldGraph};
+
+use crate::error::WebError;
 
 /// A single time-stamped metric observation for the web API.
 #[derive(Debug, Clone, Copy)]
@@ -114,41 +114,31 @@ impl SharedState {
         }
     }
 
-    /// Acquire a read lock on the world graph, returning HTTP 500 on poison.
-    pub(crate) fn read_world(&self) -> Result<RwLockReadGuard<'_, WorldGraph>, StatusCode> {
-        self.world
-            .read()
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+    /// Acquire a read lock on the world graph.
+    pub(crate) fn read_world(&self) -> Result<RwLockReadGuard<'_, WorldGraph>, WebError> {
+        self.world.read().map_err(|_| WebError::Internal)
     }
 
-    /// Lock the arbiter queue, returning HTTP 500 on poison.
-    pub(crate) fn lock_arbiter(&self) -> Result<MutexGuard<'_, ArbiterQueue>, StatusCode> {
-        self.arbiter
-            .lock()
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+    /// Lock the arbiter queue.
+    pub(crate) fn lock_arbiter(&self) -> Result<MutexGuard<'_, ArbiterQueue>, WebError> {
+        self.arbiter.lock().map_err(|_| WebError::Internal)
     }
 
-    /// Lock the diagnostics list, returning HTTP 500 on poison.
-    pub(crate) fn lock_diagnostics(&self) -> Result<MutexGuard<'_, Vec<Diagnostic>>, StatusCode> {
-        self.diagnostics
-            .lock()
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+    /// Lock the diagnostics list.
+    pub(crate) fn lock_diagnostics(&self) -> Result<MutexGuard<'_, Vec<Diagnostic>>, WebError> {
+        self.diagnostics.lock().map_err(|_| WebError::Internal)
     }
 
-    /// Lock the metric store, returning HTTP 500 on poison.
-    pub(crate) fn lock_metrics(&self) -> Result<MutexGuard<'_, MetricStore>, StatusCode> {
-        self.metrics
-            .lock()
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+    /// Lock the metric store.
+    pub(crate) fn lock_metrics(&self) -> Result<MutexGuard<'_, MetricStore>, WebError> {
+        self.metrics.lock().map_err(|_| WebError::Internal)
     }
 
-    /// Acquire a read lock on system metrics, returning HTTP 500 on poison.
+    /// Acquire a read lock on system metrics.
     pub(crate) fn read_system_metrics(
         &self,
-    ) -> Result<RwLockReadGuard<'_, SystemMetrics>, StatusCode> {
-        self.system_metrics
-            .read()
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+    ) -> Result<RwLockReadGuard<'_, SystemMetrics>, WebError> {
+        self.system_metrics.read().map_err(|_| WebError::Internal)
     }
 
     /// Update system-level metrics (memory total, load average).

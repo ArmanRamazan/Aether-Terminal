@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use aether_core::models::Diagnostic;
 use aether_core::AgentAction;
 
+use crate::error::WebError;
 use crate::state::SharedState;
 
 // ── Response structs ──────────────────────────────────────────────────
@@ -167,7 +168,7 @@ pub struct MetricsHistoryResponse {
 /// GET /api/processes — all processes as JSON array.
 pub async fn list_processes(
     State(state): State<SharedState>,
-) -> Result<Json<Vec<ProcessResponse>>, StatusCode> {
+) -> Result<Json<Vec<ProcessResponse>>, WebError> {
     let world = state.read_world()?;
     let processes = world.processes().map(process_to_response).collect();
     Ok(Json(processes))
@@ -177,10 +178,12 @@ pub async fn list_processes(
 pub async fn get_process(
     State(state): State<SharedState>,
     Path(pid): Path<u32>,
-) -> Result<Json<ProcessDetailResponse>, StatusCode> {
+) -> Result<Json<ProcessDetailResponse>, WebError> {
     let world = state.read_world()?;
 
-    let node = world.find_by_pid(pid).ok_or(StatusCode::NOT_FOUND)?;
+    let node = world
+        .find_by_pid(pid)
+        .ok_or_else(|| WebError::NotFound(format!("process {pid}")))?;
     let process = process_to_response(node);
 
     let connections = world
@@ -204,7 +207,7 @@ pub async fn get_process(
 /// GET /api/connections — all edges as JSON array.
 pub async fn list_connections(
     State(state): State<SharedState>,
-) -> Result<Json<Vec<ConnectionResponse>>, StatusCode> {
+) -> Result<Json<Vec<ConnectionResponse>>, WebError> {
     let world = state.read_world()?;
     let connections = world
         .edge_pairs_with_data()
@@ -222,7 +225,7 @@ pub async fn list_connections(
 /// GET /api/stats — aggregate system statistics.
 pub async fn get_stats(
     State(state): State<SharedState>,
-) -> Result<Json<StatsResponse>, StatusCode> {
+) -> Result<Json<StatsResponse>, WebError> {
     let world = state.read_world()?;
     let count = world.process_count();
 
@@ -250,7 +253,7 @@ pub async fn get_stats(
 /// GET /api/arbiter/pending — pending arbiter actions.
 pub async fn list_pending_actions(
     State(state): State<SharedState>,
-) -> Result<Json<Vec<ArbiterActionResponse>>, StatusCode> {
+) -> Result<Json<Vec<ArbiterActionResponse>>, WebError> {
     let arbiter = state.lock_arbiter()?;
     let actions = arbiter
         .pending()
@@ -269,24 +272,24 @@ pub async fn list_pending_actions(
 pub async fn approve_action(
     State(state): State<SharedState>,
     Path(id): Path<String>,
-) -> Result<StatusCode, StatusCode> {
+) -> Result<StatusCode, WebError> {
     let mut arbiter = state.lock_arbiter()?;
-    match arbiter.approve(&id) {
-        Ok(_) => Ok(StatusCode::OK),
-        Err(_) => Ok(StatusCode::NOT_FOUND),
-    }
+    arbiter
+        .approve(&id)
+        .map(|_| StatusCode::OK)
+        .map_err(|_| WebError::NotFound(format!("action {id}")))
 }
 
 /// POST /api/arbiter/:id/deny — deny a pending action.
 pub async fn deny_action(
     State(state): State<SharedState>,
     Path(id): Path<String>,
-) -> Result<StatusCode, StatusCode> {
+) -> Result<StatusCode, WebError> {
     let mut arbiter = state.lock_arbiter()?;
-    match arbiter.deny(&id) {
-        Ok(_) => Ok(StatusCode::OK),
-        Err(_) => Ok(StatusCode::NOT_FOUND),
-    }
+    arbiter
+        .deny(&id)
+        .map(|_| StatusCode::OK)
+        .map_err(|_| WebError::NotFound(format!("action {id}")))
 }
 
 // ── Diagnostic Handlers ──────────────────────────────────────────────
@@ -295,7 +298,7 @@ pub async fn deny_action(
 pub async fn list_diagnostics(
     State(state): State<SharedState>,
     Query(filter): Query<DiagnosticFilter>,
-) -> Result<Json<Vec<DiagnosticResponse>>, StatusCode> {
+) -> Result<Json<Vec<DiagnosticResponse>>, WebError> {
     let diags = state.lock_diagnostics()?;
     let results = diags
         .iter()
@@ -320,7 +323,7 @@ pub async fn list_diagnostics(
 /// GET /api/diagnostics/stats — severity counts.
 pub async fn get_diagnostic_stats(
     State(state): State<SharedState>,
-) -> Result<Json<DiagnosticStatsResponse>, StatusCode> {
+) -> Result<Json<DiagnosticStatsResponse>, WebError> {
     let diags = state.lock_diagnostics()?;
     Ok(Json(compute_diagnostic_stats(&diags)))
 }
@@ -329,9 +332,12 @@ pub async fn get_diagnostic_stats(
 pub async fn get_diagnostic(
     State(state): State<SharedState>,
     Path(id): Path<u64>,
-) -> Result<Json<DiagnosticResponse>, StatusCode> {
+) -> Result<Json<DiagnosticResponse>, WebError> {
     let diags = state.lock_diagnostics()?;
-    let diag = diags.iter().find(|d| d.id == id).ok_or(StatusCode::NOT_FOUND)?;
+    let diag = diags
+        .iter()
+        .find(|d| d.id == id)
+        .ok_or_else(|| WebError::NotFound(format!("diagnostic {id}")))?;
     Ok(Json(diagnostic_to_response(diag)))
 }
 
@@ -339,14 +345,14 @@ pub async fn get_diagnostic(
 pub async fn dismiss_diagnostic(
     State(state): State<SharedState>,
     Path(id): Path<u64>,
-) -> Result<StatusCode, StatusCode> {
+) -> Result<StatusCode, WebError> {
     let mut diags = state.lock_diagnostics()?;
     let before = diags.len();
     diags.retain(|d| d.id != id);
     if diags.len() < before {
         Ok(StatusCode::OK)
     } else {
-        Ok(StatusCode::NOT_FOUND)
+        Err(WebError::NotFound(format!("diagnostic {id}")))
     }
 }
 
@@ -354,17 +360,15 @@ pub async fn dismiss_diagnostic(
 pub async fn execute_diagnostic(
     State(state): State<SharedState>,
     Path(id): Path<u64>,
-) -> Result<StatusCode, StatusCode> {
+) -> Result<StatusCode, WebError> {
     let diags = state.lock_diagnostics()?;
-    let diag = match diags.iter().find(|d| d.id == id) {
-        Some(d) => d,
-        None => return Ok(StatusCode::NOT_FOUND),
-    };
+    let diag = diags
+        .iter()
+        .find(|d| d.id == id)
+        .ok_or_else(|| WebError::NotFound(format!("diagnostic {id}")))?;
 
-    let agent_action = recommended_to_agent_action(&diag.recommendation.action);
-    let Some(action) = agent_action else {
-        return Ok(StatusCode::UNPROCESSABLE_ENTITY);
-    };
+    let action = recommended_to_agent_action(&diag.recommendation.action)
+        .ok_or_else(|| WebError::BadRequest(format!("diagnostic {id} has no executable action")))?;
 
     drop(diags);
     let mut arbiter = state.lock_arbiter()?;
@@ -377,7 +381,7 @@ pub async fn execute_diagnostic(
 /// GET /api/metrics/summary — current metric values.
 pub async fn get_metrics_summary(
     State(state): State<SharedState>,
-) -> Result<Json<MetricsSummaryResponse>, StatusCode> {
+) -> Result<Json<MetricsSummaryResponse>, WebError> {
     let world = state.read_world()?;
 
     let count = world.process_count();
@@ -429,7 +433,7 @@ pub async fn get_metrics_summary(
 pub async fn get_metrics_history(
     State(state): State<SharedState>,
     Query(query): Query<MetricsHistoryQuery>,
-) -> Result<Json<MetricsHistoryResponse>, StatusCode> {
+) -> Result<Json<MetricsHistoryResponse>, WebError> {
     let store = state.lock_metrics()?;
     let samples = store
         .history(&query.metric, query.duration)
