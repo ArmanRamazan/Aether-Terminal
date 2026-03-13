@@ -8,6 +8,7 @@ Uses tonic (pure-Rust gRPC) and prost (protobuf codegen).
 ## Modules
 - `proto/aether.proto` — Protobuf service and message definitions
 - `build.rs` — tonic-build codegen for proto
+- `convert.rs` — From impls: core types ↔ proto types (Diagnostic, Target, IntegrationEvent)
 - `server.rs` — AetherGrpcServer implementing AetherService trait
 - `error.rs` — ApiError enum
 - `lib.rs` — re-exports, proto module inclusion
