@@ -1,0 +1,12 @@
+[package]
+name = "aether-config"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+aether-core = { path = "../aether-core" }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+serde_yaml = "0.9"
+thiserror = "2"
+regex = "1"
