@@ -67,3 +67,105 @@ impl OutputSink for FileSink {
         self.min_severity
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aether_core::metrics::HostId;
+    use aether_core::models::{
+        DiagCategory, DiagTarget, Evidence, Recommendation, RecommendedAction, Urgency,
+    };
+    use std::time::Instant;
+
+    fn make_diag(id: u64) -> Diagnostic {
+        Diagnostic {
+            id,
+            host: HostId::new("node-1"),
+            target: DiagTarget::Process {
+                pid: 100,
+                name: "api-server".into(),
+            },
+            severity: Severity::Critical,
+            category: DiagCategory::ThroughputDrop,
+            summary: "throughput dropped 45%".into(),
+            evidence: vec![Evidence {
+                metric: "req/s".into(),
+                current: 55.0,
+                threshold: 100.0,
+                trend: Some(-0.45),
+                context: "last 5 minutes".into(),
+            }],
+            recommendation: Recommendation {
+                action: RecommendedAction::NoAction {
+                    reason: "investigate".into(),
+                },
+                reason: "investigate root cause".into(),
+                urgency: Urgency::Immediate,
+                auto_executable: false,
+            },
+            detected_at: Instant::now(),
+            resolved_at: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_file_append() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let path = dir.path().join("output.jsonl");
+
+        let sink = FileSink::new(path.clone(), 1, Severity::Info);
+
+        sink.send(&make_diag(1)).await.expect("first write");
+        sink.send(&make_diag(2)).await.expect("second write");
+
+        let content = tokio::fs::read_to_string(&path).await.expect("read file");
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 2, "should have two JSON lines");
+
+        // Verify each line is valid JSON
+        for (i, line) in lines.iter().enumerate() {
+            let parsed: serde_json::Value =
+                serde_json::from_str(line).expect("each line should be valid JSON");
+            assert_eq!(parsed["id"], (i + 1) as u64, "id should match");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_file_rotation() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let path = dir.path().join("output.jsonl");
+        let rotated = dir.path().join("output.1");
+
+        // Use raw bytes constructor to set a very small max size
+        let sink = FileSink {
+            path: path.clone(),
+            max_size_bytes: 50, // very small to trigger rotation
+            min_severity: Severity::Info,
+        };
+
+        // First write — creates file
+        sink.send(&make_diag(1)).await.expect("first write");
+        assert!(path.exists(), "output file should exist");
+
+        // File should be larger than 50 bytes (a JSON line is ~300+ bytes)
+        let meta = tokio::fs::metadata(&path).await.expect("metadata");
+        assert!(meta.len() > 50, "file should exceed max_size_bytes");
+
+        // Second write — should trigger rotation then append
+        sink.send(&make_diag(2)).await.expect("second write");
+        assert!(rotated.exists(), "rotated file (.1) should exist");
+        assert!(path.exists(), "new output file should exist after rotation");
+
+        // Rotated file has the first entry
+        let old = tokio::fs::read_to_string(&rotated).await.expect("read rotated");
+        let parsed: serde_json::Value =
+            serde_json::from_str(old.trim()).expect("rotated content should be valid JSON");
+        assert_eq!(parsed["id"], 1);
+
+        // New file has the second entry
+        let new = tokio::fs::read_to_string(&path).await.expect("read new");
+        let parsed: serde_json::Value =
+            serde_json::from_str(new.trim()).expect("new file content should be valid JSON");
+        assert_eq!(parsed["id"], 2);
+    }
+}
