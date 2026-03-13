@@ -17,4 +17,5 @@ members = [
     "crates/aether-config",
     "crates/aether-discovery",
     "crates/aether-prober",
+    "crates/aether-output",
 ]
