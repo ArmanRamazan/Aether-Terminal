@@ -8,10 +8,10 @@ use aether_core::metrics::{HostId, MetricSample, TimeSeries};
 
 /// Composite key for looking up a specific metric series.
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
-pub struct MetricKey {
-    pub host: HostId,
-    pub pid: Option<u32>,
-    pub metric: String,
+pub(crate) struct MetricKey {
+    pub(crate) host: HostId,
+    pub(crate) pid: Option<u32>,
+    pub(crate) metric: String,
 }
 
 /// Bounded in-memory store for time-series metrics, indexed by host/pid/metric name.
