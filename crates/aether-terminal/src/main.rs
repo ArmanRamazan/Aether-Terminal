@@ -16,7 +16,7 @@ use aether_core::{AgentAction, WorldGraph};
 use aether_ingestion::ebpf_bridge::EbpfBridge;
 use aether_ingestion::pipeline::IngestionPipeline;
 use aether_ingestion::sysinfo_probe::SysinfoProbe;
-use aether_mcp::arbiter::ArbiterQueue;
+use aether_core::ArbiterQueue;
 use aether_mcp::McpServer;
 use aether_predict::engine::{PredictConfig, PredictEngine};
 use aether_predict::models::PredictedAnomaly;
@@ -431,7 +431,7 @@ async fn main() -> anyhow::Result<()> {
     if let Some(port) = cli.web {
         let web_state = aether_web::SharedState::new(
             Arc::clone(&world),
-            Arc::new(Mutex::new(aether_core::ArbiterQueue::default())),
+            Arc::clone(&arbiter),
             Arc::clone(&diagnostics),
         );
         let web_cancel = cancel.child_token();

@@ -23,7 +23,7 @@ use aether_core::models::Diagnostic;
 use aether_core::{AgentAction, WorldGraph};
 use aether_predict::models::PredictedAnomaly;
 
-use crate::arbiter::ArbiterQueue;
+use aether_core::ArbiterQueue;
 
 use crate::McpError;
 

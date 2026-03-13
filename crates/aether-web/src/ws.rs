@@ -177,26 +177,18 @@ fn handle_client_message(msg: ClientMessage, state: &SharedState) {
             tracing::debug!("client selected process {pid}");
         }
         ClientMessage::ArbiterAction { action, action_id } => {
-            let id: usize = match action_id.parse() {
-                Ok(id) => id,
-                Err(_) => {
-                    tracing::warn!("invalid action_id: {action_id}");
-                    return;
-                }
-            };
             let mut arbiter = state.arbiter.lock().expect("arbiter lock poisoned");
             let result = match action.as_str() {
-                "approve" => arbiter.approve(id),
-                "deny" => arbiter.deny(id),
+                "approve" => arbiter.approve(&action_id).map(|_| ()),
+                "deny" => arbiter.deny(&action_id),
                 other => {
                     tracing::warn!("unknown arbiter action: {other}");
                     return;
                 }
             };
-            if result {
-                tracing::info!("arbiter action {action} on {action_id} succeeded");
-            } else {
-                tracing::warn!("arbiter action {action} on {action_id}: not found");
+            match result {
+                Ok(()) => tracing::info!("arbiter action {action} on {action_id} succeeded"),
+                Err(e) => tracing::warn!("arbiter action {action} on {action_id}: {e}"),
             }
         }
     }
