@@ -13,6 +13,8 @@ use aether_core::{MetricSample, TimeSeries};
 
 use crate::error::MetricsError;
 
+use super::parser::{parse_prometheus_text, ScrapedSample};
+
 /// Scrapes Prometheus text exposition endpoints from discovered targets.
 ///
 /// Unlike [`PrometheusConsumer`](crate::consumer::PrometheusConsumer) which
@@ -98,7 +100,7 @@ impl PrometheusScraper {
             .await
             .map_err(|e| MetricsError::Http(format!("{url}: body read failed: {e}")))?;
 
-        Ok(parse_text_exposition(&body, target_id))
+        Ok(samples_to_timeseries(&body, target_id))
     }
 }
 
@@ -129,89 +131,28 @@ impl DataSource for PrometheusScraper {
     }
 }
 
-/// Parse Prometheus text exposition format into TimeSeries.
-///
-/// Handles lines like:
-/// ```text
-/// metric_name{label1="val1",label2="val2"} 123.45
-/// metric_name 42
-/// ```
-/// Ignores `# HELP` and `# TYPE` comment lines.
-fn parse_text_exposition(body: &str, target_id: &str) -> Vec<TimeSeries> {
+/// Convert parsed Prometheus samples into TimeSeries for MetricStore.
+fn samples_to_timeseries(body: &str, target_id: &str) -> Vec<TimeSeries> {
     let now = Instant::now();
-    let mut result = Vec::new();
+    let samples = parse_prometheus_text(body);
 
-    for line in body.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-
-        if let Some((name, labels, value)) = parse_metric_line(line) {
-            let mut ts = TimeSeries::new(&name, 3600);
-            let mut label_map: BTreeMap<String, String> = labels.into_iter().collect();
-            label_map.insert("target".to_owned(), target_id.to_owned());
-            ts.labels = label_map;
-            ts.push_sample(MetricSample {
-                timestamp: now,
-                value,
-            });
-            result.push(ts);
-        }
-    }
-
-    result
+    samples
+        .into_iter()
+        .map(|s| to_timeseries(s, target_id, now))
+        .collect()
 }
 
-/// Parsed components of a single Prometheus metric line.
-type ParsedMetric = (String, Vec<(String, String)>, f64);
-
-/// Parse a single Prometheus metric line.
-/// Returns (metric_name, labels, value) or None if unparseable.
-fn parse_metric_line(line: &str) -> Option<ParsedMetric> {
-    // Split into metric part and value
-    // Format: metric_name{labels} value [timestamp]
-    // or:     metric_name value [timestamp]
-
-    let (metric_part, rest) = if let Some(brace_start) = line.find('{') {
-        let brace_end = line.find('}')?;
-        let metric_name = line[..brace_start].to_owned();
-        let labels_str = &line[brace_start + 1..brace_end];
-        let labels = parse_labels(labels_str);
-        let rest = line[brace_end + 1..].trim();
-        ((metric_name, labels), rest)
-    } else {
-        // No labels
-        let mut parts = line.splitn(2, char::is_whitespace);
-        let name = parts.next()?.to_owned();
-        let rest = parts.next()?.trim();
-        ((name, Vec::new()), rest)
-    };
-
-    // Parse value (first token, ignore optional timestamp)
-    let value_str = rest.split_whitespace().next()?;
-    let value = value_str.parse::<f64>().ok()?;
-
-    Some((metric_part.0, metric_part.1, value))
-}
-
-/// Parse label pairs from inside braces: `key1="val1",key2="val2"`.
-fn parse_labels(s: &str) -> Vec<(String, String)> {
-    let mut labels = Vec::new();
-    for pair in s.split(',') {
-        let pair = pair.trim();
-        if let Some(eq_pos) = pair.find('=') {
-            let key = pair[..eq_pos].trim().to_owned();
-            let val = pair[eq_pos + 1..]
-                .trim()
-                .trim_matches('"')
-                .to_owned();
-            if !key.is_empty() {
-                labels.push((key, val));
-            }
-        }
-    }
-    labels
+/// Convert a single scraped sample into a TimeSeries.
+fn to_timeseries(sample: ScrapedSample, target_id: &str, now: Instant) -> TimeSeries {
+    let mut ts = TimeSeries::new(&sample.name, 3600);
+    let mut labels: BTreeMap<String, String> = sample.labels;
+    labels.insert("target".to_owned(), target_id.to_owned());
+    ts.labels = labels;
+    ts.push_sample(MetricSample {
+        timestamp: now,
+        value: sample.value,
+    });
+    ts
 }
 
 #[cfg(test)]
@@ -219,62 +160,61 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_metric_line_with_labels() {
-        let line = r#"http_requests_total{method="GET",status="200"} 1234"#;
-        let (name, labels, value) = parse_metric_line(line).expect("should parse");
-        assert_eq!(name, "http_requests_total");
-        assert_eq!(labels.len(), 2);
-        assert_eq!(labels[0], ("method".into(), "GET".into()));
-        assert_eq!(labels[1], ("status".into(), "200".into()));
-        assert!((value - 1234.0).abs() < f64::EPSILON);
+    fn test_scraper_construction() {
+        let targets = Arc::new(RwLock::new(Vec::new()));
+        let scraper = PrometheusScraper::new(targets, Duration::from_secs(5));
+        assert_eq!(scraper.name(), "prometheus-scraper");
     }
 
     #[test]
-    fn test_parse_metric_line_without_labels() {
-        let line = "go_goroutines 42";
-        let (name, labels, value) = parse_metric_line(line).expect("should parse");
-        assert_eq!(name, "go_goroutines");
-        assert!(labels.is_empty());
-        assert!((value - 42.0).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn test_parse_metric_line_with_timestamp() {
-        let line = "process_cpu_seconds_total 0.5 1625847621000";
-        let (name, _, value) = parse_metric_line(line).expect("should parse");
-        assert_eq!(name, "process_cpu_seconds_total");
-        assert!((value - 0.5).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn test_parse_text_exposition() {
-        let body = r#"
-# HELP http_requests_total Total requests
-# TYPE http_requests_total counter
-http_requests_total{method="GET"} 100
-http_requests_total{method="POST"} 50
-go_goroutines 42
-"#;
-        let series = parse_text_exposition(body, "target-1");
-        assert_eq!(series.len(), 3);
+    fn test_samples_to_timeseries_with_labels() {
+        let body = r#"http_requests_total{method="GET",status="200"} 1234"#;
+        let series = samples_to_timeseries(body, "target-1");
+        assert_eq!(series.len(), 1);
         assert_eq!(series[0].name, "http_requests_total");
         assert_eq!(
             series[0].labels.get("target"),
             Some(&"target-1".to_owned())
         );
+        assert_eq!(
+            series[0].labels.get("method"),
+            Some(&"GET".to_owned())
+        );
+    }
+
+    #[test]
+    fn test_samples_to_timeseries_multiline() {
+        let body = "\
+# HELP http_requests_total Total requests
+# TYPE http_requests_total counter
+http_requests_total{method=\"GET\"} 100
+http_requests_total{method=\"POST\"} 50
+go_goroutines 42
+";
+        let series = samples_to_timeseries(body, "target-1");
+        assert_eq!(series.len(), 3);
+        assert_eq!(series[0].name, "http_requests_total");
         assert_eq!(series[2].name, "go_goroutines");
     }
 
     #[test]
-    fn test_parse_empty_body() {
-        let series = parse_text_exposition("", "t1");
+    fn test_samples_to_timeseries_empty() {
+        let series = samples_to_timeseries("", "t1");
         assert!(series.is_empty());
     }
 
     #[test]
-    fn test_parse_comments_only() {
+    fn test_samples_to_timeseries_comments_only() {
         let body = "# HELP foo\n# TYPE foo gauge\n";
-        let series = parse_text_exposition(body, "t1");
+        let series = samples_to_timeseries(body, "t1");
         assert!(series.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_scrape_empty_targets() {
+        let targets = Arc::new(RwLock::new(Vec::new()));
+        let scraper = PrometheusScraper::new(targets, Duration::from_secs(5));
+        let result = scraper.scrape().await.expect("should succeed");
+        assert!(result.is_empty());
     }
 }

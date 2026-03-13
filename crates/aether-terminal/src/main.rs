@@ -32,7 +32,7 @@ use aether_render::tui::rules::RulesDisplayState;
 use aether_render::PredictionDisplay;
 use aether_metrics::consumer::PrometheusConsumer;
 use aether_metrics::exporter::server::MetricsExporter;
-use aether_metrics::scraper::PrometheusScraper;
+use aether_metrics::scrape::scraper::PrometheusScraper;
 use aether_output::{
     DiscordSink, FileSink, OutputFormat, OutputPipeline, SlackSink, StdoutSink, TelegramSink,
 };

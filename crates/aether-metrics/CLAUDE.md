@@ -1,12 +1,16 @@
 # aether-metrics
 
 ## Purpose
-Prometheus-compatible metrics exporter. Provides a MetricRegistry for collecting gauges, counters, and histograms, and encodes them in OpenMetrics text exposition format for scraping via `/metrics` endpoint.
+Prometheus-compatible metrics subsystem. Exports metrics via `/metrics` endpoint, consumes PromQL from Prometheus servers, and actively scrapes individual service `/metrics` endpoints.
 
 ## Modules
 - `error.rs` — MetricsError enum (thiserror)
 - `exporter/registry.rs` — MetricRegistry, MetricType, MetricDesc, MetricFamily, LabelSet
 - `exporter/encode.rs` — OpenMetrics text format encoder
+- `exporter/server.rs` — axum HTTP server for `/metrics` endpoint
+- `consumer/` — PromQL consumer (query Prometheus server API)
+- `scrape/parser.rs` — Prometheus text exposition format parser (type-aware: counter, gauge, histogram, summary)
+- `scrape/scraper.rs` — PrometheusScraper: HTTP scraper that fetches targets, implements DataSource trait
 
 ## Rules
 - Depends ONLY on aether-core (hexagonal architecture)
