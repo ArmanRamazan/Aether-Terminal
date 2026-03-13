@@ -5,7 +5,7 @@
 
 pub mod arbiter;
 pub mod error;
-pub(crate) mod event_bus;
+pub mod event_bus;
 pub mod events;
 pub mod graph;
 pub mod metrics;
