@@ -346,21 +346,7 @@ async fn main() -> anyhow::Result<()> {
                         match batch {
                             Some(new_diags) => {
                                 if let Ok(mut diags) = collector_diags.lock() {
-                                    for new_diag in new_diags {
-                                        if let Some(existing) = diags.iter_mut().find(|d| {
-                                            d.target == new_diag.target
-                                                && d.category == new_diag.category
-                                        }) {
-                                            *existing = new_diag;
-                                        } else {
-                                            diags.push(new_diag);
-                                        }
-                                    }
-                                    if diags.len() > 200 {
-                                        diags.sort_by_key(|d| d.severity);
-                                        let excess = diags.len() - 200;
-                                        diags.drain(..excess);
-                                    }
+                                    upsert_diagnostics(&mut diags, new_diags);
                                 }
                             }
                             None => break,
@@ -642,11 +628,7 @@ fn init_rules_engine(
                     if let Some(ref diags) = diag_bridge {
                         let diag = rule_action_to_diagnostic(&action);
                         if let Ok(mut d) = diags.lock() {
-                            d.push(diag);
-                            if d.len() > 200 {
-                                let excess = d.len() - 200;
-                                d.drain(..excess);
-                            }
+                            upsert_diagnostics(&mut d, std::iter::once(diag));
                         }
                     }
                 }
@@ -816,10 +798,102 @@ async fn try_init_ebpf(
     Ok(bridge)
 }
 
+/// Upsert diagnostics by (target, category) key. Evicts lowest-severity when over capacity.
+fn upsert_diagnostics(diags: &mut Vec<Diagnostic>, new_diags: impl IntoIterator<Item = Diagnostic>) {
+    const MAX_DIAGNOSTICS: usize = 200;
+
+    for new_diag in new_diags {
+        if let Some(existing) = diags
+            .iter_mut()
+            .find(|d| d.target == new_diag.target && d.category == new_diag.category)
+        {
+            *existing = new_diag;
+        } else {
+            diags.push(new_diag);
+        }
+    }
+    if diags.len() > MAX_DIAGNOSTICS {
+        diags.sort_by_key(|d| d.severity);
+        let excess = diags.len() - MAX_DIAGNOSTICS;
+        diags.drain(..excess);
+    }
+}
+
 #[cfg(not(all(target_os = "linux", feature = "ebpf")))]
 async fn try_init_ebpf(
     _event_tx: &mpsc::Sender<SystemEvent>,
     _cancel: &CancellationToken,
 ) -> anyhow::Result<EbpfBridge> {
     anyhow::bail!("eBPF requires Linux with the 'ebpf' feature enabled")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Instant;
+
+    fn make_diag(pid: u32, category: DiagCategory, severity: Severity) -> Diagnostic {
+        Diagnostic {
+            id: pid as u64,
+            host: HostId::new("test"),
+            target: DiagTarget::Process {
+                pid,
+                name: format!("proc-{pid}"),
+            },
+            severity,
+            category,
+            summary: String::new(),
+            evidence: vec![],
+            recommendation: Recommendation {
+                action: RecommendedAction::NoAction {
+                    reason: String::new(),
+                },
+                urgency: Urgency::Informational,
+                reason: String::new(),
+                auto_executable: false,
+            },
+            detected_at: Instant::now(),
+            resolved_at: None,
+        }
+    }
+
+    #[test]
+    fn test_upsert_replaces_existing_by_target_and_category() {
+        let mut diags = vec![make_diag(1, DiagCategory::CpuSpike, Severity::Warning)];
+        let updated = make_diag(1, DiagCategory::CpuSpike, Severity::Critical);
+        upsert_diagnostics(&mut diags, std::iter::once(updated));
+
+        assert_eq!(diags.len(), 1, "should replace, not append");
+        assert_eq!(diags[0].severity, Severity::Critical);
+    }
+
+    #[test]
+    fn test_upsert_pushes_new_when_key_differs() {
+        let mut diags = vec![make_diag(1, DiagCategory::CpuSpike, Severity::Info)];
+        upsert_diagnostics(
+            &mut diags,
+            std::iter::once(make_diag(2, DiagCategory::MemoryLeak, Severity::Warning)),
+        );
+
+        assert_eq!(diags.len(), 2);
+    }
+
+    #[test]
+    fn test_upsert_evicts_lowest_severity_over_capacity() {
+        let mut diags: Vec<Diagnostic> = (0..200)
+            .map(|i| make_diag(i, DiagCategory::CpuSpike, Severity::Critical))
+            .collect();
+        // Add one more with Info severity — should trigger eviction of lowest
+        upsert_diagnostics(
+            &mut diags,
+            std::iter::once(make_diag(999, DiagCategory::MemoryLeak, Severity::Info)),
+        );
+
+        assert_eq!(diags.len(), 200, "should evict back to 200");
+        // The Info one should be evicted (lowest severity)
+        assert!(
+            diags.iter().all(|d| d.severity == Severity::Critical),
+            "Info diagnostic should have been evicted"
+        );
+    }
 }
